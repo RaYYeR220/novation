@@ -11,10 +11,15 @@ inputs. In particular:
     non-negative shift amounts and non-negative operands (checked with
     asserts), matching the Solidity source, which casts the shift amount to
     `uint256` and only shifts values known to be representable.
-  - Solidity's checked arithmetic reverts on int256/uint256 overflow. This
-    module does not re-implement overflow checks; callers (gen_vectors.py)
-    are responsible for keeping vector inputs within range so nothing here
-    would have overflowed in Solidity.
+  - Solidity 0.8's checked arithmetic reverts on int256/uint256 overflow.
+    `mulWad`, `divWad`, `mulWadUp`, `divWadUp`, `sqrtWad` and `yearFrac` each
+    pass their result through `_check_int256` / `_check_uint256`, which
+    assert the same 256-bit range Solidity would revert outside of. Plain
+    Python `+`/`-`/`*` elsewhere in this module do not overflow (Python ints
+    are arbitrary precision), so those sites are NOT independently
+    range-checked; callers (gen_vectors.py) are responsible for keeping
+    vector inputs within range so nothing here would have overflowed in
+    Solidity.
 """
 
 import math
@@ -90,7 +95,8 @@ def expWad(x: int) -> int:
         return 0
     if x > 130 * WAD_I:
         raise ExpOverflow()
-    k = tdiv(x + LN2 // 2, LN2) if x >= 0 else tdiv(x - LN2 // 2, LN2)
+    half_ln2 = tdiv(LN2, 2)
+    k = tdiv(x + half_ln2, LN2) if x >= 0 else tdiv(x - half_ln2, LN2)
     r = x - k * LN2
     t = WAD_I
     for n in range(12, 0, -1):
