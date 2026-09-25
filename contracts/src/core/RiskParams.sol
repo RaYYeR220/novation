@@ -58,8 +58,8 @@ contract RiskParams is IRiskParams, ReentrancyGuardTransient {
     uint32 private constant MIN_VOL_STALENESS = 3600;
     uint32 private constant MAX_VOL_STALENESS = 604800;
 
-    uint128 private constant MIN_MIN_PRICE = 1e16; // maxPrice is the dynamic upper bound
-    uint128 private constant MAX_MAX_PRICE = 1e24; // minPrice is the dynamic lower bound
+    uint128 private constant MIN_MIN_PRICE = 1e16; // minPrice's sole (independent) bound
+    uint128 private constant MAX_MAX_PRICE = 1e24; // maxPrice's hard ceiling; its floor is minPrice (dynamic)
 
     // ---- global bounds ----
     uint64 private constant MIN_MM_RATIO = 0.5e18;
@@ -132,6 +132,12 @@ contract RiskParams is IRiskParams, ReentrancyGuardTransient {
         address setupAdmin_,
         GlobalParams memory initial
     ) {
+        // sequencerUptimeFeed_ may be zero (feed disabled); every other role is required.
+        if (usdg_ == address(0)) revert ZeroAddress();
+        if (treasury_ == address(0)) revert ZeroAddress();
+        if (timelock_ == address(0)) revert ZeroAddress();
+        if (guardian_ == address(0)) revert ZeroAddress();
+        if (setupAdmin_ == address(0)) revert ZeroAddress();
         _validateGlobals(initial);
         usdg = usdg_;
         treasury = treasury_;
@@ -254,10 +260,10 @@ contract RiskParams is IRiskParams, ReentrancyGuardTransient {
         if (p.volStaleness < MIN_VOL_STALENESS || p.volStaleness > MAX_VOL_STALENESS) {
             revert OutOfBounds("volStaleness");
         }
-        // minPrice/maxPrice are a mutual band: the minPrice check also enforces minPrice < maxPrice,
-        // so any minPrice >= maxPrice violation is reported against minPrice.
-        if (p.minPrice < MIN_MIN_PRICE || p.minPrice >= p.maxPrice) revert OutOfBounds("minPrice");
-        if (p.maxPrice > MAX_MAX_PRICE) revert OutOfBounds("maxPrice");
+        // minPrice carries only its independent lower bound; maxPrice is the dependent field and
+        // carries the cross-field ordering check, mirroring the volCap/maxDiscount pattern.
+        if (p.minPrice < MIN_MIN_PRICE) revert OutOfBounds("minPrice");
+        if (p.maxPrice <= p.minPrice || p.maxPrice > MAX_MAX_PRICE) revert OutOfBounds("maxPrice");
     }
 
     function _validateGlobals(GlobalParams memory g) private pure {

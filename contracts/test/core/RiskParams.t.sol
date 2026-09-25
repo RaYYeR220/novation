@@ -325,12 +325,20 @@ contract RiskParamsTest is Test {
         _expectUnderlyingRevert("volStaleness", _setU("volStaleness", 3599));
         _expectUnderlyingRevert("volStaleness", _setU("volStaleness", 604801));
 
-        // minPrice [1e16, maxPrice)
+        // minPrice: independent lower bound only [1e16, )
         _expectUnderlyingRevert("minPrice", _setU("minPrice", 1e16 - 1));
-        _expectUnderlyingRevert("minPrice", _setU("minPrice", 2000e18)); // >= default maxPrice
 
-        // maxPrice (minPrice, 1e24]
+        // maxPrice: dependent field, carries the ordering check (minPrice, 1e24]
         _expectUnderlyingRevert("maxPrice", _setU("maxPrice", 1e24 + 1));
+        {
+            UnderlyingParams memory pEq = _validUnderlying();
+            pEq.maxPrice = pEq.minPrice; // maxPrice == minPrice
+            _expectUnderlyingRevert("maxPrice", pEq);
+
+            UnderlyingParams memory pLt = _validUnderlying();
+            pLt.maxPrice = pLt.minPrice - 1; // maxPrice < minPrice
+            _expectUnderlyingRevert("maxPrice", pLt);
+        }
     }
 
     function test_boundsEnforced_global() public {
@@ -481,5 +489,38 @@ contract RiskParamsTest is Test {
         bad.mmRatio = 0.5e18 - 1;
         vm.expectRevert(abi.encodeWithSelector(RiskParams.OutOfBounds.selector, bytes32("mmRatio")));
         new RiskParams(USDG, TREASURY, SEQ_FEED, TIMELOCK, GUARDIAN, SETUP_ADMIN, bad);
+    }
+
+    // ---- constructor zero-address checks ----
+
+    function test_constructorRejectsZeroUsdg() public {
+        vm.expectRevert(RiskParams.ZeroAddress.selector);
+        new RiskParams(address(0), TREASURY, SEQ_FEED, TIMELOCK, GUARDIAN, SETUP_ADMIN, _validGlobals());
+    }
+
+    function test_constructorRejectsZeroTreasury() public {
+        vm.expectRevert(RiskParams.ZeroAddress.selector);
+        new RiskParams(USDG, address(0), SEQ_FEED, TIMELOCK, GUARDIAN, SETUP_ADMIN, _validGlobals());
+    }
+
+    function test_constructorRejectsZeroTimelock() public {
+        vm.expectRevert(RiskParams.ZeroAddress.selector);
+        new RiskParams(USDG, TREASURY, SEQ_FEED, address(0), GUARDIAN, SETUP_ADMIN, _validGlobals());
+    }
+
+    function test_constructorRejectsZeroGuardian() public {
+        vm.expectRevert(RiskParams.ZeroAddress.selector);
+        new RiskParams(USDG, TREASURY, SEQ_FEED, TIMELOCK, address(0), SETUP_ADMIN, _validGlobals());
+    }
+
+    function test_constructorRejectsZeroSetupAdmin() public {
+        vm.expectRevert(RiskParams.ZeroAddress.selector);
+        new RiskParams(USDG, TREASURY, SEQ_FEED, TIMELOCK, GUARDIAN, address(0), _validGlobals());
+    }
+
+    function test_constructorAllowsZeroSequencerUptimeFeed() public {
+        RiskParams rp2 =
+            new RiskParams(USDG, TREASURY, address(0), TIMELOCK, GUARDIAN, SETUP_ADMIN, _validGlobals());
+        assertEq(rp2.sequencerUptimeFeed(), address(0));
     }
 }
