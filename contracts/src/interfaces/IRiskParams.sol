@@ -23,6 +23,8 @@ struct UnderlyingParams {
     uint32 maxStaleExtended;  // seconds
     uint32 maxStaleClosed;    // seconds
     uint32 volStaleness;      // seconds
+    uint128 minPrice;         // WAD USD per raw token, plausibility band
+    uint128 maxPrice;         // WAD USD per raw token, plausibility band
 }
 
 struct GlobalParams {
