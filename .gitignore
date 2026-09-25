@@ -1,0 +1,36 @@
+# secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+# node
+node_modules/
+dist/
+.next/
+coverage/
+*.tsbuildinfo
+# foundry
+contracts/out/
+contracts/cache/
+contracts/broadcast/**/dry-run/
+# rust
+kernel/target/
+target/
+# local tooling / private notes
+.remember/
+.claude/
+.superpowers/
+docs/superpowers/
+*-internal/
+design/
+ui-prototypes/
+mockups/
+NOTES.md
+BRIEF.md
+# os
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

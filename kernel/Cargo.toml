@@ -1,0 +1,27 @@
+[package]
+name = "novation-kernel"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "novation_kernel"
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+stylus-sdk = "=0.10.9"
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[features]
+export-abi = ["stylus-sdk/export-abi"]
+
+[profile.release]
+codegen-units = 1
+opt-level = "z"
+lto = true
+panic = "abort"
+strip = true
+debug = false

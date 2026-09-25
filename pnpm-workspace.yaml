@@ -1,0 +1,1 @@
+packages: ["sdk", "keeper", "mm-bot", "mcp", "indexer", "app"]
