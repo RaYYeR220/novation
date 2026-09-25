@@ -1,0 +1,20 @@
+No files changed, compilation skipped
+
+Ran 1 test for test/kernel/KernelGas.t.sol:KernelGasTest
+[PASS] test_gasTable() (gas: 391863336)
+Logs:
+  == KernelReference gas baseline (Solidity) ==
+  margin  1 underlying, 1 positions:  814818
+  margin  1 underlying, 4 positions:  2854640
+  margin  1 underlying, 8 positions:  5569884
+  margin  1 underlying, 16 positions:  11000422
+  margin  1 underlying, 32 positions:  21861695
+  margin  1 underlying, 64 positions:  43585001
+  margin  1 underlying, 128 positions:  87034611
+  margin  1 underlying, 256 positions:  173945704
+  margin  8 underlyings, 4 positions each (32 total):  22757134
+  scenarioGrid  1 underlying, 32 positions:  21859975
+
+Suite result: ok. 1 passed; 0 failed; 0 skipped; finished in 1.84s (1.84s CPU time)
+
+Ran 1 test suite in 1.84s (1.84s CPU time): 1 tests passed, 0 failed, 0 skipped (1 total tests)

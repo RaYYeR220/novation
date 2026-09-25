@@ -10,6 +10,12 @@ via_ir = true
 optimizer = true
 optimizer_runs = 200
 fs_permissions = [{ access = "read", path = "./test/vectors" }, { access = "read-write", path = "./deployments" }]
+# Vector tests iterate ~150 books (up to 256 positions each) against KernelReference,
+# calling both margin() and scenarioGrid() (each independently re-derives the full
+# scenario grid). That legitimately exceeds forge's default 2^30 local sandbox gas
+# ceiling; this only affects the local test EVM, not deployed contract gas costs.
+gas_limit = 100_000_000_000
+disable_block_gas_limit = true
 
 [profile.default.fuzz]
 runs = 512

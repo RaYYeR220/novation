@@ -88,4 +88,36 @@ contract FixedPointMathTest is Test {
             assertEq(FixedPointMath.normCdf(x), expected, "normCdf mismatch");
         }
     }
+
+    function test_vectors_mulWadUp() public view {
+        string memory json = vm.readFile("test/vectors/math.json");
+        string[] memory as_ = vm.parseJsonStringArray(json, ".mulWadUp.a");
+        string[] memory bs = vm.parseJsonStringArray(json, ".mulWadUp.b");
+        string[] memory ys = vm.parseJsonStringArray(json, ".mulWadUp.y");
+        assertEq(as_.length, bs.length);
+        assertEq(as_.length, ys.length);
+        assertGt(as_.length, 0);
+        for (uint256 i = 0; i < as_.length; i++) {
+            uint256 a = vm.parseUint(as_[i]);
+            uint256 b = vm.parseUint(bs[i]);
+            uint256 expected = vm.parseUint(ys[i]);
+            assertEq(FixedPointMath.mulWadUp(a, b), expected, "mulWadUp mismatch");
+        }
+    }
+
+    function test_vectors_divWadUp() public view {
+        string memory json = vm.readFile("test/vectors/math.json");
+        string[] memory as_ = vm.parseJsonStringArray(json, ".divWadUp.a");
+        string[] memory bs = vm.parseJsonStringArray(json, ".divWadUp.b");
+        string[] memory ys = vm.parseJsonStringArray(json, ".divWadUp.y");
+        assertEq(as_.length, bs.length);
+        assertEq(as_.length, ys.length);
+        assertGt(as_.length, 0);
+        for (uint256 i = 0; i < as_.length; i++) {
+            uint256 a = vm.parseUint(as_[i]);
+            uint256 b = vm.parseUint(bs[i]);
+            uint256 expected = vm.parseUint(ys[i]);
+            assertEq(FixedPointMath.divWadUp(a, b), expected, "divWadUp mismatch");
+        }
+    }
 }
