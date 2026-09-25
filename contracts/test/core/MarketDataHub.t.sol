@@ -139,6 +139,15 @@ contract MarketDataHubTest is Test {
         assertTrue(ok);
     }
 
+    function test_noPriceHalts() public {
+        vm.warp(REGULAR_TS);
+        feed.pushRound(0, REGULAR_TS); // answer <= 0
+        assertEq(uint8(hub.session(address(token))), uint8(Session.HALTED));
+
+        vm.expectRevert(MarketDataHub.NoPrice.selector);
+        hub.spot(address(token));
+    }
+
     function test_staleRegularHalts() public {
         vm.warp(REGULAR_TS);
         feed.pushRound(150e8, REGULAR_TS - 301); // maxStaleRegular = 300
