@@ -55,7 +55,8 @@ forge-std's `vm.parseJson*` cheatcodes.
 Top-level object:
 {
   "books": {
-    // one entry per book (150 books), index i describes book i:
+    // one entry per book (152 books: 150 random + 2 fixed zero-vol books
+    // appended last, see _zero_vol_books), index i describes book i:
     "n_us":  [string, ...],   // underlying count for book i
     "n_ps":  [string, ...],   // position count for book i
     "p_nowTs":  [string, ...],
@@ -78,7 +79,7 @@ Top-level object:
     "out_lossIndep": [string, ...], "out_shortMin": [string, ...], "out_worstScenario": [string, ...],
     // expected perUnderlyingWorst, flattened like us_*, sum(n_us) entries:
     "out_perUnderlyingWorst": [string, ...],
-    // expected scenarioGrid, flattened, always 39 entries per book (150*39 total):
+    // expected scenarioGrid, flattened, always 39 entries per book (152*39 total):
     "out_scenarioGrid": [string, ...]
   },
   "ewma": {
@@ -91,7 +92,9 @@ Top-level object:
     "out_r2": [string, ...], "out_dt": [string, ...]
   },
   "bsQuote": {
-    // 200 flat cases (100 spot/strike/tau/vol/rate combos x isCall true/false):
+    // 212 flat cases: 200 random (100 spot/strike/tau/vol/rate combos x isCall
+    // true/false) + 12 fixed sst < MIN_SST fallback cases appended last (see
+    // the fallback_cases list in gen_bsQuote):
     "spot": [string, ...], "strike": [string, ...], "tau": [string, ...], "vol": [string, ...],
     "rate": [string, ...], "isCall": [bool, ...],
     "price": [string, ...], "delta": [string, ...], "gamma": [string, ...],
@@ -319,6 +322,79 @@ PCT_90 = 9 * 10**17  # 0.9e18
 PCT_150 = 15 * 10**17  # 1.5e18
 
 
+def _append_book(fields, us_flat, ps_flat, outs, out_puw, out_sg, p, us, ps):
+    """Compute one book's margin/scenarioGrid via kernel_ref and append it to the
+    flat field dicts. Shared by the random books loop and the deterministic
+    fixed books appended after it, so both serialize identically."""
+    out, puw = kref.margin(p, us, ps)
+    sg = kref.scenario_grid(p, us, ps)
+
+    fields["n_us"].append(str(len(us)))
+    fields["n_ps"].append(str(len(ps)))
+    fields["p_nowTs"].append(str(p["nowTs"]))
+    fields["p_rate"].append(str(p["rate"]))
+    fields["p_credit"].append(str(p["diversificationCredit"]))
+    fields["p_shortMin"].append(str(p["shortOptionMinPct"]))
+
+    for U in us:
+        us_flat["us_spot"].append(str(U["spot"]))
+        us_flat["us_vol"].append(str(U["vol"]))
+        us_flat["us_shockRange"].append(str(U["shockRange"]))
+        us_flat["us_volUp"].append(str(U["volUp"]))
+        us_flat["us_volDown"].append(str(U["volDown"]))
+        us_flat["us_tokenQty"].append(str(U["tokenQty"]))
+
+    for P in ps:
+        ps_flat["ps_u"].append(str(P["u"]))
+        ps_flat["ps_isCall"].append(P["isCall"])
+        ps_flat["ps_expiry"].append(str(P["expiry"]))
+        ps_flat["ps_strike"].append(str(P["strike"]))
+        ps_flat["ps_qty"].append(str(P["qty"]))
+
+    outs["out_mtm"].append(str(out["mtm"]))
+    outs["out_lossIM"].append(str(out["lossIM"]))
+    outs["out_lossCorr"].append(str(out["lossCorr"]))
+    outs["out_lossIndep"].append(str(out["lossIndep"]))
+    outs["out_shortMin"].append(str(out["shortMin"]))
+    outs["out_worstScenario"].append(str(out["worstScenario"]))
+    out_puw.extend(str(x) for x in puw)
+    out_sg.extend(str(x) for x in sg)
+
+
+def _zero_vol_books():
+    """2 fixed books with underlying vol == 0 and positions at tau > 0. vol == 0
+    forces sst == 0 for every one of the 39 scenarios on that underlying (all
+    three vol slices are mulWad(0, ...) == 0), so every priceLn call for these
+    positions -- not just the already-covered tau == 0 branch -- takes the
+    sst < MIN_SST fallback: v = isCall ? Sx - Kd : Kd - Sx (the *discounted*
+    Kd intrinsic, not raw K), and BS.greeks takes its own tau>0-but-degenerate
+    fallback (delta +/-1e18 or 0, other greeks 0). Book A has rate == 0 (Kd ==
+    K exactly); book B has rate == 0.04e18 so Kd is genuinely discounted,
+    pinning the Kd computation itself, not just the branch selection.
+    """
+    return [
+        (
+            {"nowTs": NOW_TS, "rate": 0, "diversificationCredit": PCT_30, "shortOptionMinPct": PCT_01},
+            [{"spot": 100 * WAD, "vol": 0, "shockRange": 2 * 10**17, "volUp": PCT_40, "volDown": PCT_30, "tokenQty": 5 * WAD}],
+            [
+                {"u": 0, "isCall": True, "expiry": NOW_TS + 7 * DAY, "strike": 90 * WAD, "qty": 10 * WAD},
+                {"u": 0, "isCall": True, "expiry": NOW_TS + 14 * DAY, "strike": 110 * WAD, "qty": -8 * WAD},
+                {"u": 0, "isCall": False, "expiry": NOW_TS + 21 * DAY, "strike": 95 * WAD, "qty": 6 * WAD},
+                {"u": 0, "isCall": False, "expiry": NOW_TS + 30 * DAY, "strike": 105 * WAD, "qty": -4 * WAD},
+            ],
+        ),
+        (
+            {"nowTs": NOW_TS, "rate": PCT_04, "diversificationCredit": PCT_30, "shortOptionMinPct": PCT_01},
+            [{"spot": 200 * WAD, "vol": 0, "shockRange": 25 * 10**16, "volUp": PCT_40, "volDown": PCT_30, "tokenQty": 0}],
+            [
+                {"u": 0, "isCall": True, "expiry": NOW_TS + 10 * DAY, "strike": 180 * WAD, "qty": -15 * WAD},
+                {"u": 0, "isCall": True, "expiry": NOW_TS + 45 * DAY, "strike": 220 * WAD, "qty": 12 * WAD},
+                {"u": 0, "isCall": False, "expiry": NOW_TS + 60 * DAY, "strike": 190 * WAD, "qty": -9 * WAD},
+            ],
+        ),
+    ]
+
+
 def gen_books(rng: random.Random):
     fields = {k: [] for k in ("n_us", "n_ps", "p_nowTs", "p_rate", "p_credit", "p_shortMin")}
     us_flat = {k: [] for k in ("us_spot", "us_vol", "us_shockRange", "us_volUp", "us_volDown", "us_tokenQty")}
@@ -376,39 +452,12 @@ def gen_books(rng: random.Random):
         rate = rng.choice([0, PCT_04])
         p = {"nowTs": NOW_TS, "rate": rate, "diversificationCredit": PCT_30, "shortOptionMinPct": PCT_01}
 
-        out, puw = kref.margin(p, us, ps)
-        sg = kref.scenario_grid(p, us, ps)
+        _append_book(fields, us_flat, ps_flat, outs, out_puw, out_sg, p, us, ps)
 
-        fields["n_us"].append(str(nu))
-        fields["n_ps"].append(str(npos))
-        fields["p_nowTs"].append(str(p["nowTs"]))
-        fields["p_rate"].append(str(p["rate"]))
-        fields["p_credit"].append(str(p["diversificationCredit"]))
-        fields["p_shortMin"].append(str(p["shortOptionMinPct"]))
-
-        for U in us:
-            us_flat["us_spot"].append(str(U["spot"]))
-            us_flat["us_vol"].append(str(U["vol"]))
-            us_flat["us_shockRange"].append(str(U["shockRange"]))
-            us_flat["us_volUp"].append(str(U["volUp"]))
-            us_flat["us_volDown"].append(str(U["volDown"]))
-            us_flat["us_tokenQty"].append(str(U["tokenQty"]))
-
-        for P in ps:
-            ps_flat["ps_u"].append(str(P["u"]))
-            ps_flat["ps_isCall"].append(P["isCall"])
-            ps_flat["ps_expiry"].append(str(P["expiry"]))
-            ps_flat["ps_strike"].append(str(P["strike"]))
-            ps_flat["ps_qty"].append(str(P["qty"]))
-
-        outs["out_mtm"].append(str(out["mtm"]))
-        outs["out_lossIM"].append(str(out["lossIM"]))
-        outs["out_lossCorr"].append(str(out["lossCorr"]))
-        outs["out_lossIndep"].append(str(out["lossIndep"]))
-        outs["out_shortMin"].append(str(out["shortMin"]))
-        outs["out_worstScenario"].append(str(out["worstScenario"]))
-        out_puw.extend(str(x) for x in puw)
-        out_sg.extend(str(x) for x in sg)
+    # Deterministic zero-vol books, appended after the random ones so none of the
+    # existing (random-book) entries above shift position.
+    for p, us, ps in _zero_vol_books():
+        _append_book(fields, us_flat, ps_flat, outs, out_puw, out_sg, p, us, ps)
 
     doc = {}
     doc.update(fields)
@@ -520,6 +569,44 @@ def gen_bsQuote(rng: random.Random):
             fields["vega"].append(str(vega))
             fields["theta"].append(str(theta))
         produced += 1
+
+    # Deterministic sst < MIN_SST fallback cases, appended after the random
+    # combos so none of the existing entries above shift position. vol in
+    # {0, 1, 1e6 wei} keeps sst = mulWad(vol, sqrtT) below MIN_SST (1e6) for
+    # every tau here (all "in days"), landing in BlackScholes.priceLn's / .
+    # greeks' sst < MIN_SST fallback with tau > 0 (as opposed to the tau == 0
+    # branch, which the random cases above already cover). vol = 1e9 wei is
+    # included too, but at these "in days" tau values sst is always well
+    # above MIN_SST (~5.2e7 at tau = 1 day) -- these three cases instead pin
+    # the full Black-Scholes branch immediately outside the fallback, at the
+    # smallest vol that still avoids it; see the report for the exact numbers.
+    fallback_cases = [
+        (100 * WAD, 90 * WAD, 7 * DAY, 0, 0, True),
+        (100 * WAD, 110 * WAD, 30 * DAY, 0, PCT_04, False),
+        (100 * WAD, 100 * WAD, 1 * DAY, 0, 0, True),
+        (100 * WAD, 90 * WAD, 14 * DAY, 1, PCT_04, True),
+        (100 * WAD, 110 * WAD, 60 * DAY, 1, 0, True),
+        (100 * WAD, 95 * WAD, 3 * DAY, 1, PCT_04, False),
+        (150 * WAD, 140 * WAD, 7 * DAY, 10**6, 0, True),
+        (150 * WAD, 160 * WAD, 45 * DAY, 10**6, PCT_04, False),
+        (150 * WAD, 150 * WAD, 21 * DAY, 10**6, 0, False),
+        (200 * WAD, 180 * WAD, 1 * DAY, 10**9, 0, True),
+        (200 * WAD, 220 * WAD, 1 * DAY, 10**9, PCT_04, False),
+        (200 * WAD, 200 * WAD, 1 * DAY, 10**9, 0, True),
+    ]
+    for S, K, tau, vol, rate, is_call in fallback_cases:
+        price, delta, gamma, vega, theta = kref.bs_quote(S, K, tau, vol, rate, is_call)
+        fields["spot"].append(str(S))
+        fields["strike"].append(str(K))
+        fields["tau"].append(str(tau))
+        fields["vol"].append(str(vol))
+        fields["rate"].append(str(rate))
+        fields["isCall"].append(is_call)
+        fields["price"].append(str(price))
+        fields["delta"].append(str(delta))
+        fields["gamma"].append(str(gamma))
+        fields["vega"].append(str(vega))
+        fields["theta"].append(str(theta))
 
     return fields
 

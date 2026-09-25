@@ -12,9 +12,9 @@ Python `//`, which already matches uint256 floor division.
 Inputs (books, positions, KParams) are plain dicts / lists of dicts; see the
 `grid` docstring for the expected shapes. This module does not re-implement
 Solidity's revert conditions as exceptions for every call site covered by
-gen_vectors.py -- callers are responsible for keeping generated vectors
-within the domain KernelReference.sol accepts (see BadUnderlyingIndex /
-BadShockRange below, raised only where the Solidity source itself reverts).
+gen_vectors.py -- callers are responsible for keeping vector inputs within
+the domain KernelReference.sol accepts (see BadUnderlyingIndex / BadShockRange
+below, raised only where the Solidity source itself reverts).
 """
 
 import fpmath as F
@@ -57,7 +57,7 @@ def grid(p: dict, us: list, ps: list):
 
     for u in range(nu):
         U = us[u]
-        if U["shockRange"] > int(0.9 * WAD_I) or U["volDown"] >= WAD_I:
+        if U["shockRange"] > 9 * 10**17 or U["volDown"] >= WAD_I:
             raise BadShockRange()
         S = U["spot"]
         R = U["shockRange"]

@@ -189,6 +189,14 @@ contract KernelReferenceTest is Test {
             puwOff += nu;
             sgOff += SCENARIOS;
         }
+
+        // The whole vector file was consumed: every flat array was walked to its end,
+        // and the book count matches the expected total (150 random + 2 fixed zero-vol books).
+        assertEq(usOff, us_spot_s.length, "us_* arrays not fully consumed");
+        assertEq(psOff, ps_u_s.length, "ps_* arrays not fully consumed");
+        assertEq(puwOff, out_puw_s.length, "perUnderlyingWorst array not fully consumed");
+        assertEq(sgOff, out_sg_s.length, "scenarioGrid array not fully consumed");
+        assertEq(nBooks, 152, "unexpected book count");
     }
 
     function test_vectors_ewmaUpdate() public view {
@@ -226,6 +234,10 @@ contract KernelReferenceTest is Test {
 
             off += n;
         }
+
+        // The whole vector file was consumed: both flat arrays were walked to their end.
+        assertEq(off, prices_s.length, "prices array not fully consumed");
+        assertEq(off, dts_s.length, "dts array not fully consumed");
     }
 
     function test_vectors_bsQuote() public view {
