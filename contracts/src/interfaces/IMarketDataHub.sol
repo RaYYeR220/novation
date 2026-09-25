@@ -1,0 +1,18 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.30;
+import {Session} from "../types/Types.sol";
+
+interface IMarketDataHub {
+    event VolPoked(address indexed underlying, uint80 lastRoundId, uint256 variance);
+    event VolInitialized(address indexed underlying, uint80 roundId);
+
+    function session(address u) external view returns (Session);
+    /// @return price last valid WAD price (reverts NoPrice if answer <= 0), s session (HALTED if unusable), ok == (s != HALTED)
+    function spot(address u) external view returns (uint256 price, Session s, bool ok);
+    function markVol(address u) external view returns (uint256 vol);
+    function settlementPrice(address u, uint64 expiry, uint80 roundIdHint) external view returns (uint256 price);
+    function initVol(address u) external;
+    function pokeVol(address u, uint80[] calldata roundIds) external;
+    function volState(address u) external view returns (uint256 r2, uint256 dt, uint80 lastRoundId, uint256 lastPrice, uint64 lastUpdatedAt, uint64 lastPokeTs);
+    function rebaseVol(address u) external; // permissionless: after a Chainlink phase change, restart from the latest round (keeps r2/dt)
+}
