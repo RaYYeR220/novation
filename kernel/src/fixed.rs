@@ -621,10 +621,11 @@ fn isqrt_u128(n: u128) -> u128 {
     }
     let b = 128 - n.leading_zeros();
     if b <= 126 {
-        // r stays in [floor(sqrt(n)), 2^63] and n >> 64 < r, so n / r is one 128/64 division
+        // r stays in [floor(sqrt(n)), 2^63] and n >> 64 < r, so n / r is one 128/64 division;
+        // n / r + r can reach 2^64 (n = 2^126 - 1, r = 2^63 - 1), so the sum is taken in u128
         let mut r: u64 = 1 << ((b + 1) / 2);
         loop {
-            let y = (divlu((n >> 64) as u64, n as u64, r) + r) >> 1;
+            let y = ((divlu((n >> 64) as u64, n as u64, r) as u128 + r as u128) >> 1) as u64;
             if y >= r {
                 return r as u128;
             }
@@ -1018,6 +1019,18 @@ mod tests {
         for n in [0u128, 1, 2, 3, 4, 15, 16, 17, u128::MAX, u128::MAX - 1, 1 << 127] {
             assert_eq!(U256::from(isqrt_u128(n)), isqrt_solidity(U256::from(n)), "{n}");
         }
+        // edges of the 128/64 branch (bit length <= 126) and of the u128 branch
+        for b in [124u32, 125, 126, 127, 128] {
+            let top = if b == 128 { u128::MAX } else { (1u128 << b) - 1 };
+            for d in 0..64u128 {
+                for n in [top - d, (top >> 1) + 1 + d] {
+                    assert_eq!(U256::from(isqrt_u128(n)), isqrt_solidity(U256::from(n)), "{n}");
+                }
+            }
+        }
+        let n = (1u128 << 126) - 1;
+        assert_eq!(isqrt_u128(n), (1u128 << 63) - 1);
+        assert_eq!(isqrt_u128(u128::MAX), (1u128 << 64) - 1);
         // n = x * 1e18 is even, so the n = 2^256 - 1 case (where n + 1 would revert) never occurs
         for n in [U256::MAX - ONE, (U256::MAX >> 1usize) + ONE, ONE << 255usize, (ONE << 128usize) - ONE, ONE << 128usize] {
             assert_eq!(isqrt_u256(n), isqrt_solidity(n), "{n}");

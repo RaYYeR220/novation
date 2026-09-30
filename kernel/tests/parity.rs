@@ -16,6 +16,7 @@ fn math_vectors_exact() {
     let v = load("math.json");
 
     let (xs, ys) = (ints(&v, "expWad", "x"), ints(&v, "expWad", "y"));
+    assert_eq!(xs.len(), ys.len());
     for (i, (x, y)) in xs.iter().zip(&ys).enumerate() {
         assert_eq!(fixed::exp_wad(*x).unwrap(), *y, "expWad #{i} x={x}");
         if let Some(yi) = fixed::exp_i(fixed::to_i128(*x).unwrap()) {
@@ -24,6 +25,7 @@ fn math_vectors_exact() {
     }
 
     let (xs, ys) = (ints(&v, "lnWad", "x"), ints(&v, "lnWad", "y"));
+    assert_eq!(xs.len(), ys.len());
     for (i, (x, y)) in xs.iter().zip(&ys).enumerate() {
         assert_eq!(fixed::ln_wad(*x).unwrap(), *y, "lnWad #{i} x={x}");
         if let Some(xi) = fixed::to_i128(*x) {
@@ -32,21 +34,25 @@ fn math_vectors_exact() {
     }
 
     let (xs, ys) = (uints(&v, "sqrtWad", "x"), uints(&v, "sqrtWad", "y"));
+    assert_eq!(xs.len(), ys.len());
     for (i, (x, y)) in xs.iter().zip(&ys).enumerate() {
         assert_eq!(fixed::sqrt_wad(*x).unwrap(), *y, "sqrtWad #{i} x={x}");
     }
 
     let (xs, ys) = (ints(&v, "normCdf", "x"), ints(&v, "normCdf", "y"));
+    assert_eq!(xs.len(), ys.len());
     for (i, (x, y)) in xs.iter().zip(&ys).enumerate() {
         assert_eq!(fixed::norm_cdf(*x), *y, "normCdf #{i} x={x}");
         assert_eq!(fixed::i256(fixed::ncdf_i(fixed::to_i128(*x).unwrap())), *y, "ncdf_i #{i} x={x}");
     }
 
     let (a, b, y) = (uints(&v, "mulWadUp", "a"), uints(&v, "mulWadUp", "b"), uints(&v, "mulWadUp", "y"));
+    assert!(a.len() == y.len() && b.len() == y.len());
     for i in 0..y.len() {
         assert_eq!(fixed::mul_wad_up(a[i], b[i]).unwrap(), y[i], "mulWadUp #{i}");
     }
     let (a, b, y) = (uints(&v, "divWadUp", "a"), uints(&v, "divWadUp", "b"), uints(&v, "divWadUp", "y"));
+    assert!(a.len() == y.len() && b.len() == y.len());
     for i in 0..y.len() {
         assert_eq!(fixed::div_wad_up(a[i], b[i]).unwrap(), y[i], "divWadUp #{i}");
     }
@@ -58,6 +64,9 @@ fn math_vectors_exact() {
     let rate = ints(&v, "price", "rate");
     let call = bools(&v, "price", "isCall");
     let y = uints(&v, "price", "y");
+    for f in [s.len(), k.len(), tau.len(), vol.len(), rate.len(), call.len()] {
+        assert_eq!(f, y.len());
+    }
     for i in 0..y.len() {
         let a = (s[i], k[i], tau[i], vol[i], rate[i], call[i]);
         assert_eq!(bs::price(a.0, a.1, a.2, a.3, a.4, a.5).unwrap(), y[i], "price #{i}");

@@ -140,7 +140,8 @@ fn boolean(args: &[u8], at: usize) -> Option<bool> {
 fn array(args: &[u8], head_at: usize, elem_size: u64) -> Option<(usize, usize)> {
     let end = args.len() as u64;
     let pos = small(args, head_at)?;
-    if pos + 31 >= end {
+    // Solidity: slt(add(offset, 0x1f), end), in 256-bit arithmetic (no wraparound)
+    if pos.saturating_add(31) >= end {
         return None;
     }
     let len = small(args, pos as usize)?;

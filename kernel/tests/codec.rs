@@ -262,6 +262,14 @@ fn malformed_calldata_reverts_empty() {
     let mut bad = good.clone();
     bad[4 + 128 + 23] = 1;
     assert_eq!(run(&bad), Err(vec![]));
+    // offsets just below 2^64, where offset + 31 must not wrap (both arrays)
+    for head in [128usize, 160] {
+        for k in 1..=31u64 {
+            let mut bad = good.clone();
+            bad[4 + head + 24..4 + head + 32].copy_from_slice(&(u64::MAX - k + 1).to_be_bytes());
+            assert_eq!(run(&bad), Err(vec![]), "offset 2^64 - {k} at head word {head}");
+        }
+    }
     // length >= 2^64
     let mut bad = good.clone();
     let us_off = 4 + u64::from_be_bytes(good[4 + 128 + 24..4 + 160].try_into().unwrap()) as usize;
@@ -282,4 +290,22 @@ fn malformed_calldata_reverts_empty() {
     bad[4 + 5 * 32 + 31] = 2;
     assert_eq!(run(&bad), Err(vec![]));
     assert_eq!(run(&q[..4 + 160]), Err(vec![]));
+
+    let e = ewmaUpdateCall {
+        prevR2: U256::ZERO,
+        prevDt: U256::ZERO,
+        lastPrice: wad(100),
+        prices: vec![wad(101)],
+        dts: vec![U256::from(60u8)],
+        lambda: U256::from(940_000_000_000_000_000u64),
+    }
+    .abi_encode();
+    assert!(run(&e).is_ok());
+    for head in [96usize, 128] {
+        for k in 1..=31u64 {
+            let mut bad = e.clone();
+            bad[4 + head + 24..4 + head + 32].copy_from_slice(&(u64::MAX - k + 1).to_be_bytes());
+            assert_eq!(run(&bad), Err(vec![]), "ewma offset 2^64 - {k} at head word {head}");
+        }
+    }
 }
