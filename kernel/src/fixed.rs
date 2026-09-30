@@ -552,13 +552,36 @@ pub fn wdiv_i(a: i128, b: i128) -> Option<i128> {
         return None;
     }
     let (ua, ub) = (a.unsigned_abs(), b.unsigned_abs());
-    if (ua | ub) >> 64 == 0 {
-        let (hi, lo) = mul64(ua as u64, E18);
-        if hi < ub as u64 {
-            return Some(signed(divlu(hi, lo, ub as u64) as u128, (a < 0) != (b < 0)));
+    let q: u128 = if ub >> 64 == 0 {
+        // a * 1e18 = hi * 2^128 + mid * 2^64 + lo, divided by a 64-bit divisor
+        let v = ub as u64;
+        let (h0, lo) = mul64(ua as u64, E18);
+        let (h1, l1) = mul64((ua >> 64) as u64, E18);
+        let (mid, carry) = l1.overflowing_add(h0);
+        let hi = h1 + carry as u64;
+        if hi == 0 && mid < v {
+            divlu(mid, lo, v) as u128
+        } else if hi < v {
+            let q1 = divlu(hi, mid, v);
+            let r1 = mid.wrapping_sub(q1.wrapping_mul(v));
+            ((q1 as u128) << 64) | divlu(r1, lo, v) as u128
+        } else {
+            return None; // quotient >= 2^128
         }
+    } else if ub >> 98 == 0 {
+        // floor(a * 1e18 / b) = (a / b) * 1e18 + floor((a % b) * 1e18 / b), the last term
+        // in two base-1e9 steps so every product stays below 2^128
+        let (q1, r1) = (ua / ub, ua % ub);
+        let t = r1 * E9 as u128;
+        let (q2, r2) = (t / ub, t % ub);
+        q1 * E18 as u128 + q2 * E9 as u128 + r2 * E9 as u128 / ub
+    } else {
+        return div_wad(i256(a), i256(b)).ok().and_then(to_i128);
+    };
+    if q >> 127 != 0 {
+        return None;
     }
-    div_wad(i256(a), i256(b)).ok().and_then(to_i128)
+    Some(signed(q, (a < 0) != (b < 0)))
 }
 
 pub fn exp_i(x: i128) -> Option<i128> {
@@ -597,6 +620,17 @@ fn isqrt_u128(n: u128) -> u128 {
         return 0;
     }
     let b = 128 - n.leading_zeros();
+    if b <= 126 {
+        // r stays in [floor(sqrt(n)), 2^63] and n >> 64 < r, so n / r is one 128/64 division
+        let mut r: u64 = 1 << ((b + 1) / 2);
+        loop {
+            let y = (divlu((n >> 64) as u64, n as u64, r) + r) >> 1;
+            if y >= r {
+                return r as u128;
+            }
+            r = y;
+        }
+    }
     let mut r: u128 = 1 << ((b + 1) / 2);
     loop {
         let y = (n / r + r) >> 1;
