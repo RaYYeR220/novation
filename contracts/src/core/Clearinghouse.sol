@@ -13,6 +13,7 @@ import {IRiskKernel} from "../interfaces/IRiskKernel.sol";
 import {IInsuranceFund} from "../interfaces/IInsuranceFund.sol";
 import {CHS, CHStorage, CHErrors, Account, Deps} from "./ClearinghouseStorage.sol";
 import {MarginLogic} from "./logic/MarginLogic.sol";
+import {TradeLogic} from "./logic/TradeLogic.sol";
 import {Position, WAD} from "../types/Types.sol";
 
 /// @notice Options clearinghouse: subaccounts, index-scaled USDG cash, stock-token collateral,
@@ -195,8 +196,16 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
 
     // ================================================================ trading, settlement, auction hooks
 
-    function trade(TradeParams calldata) external pure returns (uint256) {
-        revert CHErrors.NotImplemented();
+    modifier onlyVenue() {
+        if (!CHS.s().venues[msg.sender]) revert CHErrors.NotVenue(msg.sender);
+        _;
+    }
+
+    /// @notice Venue entry point. The venue vouches for the actors; the clearinghouse checks that
+    /// each actor is the owner or a live agent of its side, then moves positions, premium and fee
+    /// and checks margin and agent budgets afterwards (see TradeLogic).
+    function trade(TradeParams calldata t) external nonReentrant onlyVenue returns (uint256 fee) {
+        return TradeLogic.trade(_deps(), t);
     }
 
     function settleAccount(uint256, uint64) external pure {
@@ -315,7 +324,9 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
             registry: registry,
             kernel: kernel,
             insurance: insurance,
-            auctionHouse: CHS.s().auctionHouse
+            auctionHouse: CHS.s().auctionHouse,
+            usdg: usdg,
+            usdgScale: _usdgScale
         });
     }
 

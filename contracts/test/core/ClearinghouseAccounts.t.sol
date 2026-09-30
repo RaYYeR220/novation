@@ -257,18 +257,20 @@ contract ClearinghouseAccountsTest is Fixture {
     }
 
     function test_withdrawBlockedWhenUnhealthy() public {
-        // Opening trades land in a later change; the short is seeded through CHS.movePosition.
         uint64 e = _expiry();
         uint32 call180 = _list(address(nvda), e, 180e18, true);
+        address dave = _user("dave");
+        uint256 buyer = _fund(dave, 1000 * USDG, 0);
 
+        // alice sells one call for 8 USDG (and pays the fee out of it)
         uint256 id = _fund(alice, 1000 * USDG, 0);
-        _cheatMovePosition(id, call180, -1e18);
+        venue.trade(_sale(id, alice, buyer, dave, call180, 8e18));
         AccountState memory st = ch.accountState(id);
         assertTrue(st.healthy);
         assertGt(st.im, 0);
         assertLt(st.mtm, 0);
 
-        // withdrawing everything leaves equity below IM
+        // withdrawing the original 1000 leaves only premium - fee against the short: below IM
         AccountState memory after_ = ch.marginAfter(id, 0, 0, -int256(1000e18));
         assertFalse(after_.healthy);
         vm.expectRevert(abi.encodeWithSelector(CHErrors.InsufficientMargin.selector, id, after_.equity, after_.im));
@@ -282,9 +284,23 @@ contract ClearinghouseAccountsTest is Fixture {
 
         // the stock backing a covered call can't be pulled out from under it either
         uint256 cov = _fund(bob, 0, 2e18);
-        _cheatMovePosition(cov, call180, -1e18);
+        // dave buys one call from bob, who is the maker here and so pays no fee
+        venue.trade(
+            TradeParams({
+                takerActor: dave,
+                makerActor: bob,
+                takerId: buyer,
+                makerId: cov,
+                seriesId: call180,
+                qty: 1e18,
+                premium: 8e18
+            })
+        );
         assertTrue(ch.accountState(cov).healthy);
-        uint256 naked = _newAccount(_user("carol")); // what `cov` would be after the withdrawal
+        assertEq(ch.cashOf(cov), 8e18);
+        // what `cov` would be after the withdrawal: same cash and short, no stock. A venue would
+        // refuse to open that naked short, so the replica's position is seeded directly.
+        uint256 naked = _fund(_user("carol"), 8 * USDG, 0);
         _cheatMovePosition(naked, call180, -1e18);
         AccountState memory bare = ch.accountState(naked);
         assertFalse(bare.healthy);
@@ -810,9 +826,6 @@ contract ClearinghouseAccountsTest is Fixture {
     }
 
     function test_hooksNotImplementedYet() public {
-        TradeParams memory t;
-        vm.expectRevert(CHErrors.NotImplemented.selector);
-        venue.trade(t);
         vm.expectRevert(CHErrors.NotImplemented.selector);
         ch.settleAccount(1, 0);
         vm.expectRevert(CHErrors.NotImplemented.selector);
@@ -844,6 +857,23 @@ contract ClearinghouseAccountsTest is Fixture {
     function _policy(uint256 ttl) internal view returns (AgentPolicy memory) {
         return AgentPolicy({
             maxWorstLoss: 500e18, maxPremiumPerTrade: 50e18, allowedMask: 1, expiresAt: uint64(block.timestamp + ttl)
+        });
+    }
+
+    /// @dev The taker (seller) sells one contract of `sid` to the maker for `premium`.
+    function _sale(uint256 sellerId, address seller, uint256 buyerId, address buyer_, uint32 sid, uint256 premium)
+        internal
+        pure
+        returns (TradeParams memory)
+    {
+        return TradeParams({
+            takerActor: seller,
+            makerActor: buyer_,
+            takerId: sellerId,
+            makerId: buyerId,
+            seriesId: sid,
+            qty: -1e18,
+            premium: premium
         });
     }
 

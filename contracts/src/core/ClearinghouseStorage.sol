@@ -56,6 +56,8 @@ struct Deps {
     IRiskKernel kernel;
     IInsuranceFund insurance;
     address auctionHouse;
+    address usdg;
+    uint256 usdgScale; // 10 ** (18 - usdg decimals)
 }
 
 /// @notice Errors of the clearinghouse and its logic libraries.
@@ -77,6 +79,18 @@ library CHErrors {
     // agents
     error InvalidAgent();
     error InvalidExpiry();
+    // trading
+    error NotVenue(address caller);
+    error UnknownSeries();
+    error SeriesExpired();
+    error SelfTrade();
+    error QtyTooSmall();
+    error NotAuthorized(uint256 id, address actor);
+    error AgentUnderlyingNotAllowed();
+    error OpeningNotAllowed(uint256 id);
+    error OpenInterestCap();
+    error AgentRiskBudgetExceeded(uint256 id, uint256 worstLoss, uint256 budget);
+    error AgentPremiumExceeded();
     // setup
     error NotSetupAdmin();
     error SetupAlreadyFinalized();
