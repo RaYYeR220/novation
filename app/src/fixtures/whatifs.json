@@ -21,9 +21,9 @@
    },
    "refusal": {
     "code": "AgentRiskBudgetExceeded",
-    "message": "Worst-case loss after this trade exceeds the agent's remaining risk budget.",
+    "message": "Worst-case loss after this trade exceeds the agent's risk budget.",
     "numbers": {
-     "worstLoss": 1493.22,
+     "worstLoss": 2130.01,
      "budget": 1500.0,
      "used": 1180.0,
      "remaining": 320.0

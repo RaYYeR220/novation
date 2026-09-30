@@ -5,6 +5,11 @@ export interface Position { seriesId: number; qty: number; mark: number; }
 export interface AccountState { cash: number; mtm: number; settledValue: number; deficit: number; equity: number; im: number; mm: number; worstScenario: number; healthy: boolean; liquidatable: boolean; }
 export interface ScenarioGrid { session: Session; cells: number[] /* 39, index = v*13+j */; shockRange: Record<string, number>; }
 export interface Refusal { code: 'InsufficientMargin' | 'AgentRiskBudgetExceeded' | 'OpeningNotAllowed' | 'OpenInterestCap' | 'VaultNotLive' | 'InsufficientCash' | string; message: string; numbers?: Record<string, number>; }
+/**
+ * `premium` is always a positive magnitude; direction comes from the sign of `qtyDelta`.
+ * Buy (qtyDelta > 0): the account pays premium + fee. Sell (qtyDelta < 0): it receives
+ * premium and pays fee (cash changes by +premium - fee). Mirrors the contract TradeParams.
+ */
 export interface Quote { premium: number; fee: number; after: AccountState; refusal?: Refusal; }
 export interface Vault { address: string; kind: 'coveredCall' | 'putWrite'; underlying: string; tvl: number; nav: number; apy7d: number; utilization: number; epoch: number; live: boolean; }
 export interface AgentGrant { agent: string; label: string; maxWorstLoss: number; maxPremiumPerTrade: number; allowed: string[]; expiresAt: number; used: number; lastRefusal?: Refusal & { txHash?: string }; }

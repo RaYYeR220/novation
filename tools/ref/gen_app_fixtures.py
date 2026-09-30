@@ -184,20 +184,23 @@ def build_whatif(ids, acct, res):
     sid = ids[("NVDA", 200, 6, True)]
     qty_delta = -60.0
     mk = mark("NVDA", 200, 6, True)
-    premium = w_round(-qty_delta * mk)  # credit received for selling
-    fee = w_round(abs(premium) * FEE_BPS / 1e4)
+    # Quote.premium is a positive magnitude; direction comes from the sign of qtyDelta.
+    premium = w_round(abs(qty_delta) * mk)
+    fee = w_round(premium * FEE_BPS / 1e4)
+    cash_change = (premium if qty_delta < 0 else -premium) - fee  # sell receives, buy pays
     order, tq, held = book7(ids, delta_call=qty_delta)
     out, grid = run_margin(order, tq, held, "REGULAR")
-    after = account_state(2400.0 + premium - fee, out)
+    after = account_state(2400.0 + cash_change, out)
     before_loss = f(res["REGULAR"]["out"]["lossCorr"])
     worst_loss = f(out["lossCorr"])
     budget, used = 1500.0, 1180.0
     refusal = None
-    if used + (worst_loss - before_loss) > budget or worst_loss > budget - used:
+    projected = used + max(0.0, worst_loss - before_loss)  # budget used after this trade
+    if projected > budget:
         refusal = {
             "code": "AgentRiskBudgetExceeded",
-            "message": "Worst-case loss after this trade exceeds the agent's remaining risk budget.",
-            "numbers": {"worstLoss": w_round(worst_loss, 2), "budget": budget, "used": used,
+            "message": "Worst-case loss after this trade exceeds the agent's risk budget.",
+            "numbers": {"worstLoss": w_round(projected, 2), "budget": budget, "used": used,
                         "remaining": budget - used},
         }
     quote = {"premium": premium, "fee": fee, "after": after}
@@ -222,7 +225,20 @@ def build_mm(ids):
                    "strike": w(k), "qty": w(rnd.choice([-1, 1]) * rnd.randint(1, 30))})
     out, _ = K.margin(kparams(), us, ps)
     grid = K.scenario_grid(kparams(), us, ps)
-    return {"id": 1, "positions": 256, "grid": [w_round(f(x), 6) for x in grid],
+    agg = {}
+    for p in ps:
+        sym = order[p["u"]]
+        key = (sym, f(p["strike"]), (p["expiry"] - NOW) // DAY, p["isCall"])
+        agg[key] = agg.get(key, 0) + f(p["qty"])
+    positions = []
+    for (sym, k, d, c), q in agg.items():
+        k = int(k) if float(k).is_integer() else k
+        sid = ids[(sym, k, d, c)]
+        positions.append({"seriesId": sid, "qty": q, "mark": w_round(mark(sym, k, d, c)), "id": sid,
+                          "underlying": sym, "expiry": NOW + d * DAY, "strike": k, "isCall": c})
+    state = account_state(250000.0, out)
+    return {"id": 1, "owner": "0x" + "4d" * 20, "positionCount": 256, "state": state, "positions": positions,
+            "collateral": {}, "grid": [w_round(f(x), 6) for x in grid],
             "lossIM": w_round(f(out["lossIM"]), 6), "worstScenario": out["worstScenario"]}
 
 
@@ -263,9 +279,11 @@ def main():
         {"address": "0xa3" + "00" * 19, "kind": "coveredCall", "underlying": "TSLA", "tvl": 288000, "nav": 286850,
          "apy7d": 0.152, "utilization": 0.55, "epoch": 9, "live": True},
     ]
-    last_ref = {"code": "AgentRiskBudgetExceeded",
-                "message": "Worst-case loss 1612.40 exceeds the risk budget of 1500.00.",
-                "numbers": {"worstLoss": 1612.4, "budget": 1500, "used": 1180},
+    wi = whatif["quote"]["refusal"]  # kernel-computed; shared by agents, feed and what-if
+    last_ref = {"code": wi["code"],
+                "message": "Worst-case loss %.2f exceeds the risk budget of %.2f." % (
+                    wi["numbers"]["worstLoss"], wi["numbers"]["budget"]),
+                "numbers": dict(wi["numbers"]),
                 "txHash": "0x" + "7c" * 32}
     agents = {"7": [{"agent": "0x" + "b0" * 20, "label": "hedge-bot", "maxWorstLoss": 1500, "maxPremiumPerTrade": 500,
                      "allowed": ["NVDA", "SPY"], "expiresAt": NOW + 30 * DAY, "used": 1180, "lastRefusal": last_ref}]}

@@ -1,6 +1,1922 @@
 {
  "id": 1,
- "positions": 256,
+ "owner": "0x4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d",
+ "positionCount": 256,
+ "state": {
+  "cash": 250000.0,
+  "mtm": 4338.542471,
+  "settledValue": 250000.0,
+  "deficit": 0.0,
+  "equity": 254338.542471,
+  "im": 17647.25147,
+  "mm": 13235.438602,
+  "worstScenario": 12,
+  "healthy": true,
+  "liquidatable": false
+ },
+ "positions": [
+  {
+   "seriesId": 120,
+   "qty": 15.0,
+   "mark": 2.117657,
+   "id": 120,
+   "underlying": "TSLA",
+   "expiry": 1791216000,
+   "strike": 350,
+   "isCall": false
+  },
+  {
+   "seriesId": 93,
+   "qty": 20.0,
+   "mark": 21.596656,
+   "id": 93,
+   "underlying": "NVDA",
+   "expiry": 1793030400,
+   "strike": 210,
+   "isCall": true
+  },
+  {
+   "seriesId": 364,
+   "qty": -22.0,
+   "mark": 2.525521,
+   "id": 364,
+   "underlying": "AAPL",
+   "expiry": 1791820800,
+   "strike": 325,
+   "isCall": false
+  },
+  {
+   "seriesId": 213,
+   "qty": 3.0,
+   "mark": 8.916446,
+   "id": 213,
+   "underlying": "TSLA",
+   "expiry": 1793030400,
+   "strike": 430,
+   "isCall": true
+  },
+  {
+   "seriesId": 18,
+   "qty": -13.0,
+   "mark": 8.528232,
+   "id": 18,
+   "underlying": "NVDA",
+   "expiry": 1791216000,
+   "strike": 230,
+   "isCall": false
+  },
+  {
+   "seriesId": 66,
+   "qty": -44.0,
+   "mark": 4.554904,
+   "id": 66,
+   "underlying": "NVDA",
+   "expiry": 1792425600,
+   "strike": 210,
+   "isCall": false
+  },
+  {
+   "seriesId": 369,
+   "qty": -31.0,
+   "mark": 5.185306,
+   "id": 369,
+   "underlying": "AAPL",
+   "expiry": 1791820800,
+   "strike": 340,
+   "isCall": true
+  },
+  {
+   "seriesId": 259,
+   "qty": 12.0,
+   "mark": 8.502034,
+   "id": 259,
+   "underlying": "SPY",
+   "expiry": 1791820800,
+   "strike": 770,
+   "isCall": true
+  },
+  {
+   "seriesId": 398,
+   "qty": 2.0,
+   "mark": 13.622841,
+   "id": 398,
+   "underlying": "AAPL",
+   "expiry": 1792425600,
+   "strike": 345,
+   "isCall": false
+  },
+  {
+   "seriesId": 52,
+   "qty": 8.0,
+   "mark": 22.002033,
+   "id": 52,
+   "underlying": "NVDA",
+   "expiry": 1791820800,
+   "strike": 245,
+   "isCall": false
+  },
+  {
+   "seriesId": 339,
+   "qty": -1.0,
+   "mark": 8.427632,
+   "id": 339,
+   "underlying": "AAPL",
+   "expiry": 1791216000,
+   "strike": 330,
+   "isCall": true
+  },
+  {
+   "seriesId": 335,
+   "qty": 31.0,
+   "mark": 16.694396,
+   "id": 335,
+   "underlying": "AAPL",
+   "expiry": 1791216000,
+   "strike": 320,
+   "isCall": true
+  },
+  {
+   "seriesId": 168,
+   "qty": 24.0,
+   "mark": 4.267579,
+   "id": 168,
+   "underlying": "TSLA",
+   "expiry": 1792425600,
+   "strike": 330,
+   "isCall": false
+  },
+  {
+   "seriesId": 151,
+   "qty": -31.0,
+   "mark": 17.570959,
+   "id": 151,
+   "underlying": "TSLA",
+   "expiry": 1791820800,
+   "strike": 380,
+   "isCall": true
+  },
+  {
+   "seriesId": 177,
+   "qty": 28.0,
+   "mark": 21.758088,
+   "id": 177,
+   "underlying": "TSLA",
+   "expiry": 1792425600,
+   "strike": 380,
+   "isCall": true
+  },
+  {
+   "seriesId": 241,
+   "qty": 3.0,
+   "mark": 0.003413,
+   "id": 241,
+   "underlying": "SPY",
+   "expiry": 1791216000,
+   "strike": 820,
+   "isCall": true
+  },
+  {
+   "seriesId": 220,
+   "qty": -1.0,
+   "mark": 0.000203,
+   "id": 220,
+   "underlying": "SPY",
+   "expiry": 1791216000,
+   "strike": 710,
+   "isCall": false
+  },
+  {
+   "seriesId": 268,
+   "qty": 32.0,
+   "mark": 41.960289,
+   "id": 268,
+   "underlying": "SPY",
+   "expiry": 1791820800,
+   "strike": 810,
+   "isCall": false
+  },
+  {
+   "seriesId": 176,
+   "qty": 23.0,
+   "mark": 16.616902,
+   "id": 176,
+   "underlying": "TSLA",
+   "expiry": 1792425600,
+   "strike": 370,
+   "isCall": false
+  },
+  {
+   "seriesId": 74,
+   "qty": 19.0,
+   "mark": 13.410106,
+   "id": 74,
+   "underlying": "NVDA",
+   "expiry": 1792425600,
+   "strike": 230,
+   "isCall": false
+  },
+  {
+   "seriesId": 35,
+   "qty": -2.0,
+   "mark": 22.414322,
+   "id": 35,
+   "underlying": "NVDA",
+   "expiry": 1791820800,
+   "strike": 205,
+   "isCall": true
+  },
+  {
+   "seriesId": 54,
+   "qty": -47.0,
+   "mark": 26.199725,
+   "id": 54,
+   "underlying": "NVDA",
+   "expiry": 1791820800,
+   "strike": 250,
+   "isCall": false
+  },
+  {
+   "seriesId": 305,
+   "qty": 18.0,
+   "mark": 49.38728,
+   "id": 305,
+   "underlying": "SPY",
+   "expiry": 1793030400,
+   "strike": 720,
+   "isCall": true
+  },
+  {
+   "seriesId": 235,
+   "qty": -27.0,
+   "mark": 0.654366,
+   "id": 235,
+   "underlying": "SPY",
+   "expiry": 1791216000,
+   "strike": 790,
+   "isCall": true
+  },
+  {
+   "seriesId": 126,
+   "qty": 24.0,
+   "mark": 11.735145,
+   "id": 126,
+   "underlying": "TSLA",
+   "expiry": 1791216000,
+   "strike": 380,
+   "isCall": false
+  },
+  {
+   "seriesId": 55,
+   "qty": -15.0,
+   "mark": 1.190589,
+   "id": 55,
+   "underlying": "NVDA",
+   "expiry": 1791820800,
+   "strike": 255,
+   "isCall": true
+  },
+  {
+   "seriesId": 37,
+   "qty": -11.0,
+   "mark": 18.473579,
+   "id": 37,
+   "underlying": "NVDA",
+   "expiry": 1791820800,
+   "strike": 210,
+   "isCall": true
+  },
+  {
+   "seriesId": 174,
+   "qty": -11.0,
+   "mark": 12.468342,
+   "id": 174,
+   "underlying": "TSLA",
+   "expiry": 1792425600,
+   "strike": 360,
+   "isCall": false
+  },
+  {
+   "seriesId": 226,
+   "qty": 28.0,
+   "mark": 0.200702,
+   "id": 226,
+   "underlying": "SPY",
+   "expiry": 1791216000,
+   "strike": 740,
+   "isCall": false
+  },
+  {
+   "seriesId": 424,
+   "qty": 1.0,
+   "mark": 14.918403,
+   "id": 424,
+   "underlying": "AAPL",
+   "expiry": 1793030400,
+   "strike": 345,
+   "isCall": false
+  },
+  {
+   "seriesId": 134,
+   "qty": 22.0,
+   "mark": 41.265772,
+   "id": 134,
+   "underlying": "TSLA",
+   "expiry": 1791216000,
+   "strike": 420,
+   "isCall": false
+  },
+  {
+   "seriesId": 393,
+   "qty": 19.0,
+   "mark": 9.132935,
+   "id": 393,
+   "underlying": "AAPL",
+   "expiry": 1792425600,
+   "strike": 335,
+   "isCall": true
+  },
+  {
+   "seriesId": 203,
+   "qty": 15.0,
+   "mark": 25.253237,
+   "id": 203,
+   "underlying": "TSLA",
+   "expiry": 1793030400,
+   "strike": 380,
+   "isCall": true
+  },
+  {
+   "seriesId": 357,
+   "qty": -62.0,
+   "mark": 26.693502,
+   "id": 357,
+   "underlying": "AAPL",
+   "expiry": 1791820800,
+   "strike": 310,
+   "isCall": true
+  },
+  {
+   "seriesId": 173,
+   "qty": -11.0,
+   "mark": 32.713342,
+   "id": 173,
+   "underlying": "TSLA",
+   "expiry": 1792425600,
+   "strike": 360,
+   "isCall": true
+  },
+  {
+   "seriesId": 316,
+   "qty": 11.0,
+   "mark": 14.152704,
+   "id": 316,
+   "underlying": "SPY",
+   "expiry": 1793030400,
+   "strike": 770,
+   "isCall": false
+  },
+  {
+   "seriesId": 91,
+   "qty": 24.0,
+   "mark": 25.087634,
+   "id": 91,
+   "underlying": "NVDA",
+   "expiry": 1793030400,
+   "strike": 205,
+   "isCall": true
+  },
+  {
+   "seriesId": 337,
+   "qty": -21.0,
+   "mark": 12.285077,
+   "id": 337,
+   "underlying": "AAPL",
+   "expiry": 1791216000,
+   "strike": 325,
+   "isCall": true
+  },
+  {
+   "seriesId": 343,
+   "qty": -8.0,
+   "mark": 3.054872,
+   "id": 343,
+   "underlying": "AAPL",
+   "expiry": 1791216000,
+   "strike": 340,
+   "isCall": true
+  },
+  {
+   "seriesId": 295,
+   "qty": -12.0,
+   "mark": 1.067503,
+   "id": 295,
+   "underlying": "SPY",
+   "expiry": 1792425600,
+   "strike": 810,
+   "isCall": true
+  },
+  {
+   "seriesId": 64,
+   "qty": -27.0,
+   "mark": 3.223807,
+   "id": 64,
+   "underlying": "NVDA",
+   "expiry": 1792425600,
+   "strike": 205,
+   "isCall": false
+  },
+  {
+   "seriesId": 133,
+   "qty": 10.0,
+   "mark": 1.510772,
+   "id": 133,
+   "underlying": "TSLA",
+   "expiry": 1791216000,
+   "strike": 420,
+   "isCall": true
+  },
+  {
+   "seriesId": 410,
+   "qty": -8.0,
+   "mark": 1.596615,
+   "id": 410,
+   "underlying": "AAPL",
+   "expiry": 1793030400,
+   "strike": 310,
+   "isCall": false
+  },
+  {
+   "seriesId": 188,
+   "qty": 34.0,
+   "mark": 55.968292,
+   "id": 188,
+   "underlying": "TSLA",
+   "expiry": 1792425600,
+   "strike": 430,
+   "isCall": false
+  },
+  {
+   "seriesId": 123,
+   "qty": -8.0,
+   "mark": 17.529691,
+   "id": 123,
+   "underlying": "TSLA",
+   "expiry": 1791216000,
+   "strike": 370,
+   "isCall": true
+  },
+  {
+   "seriesId": 374,
+   "qty": 13.0,
+   "mark": 15.854619,
+   "id": 374,
+   "underlying": "AAPL",
+   "expiry": 1791820800,
+   "strike": 350,
+   "isCall": false
+  },
+  {
+   "seriesId": 8,
+   "qty": 11.0,
+   "mark": 0.487118,
+   "id": 8,
+   "underlying": "NVDA",
+   "expiry": 1791216000,
+   "strike": 205,
+   "isCall": false
+  },
+  {
+   "seriesId": 387,
+   "qty": -9.0,
+   "mark": 18.861172,
+   "id": 387,
+   "underlying": "AAPL",
+   "expiry": 1792425600,
+   "strike": 320,
+   "isCall": true
+  },
+  {
+   "seriesId": 376,
+   "qty": -22.0,
+   "mark": 19.992941,
+   "id": 376,
+   "underlying": "AAPL",
+   "expiry": 1791820800,
+   "strike": 355,
+   "isCall": false
+  },
+  {
+   "seriesId": 263,
+   "qty": -16.0,
+   "mark": 2.290766,
+   "id": 263,
+   "underlying": "SPY",
+   "expiry": 1791820800,
+   "strike": 790,
+   "isCall": true
+  },
+  {
+   "seriesId": 95,
+   "qty": 7.0,
+   "mark": 18.41046,
+   "id": 95,
+   "underlying": "NVDA",
+   "expiry": 1793030400,
+   "strike": 215,
+   "isCall": true
+  },
+  {
+   "seriesId": 25,
+   "qty": 15.0,
+   "mark": 0.420812,
+   "id": 25,
+   "underlying": "NVDA",
+   "expiry": 1791216000,
+   "strike": 250,
+   "isCall": true
+  },
+  {
+   "seriesId": 202,
+   "qty": 23.0,
+   "mark": 20.011907,
+   "id": 202,
+   "underlying": "TSLA",
+   "expiry": 1793030400,
+   "strike": 370,
+   "isCall": false
+  },
+  {
+   "seriesId": 375,
+   "qty": -10.0,
+   "mark": 1.302941,
+   "id": 375,
+   "underlying": "AAPL",
+   "expiry": 1791820800,
+   "strike": 355,
+   "isCall": true
+  },
+  {
+   "seriesId": 354,
+   "qty": 20.0,
+   "mark": 28.726658,
+   "id": 354,
+   "underlying": "AAPL",
+   "expiry": 1791216000,
+   "strike": 365,
+   "isCall": false
+  },
+  {
+   "seriesId": 340,
+   "qty": -17.0,
+   "mark": 2.117632,
+   "id": 340,
+   "underlying": "AAPL",
+   "expiry": 1791216000,
+   "strike": 330,
+   "isCall": false
+  },
+  {
+   "seriesId": 330,
+   "qty": -4.0,
+   "mark": 0.007808,
+   "id": 330,
+   "underlying": "AAPL",
+   "expiry": 1791216000,
+   "strike": 305,
+   "isCall": false
+  },
+  {
+   "seriesId": 327,
+   "qty": 47.0,
+   "mark": 0.533173,
+   "id": 327,
+   "underlying": "SPY",
+   "expiry": 1793030400,
+   "strike": 830,
+   "isCall": true
+  },
+  {
+   "seriesId": 358,
+   "qty": -50.0,
+   "mark": 0.383502,
+   "id": 358,
+   "underlying": "AAPL",
+   "expiry": 1791820800,
+   "strike": 310,
+   "isCall": false
+  },
+  {
+   "seriesId": 211,
+   "qty": 10.0,
+   "mark": 11.174081,
+   "id": 211,
+   "underlying": "TSLA",
+   "expiry": 1793030400,
+   "strike": 420,
+   "isCall": true
+  },
+  {
+   "seriesId": 122,
+   "qty": -9.0,
+   "mark": 4.135727,
+   "id": 122,
+   "underlying": "TSLA",
+   "expiry": 1791216000,
+   "strike": 360,
+   "isCall": false
+  },
+  {
+   "seriesId": 53,
+   "qty": 22.0,
+   "mark": 1.769725,
+   "id": 53,
+   "underlying": "NVDA",
+   "expiry": 1791820800,
+   "strike": 250,
+   "isCall": true
+  },
+  {
+   "seriesId": 414,
+   "qty": 13.0,
+   "mark": 3.576965,
+   "id": 414,
+   "underlying": "AAPL",
+   "expiry": 1793030400,
+   "strike": 320,
+   "isCall": false
+  },
+  {
+   "seriesId": 6,
+   "qty": -25.0,
+   "mark": 0.199745,
+   "id": 6,
+   "underlying": "NVDA",
+   "expiry": 1791216000,
+   "strike": 200,
+   "isCall": false
+  },
+  {
+   "seriesId": 381,
+   "qty": 22.0,
+   "mark": 31.843328,
+   "id": 381,
+   "underlying": "AAPL",
+   "expiry": 1792425600,
+   "strike": 305,
+   "isCall": true
+  },
+  {
+   "seriesId": 193,
+   "qty": 0.0,
+   "mark": 56.645706,
+   "id": 193,
+   "underlying": "TSLA",
+   "expiry": 1793030400,
+   "strike": 330,
+   "isCall": true
+  },
+  {
+   "seriesId": 400,
+   "qty": -50.0,
+   "mark": 17.163889,
+   "id": 400,
+   "underlying": "AAPL",
+   "expiry": 1792425600,
+   "strike": 350,
+   "isCall": false
+  },
+  {
+   "seriesId": 284,
+   "qty": 11.0,
+   "mark": 4.430652,
+   "id": 284,
+   "underlying": "SPY",
+   "expiry": 1792425600,
+   "strike": 750,
+   "isCall": false
+  },
+  {
+   "seriesId": 363,
+   "qty": 1.0,
+   "mark": 13.835521,
+   "id": 363,
+   "underlying": "AAPL",
+   "expiry": 1791820800,
+   "strike": 325,
+   "isCall": true
+  },
+  {
+   "seriesId": 355,
+   "qty": -6.0,
+   "mark": 31.482192,
+   "id": 355,
+   "underlying": "AAPL",
+   "expiry": 1791820800,
+   "strike": 305,
+   "isCall": true
+  },
+  {
+   "seriesId": 145,
+   "qty": -20.0,
+   "mark": 36.039836,
+   "id": 145,
+   "underlying": "TSLA",
+   "expiry": 1791820800,
+   "strike": 350,
+   "isCall": true
+  },
+  {
+   "seriesId": 92,
+   "qty": -41.0,
+   "mark": 4.517634,
+   "id": 92,
+   "underlying": "NVDA",
+   "expiry": 1793030400,
+   "strike": 205,
+   "isCall": false
+  },
+  {
+   "seriesId": 360,
+   "qty": 6.0,
+   "mark": 0.77985,
+   "id": 360,
+   "underlying": "AAPL",
+   "expiry": 1791820800,
+   "strike": 315,
+   "isCall": false
+  },
+  {
+   "seriesId": 342,
+   "qty": -5.0,
+   "mark": 4.00968,
+   "id": 342,
+   "underlying": "AAPL",
+   "expiry": 1791216000,
+   "strike": 335,
+   "isCall": false
+  },
+  {
+   "seriesId": 366,
+   "qty": -19.0,
+   "mark": 4.07911,
+   "id": 366,
+   "underlying": "AAPL",
+   "expiry": 1791820800,
+   "strike": 330,
+   "isCall": false
+  },
+  {
+   "seriesId": 118,
+   "qty": -8.0,
+   "mark": 0.96352,
+   "id": 118,
+   "underlying": "TSLA",
+   "expiry": 1791216000,
+   "strike": 340,
+   "isCall": false
+  },
+  {
+   "seriesId": 352,
+   "qty": -14.0,
+   "mark": 23.80185,
+   "id": 352,
+   "underlying": "AAPL",
+   "expiry": 1791216000,
+   "strike": 360,
+   "isCall": false
+  },
+  {
+   "seriesId": 153,
+   "qty": -2.0,
+   "mark": 13.22584,
+   "id": 153,
+   "underlying": "TSLA",
+   "expiry": 1791820800,
+   "strike": 390,
+   "isCall": true
+  },
+  {
+   "seriesId": 46,
+   "qty": -8.0,
+   "mark": 11.303673,
+   "id": 46,
+   "underlying": "NVDA",
+   "expiry": 1791820800,
+   "strike": 230,
+   "isCall": false
+  },
+  {
+   "seriesId": 287,
+   "qty": -20.0,
+   "mark": 10.724739,
+   "id": 287,
+   "underlying": "SPY",
+   "expiry": 1792425600,
+   "strike": 770,
+   "isCall": true
+  },
+  {
+   "seriesId": 49,
+   "qty": -17.0,
+   "mark": 3.653324,
+   "id": 49,
+   "underlying": "NVDA",
+   "expiry": 1791820800,
+   "strike": 240,
+   "isCall": true
+  },
+  {
+   "seriesId": 320,
+   "qty": -21.0,
+   "mark": 26.959364,
+   "id": 320,
+   "underlying": "SPY",
+   "expiry": 1793030400,
+   "strike": 790,
+   "isCall": false
+  },
+  {
+   "seriesId": 359,
+   "qty": -20.0,
+   "mark": 22.08985,
+   "id": 359,
+   "underlying": "AAPL",
+   "expiry": 1791820800,
+   "strike": 315,
+   "isCall": true
+  },
+  {
+   "seriesId": 117,
+   "qty": -25.0,
+   "mark": 41.20852,
+   "id": 117,
+   "underlying": "TSLA",
+   "expiry": 1791216000,
+   "strike": 340,
+   "isCall": true
+  },
+  {
+   "seriesId": 370,
+   "qty": 16.0,
+   "mark": 8.875306,
+   "id": 370,
+   "underlying": "AAPL",
+   "expiry": 1791820800,
+   "strike": 340,
+   "isCall": false
+  },
+  {
+   "seriesId": 108,
+   "qty": -8.0,
+   "mark": 25.17547,
+   "id": 108,
+   "underlying": "NVDA",
+   "expiry": 1793030400,
+   "strike": 245,
+   "isCall": false
+  },
+  {
+   "seriesId": 80,
+   "qty": 27.0,
+   "mark": 23.662798,
+   "id": 80,
+   "underlying": "NVDA",
+   "expiry": 1792425600,
+   "strike": 245,
+   "isCall": false
+  },
+  {
+   "seriesId": 304,
+   "qty": 17.0,
+   "mark": 0.439142,
+   "id": 304,
+   "underlying": "SPY",
+   "expiry": 1793030400,
+   "strike": 710,
+   "isCall": false
+  },
+  {
+   "seriesId": 45,
+   "qty": 23.0,
+   "mark": 6.873673,
+   "id": 45,
+   "underlying": "NVDA",
+   "expiry": 1791820800,
+   "strike": 230,
+   "isCall": true
+  },
+  {
+   "seriesId": 23,
+   "qty": -3.0,
+   "mark": 0.810349,
+   "id": 23,
+   "underlying": "NVDA",
+   "expiry": 1791216000,
+   "strike": 245,
+   "isCall": true
+  },
+  {
+   "seriesId": 62,
+   "qty": -14.0,
+   "mark": 2.199374,
+   "id": 62,
+   "underlying": "NVDA",
+   "expiry": 1792425600,
+   "strike": 200,
+   "isCall": false
+  },
+  {
+   "seriesId": 4,
+   "qty": -29.0,
+   "mark": 0.071406,
+   "id": 4,
+   "underlying": "NVDA",
+   "expiry": 1791216000,
+   "strike": 195,
+   "isCall": false
+  },
+  {
+   "seriesId": 318,
+   "qty": -5.0,
+   "mark": 20.009488,
+   "id": 318,
+   "underlying": "SPY",
+   "expiry": 1793030400,
+   "strike": 780,
+   "isCall": false
+  },
+  {
+   "seriesId": 313,
+   "qty": 30.0,
+   "mark": 17.905079,
+   "id": 313,
+   "underlying": "SPY",
+   "expiry": 1793030400,
+   "strike": 760,
+   "isCall": true
+  },
+  {
+   "seriesId": 125,
+   "qty": -48.0,
+   "mark": 11.980145,
+   "id": 125,
+   "underlying": "TSLA",
+   "expiry": 1791216000,
+   "strike": 380,
+   "isCall": true
+  },
+  {
+   "seriesId": 412,
+   "qty": 25.0,
+   "mark": 2.437427,
+   "id": 412,
+   "underlying": "AAPL",
+   "expiry": 1793030400,
+   "strike": 315,
+   "isCall": false
+  },
+  {
+   "seriesId": 324,
+   "qty": -4.0,
+   "mark": 43.453989,
+   "id": 324,
+   "underlying": "SPY",
+   "expiry": 1793030400,
+   "strike": 810,
+   "isCall": false
+  },
+  {
+   "seriesId": 75,
+   "qty": 16.0,
+   "mark": 7.08663,
+   "id": 75,
+   "underlying": "NVDA",
+   "expiry": 1792425600,
+   "strike": 235,
+   "isCall": true
+  },
+  {
+   "seriesId": 224,
+   "qty": -6.0,
+   "mark": 0.030694,
+   "id": 224,
+   "underlying": "SPY",
+   "expiry": 1791216000,
+   "strike": 730,
+   "isCall": false
+  },
+  {
+   "seriesId": 78,
+   "qty": 15.0,
+   "mark": 19.944797,
+   "id": 78,
+   "underlying": "NVDA",
+   "expiry": 1792425600,
+   "strike": 240,
+   "isCall": false
+  },
+  {
+   "seriesId": 124,
+   "qty": 13.0,
+   "mark": 7.284691,
+   "id": 124,
+   "underlying": "TSLA",
+   "expiry": 1791216000,
+   "strike": 370,
+   "isCall": false
+  },
+  {
+   "seriesId": 69,
+   "qty": -32.0,
+   "mark": 13.823826,
+   "id": 69,
+   "underlying": "NVDA",
+   "expiry": 1792425600,
+   "strike": 220,
+   "isCall": true
+  },
+  {
+   "seriesId": 155,
+   "qty": -8.0,
+   "mark": 9.733008,
+   "id": 155,
+   "underlying": "TSLA",
+   "expiry": 1791820800,
+   "strike": 400,
+   "isCall": true
+  },
+  {
+   "seriesId": 348,
+   "qty": 20.0,
+   "mark": 14.42366,
+   "id": 348,
+   "underlying": "AAPL",
+   "expiry": 1791216000,
+   "strike": 350,
+   "isCall": false
+  },
+  {
+   "seriesId": 383,
+   "qty": 20.0,
+   "mark": 27.260922,
+   "id": 383,
+   "underlying": "AAPL",
+   "expiry": 1792425600,
+   "strike": 310,
+   "isCall": true
+  },
+  {
+   "seriesId": 109,
+   "qty": 38.0,
+   "mark": 4.575853,
+   "id": 109,
+   "underlying": "NVDA",
+   "expiry": 1793030400,
+   "strike": 250,
+   "isCall": true
+  },
+  {
+   "seriesId": 192,
+   "qty": -5.0,
+   "mark": 4.458098,
+   "id": 192,
+   "underlying": "TSLA",
+   "expiry": 1793030400,
+   "strike": 320,
+   "isCall": false
+  },
+  {
+   "seriesId": 391,
+   "qty": -10.0,
+   "mark": 11.927996,
+   "id": 391,
+   "underlying": "AAPL",
+   "expiry": 1792425600,
+   "strike": 330,
+   "isCall": true
+  },
+  {
+   "seriesId": 219,
+   "qty": 8.0,
+   "mark": 58.430203,
+   "id": 219,
+   "underlying": "SPY",
+   "expiry": 1791216000,
+   "strike": 710,
+   "isCall": true
+  },
+  {
+   "seriesId": 280,
+   "qty": 8.0,
+   "mark": 1.098707,
+   "id": 280,
+   "underlying": "SPY",
+   "expiry": 1792425600,
+   "strike": 730,
+   "isCall": false
+  },
+  {
+   "seriesId": 256,
+   "qty": 12.0,
+   "mark": 2.736164,
+   "id": 256,
+   "underlying": "SPY",
+   "expiry": 1791820800,
+   "strike": 750,
+   "isCall": false
+  },
+  {
+   "seriesId": 270,
+   "qty": 14.0,
+   "mark": 51.704464,
+   "id": 270,
+   "underlying": "SPY",
+   "expiry": 1791820800,
+   "strike": 820,
+   "isCall": false
+  },
+  {
+   "seriesId": 206,
+   "qty": -23.0,
+   "mark": 30.634006,
+   "id": 206,
+   "underlying": "TSLA",
+   "expiry": 1793030400,
+   "strike": 390,
+   "isCall": false
+  },
+  {
+   "seriesId": 384,
+   "qty": -29.0,
+   "mark": 0.950922,
+   "id": 384,
+   "underlying": "AAPL",
+   "expiry": 1792425600,
+   "strike": 310,
+   "isCall": false
+  },
+  {
+   "seriesId": 252,
+   "qty": -1.0,
+   "mark": 0.414489,
+   "id": 252,
+   "underlying": "SPY",
+   "expiry": 1791820800,
+   "strike": 730,
+   "isCall": false
+  },
+  {
+   "seriesId": 101,
+   "qty": 27.0,
+   "mark": 10.747393,
+   "id": 101,
+   "underlying": "NVDA",
+   "expiry": 1793030400,
+   "strike": 230,
+   "isCall": true
+  },
+  {
+   "seriesId": 82,
+   "qty": -14.0,
+   "mark": 27.635097,
+   "id": 82,
+   "underlying": "NVDA",
+   "expiry": 1792425600,
+   "strike": 250,
+   "isCall": false
+  },
+  {
+   "seriesId": 321,
+   "qty": 9.0,
+   "mark": 3.270681,
+   "id": 321,
+   "underlying": "SPY",
+   "expiry": 1793030400,
+   "strike": 800,
+   "isCall": true
+  },
+  {
+   "seriesId": 21,
+   "qty": 19.0,
+   "mark": 1.473394,
+   "id": 21,
+   "underlying": "NVDA",
+   "expiry": 1791216000,
+   "strike": 240,
+   "isCall": true
+  },
+  {
+   "seriesId": 344,
+   "qty": 4.0,
+   "mark": 6.744872,
+   "id": 344,
+   "underlying": "AAPL",
+   "expiry": 1791216000,
+   "strike": 340,
+   "isCall": false
+  },
+  {
+   "seriesId": 194,
+   "qty": -36.0,
+   "mark": 6.400706,
+   "id": 194,
+   "underlying": "TSLA",
+   "expiry": 1793030400,
+   "strike": 330,
+   "isCall": false
+  },
+  {
+   "seriesId": 422,
+   "qty": 1.0,
+   "mark": 11.858466,
+   "id": 422,
+   "underlying": "AAPL",
+   "expiry": 1793030400,
+   "strike": 340,
+   "isCall": false
+  },
+  {
+   "seriesId": 107,
+   "qty": 10.0,
+   "mark": 5.74547,
+   "id": 107,
+   "underlying": "NVDA",
+   "expiry": 1793030400,
+   "strike": 245,
+   "isCall": true
+  },
+  {
+   "seriesId": 378,
+   "qty": 29.0,
+   "mark": 24.437372,
+   "id": 378,
+   "underlying": "AAPL",
+   "expiry": 1791820800,
+   "strike": 360,
+   "isCall": false
+  },
+  {
+   "seriesId": 409,
+   "qty": 60.0,
+   "mark": 27.906615,
+   "id": 409,
+   "underlying": "AAPL",
+   "expiry": 1793030400,
+   "strike": 310,
+   "isCall": true
+  },
+  {
+   "seriesId": 255,
+   "qty": 19.0,
+   "mark": 21.166164,
+   "id": 255,
+   "underlying": "SPY",
+   "expiry": 1791820800,
+   "strike": 750,
+   "isCall": true
+  },
+  {
+   "seriesId": 22,
+   "qty": 18.0,
+   "mark": 15.903394,
+   "id": 22,
+   "underlying": "NVDA",
+   "expiry": 1791216000,
+   "strike": 240,
+   "isCall": false
+  },
+  {
+   "seriesId": 334,
+   "qty": 10.0,
+   "mark": 0.127487,
+   "id": 334,
+   "underlying": "AAPL",
+   "expiry": 1791216000,
+   "strike": 315,
+   "isCall": false
+  },
+  {
+   "seriesId": 63,
+   "qty": -28.0,
+   "mark": 23.793807,
+   "id": 63,
+   "underlying": "NVDA",
+   "expiry": 1792425600,
+   "strike": 205,
+   "isCall": true
+  },
+  {
+   "seriesId": 68,
+   "qty": -1.0,
+   "mark": 6.224666,
+   "id": 68,
+   "underlying": "NVDA",
+   "expiry": 1792425600,
+   "strike": 215,
+   "isCall": false
+  },
+  {
+   "seriesId": 417,
+   "qty": 9.0,
+   "mark": 13.235564,
+   "id": 417,
+   "underlying": "AAPL",
+   "expiry": 1793030400,
+   "strike": 330,
+   "isCall": true
+  },
+  {
+   "seriesId": 367,
+   "qty": -7.0,
+   "mark": 7.497521,
+   "id": 367,
+   "underlying": "AAPL",
+   "expiry": 1791820800,
+   "strike": 335,
+   "isCall": true
+  },
+  {
+   "seriesId": 96,
+   "qty": 17.0,
+   "mark": 7.84046,
+   "id": 96,
+   "underlying": "NVDA",
+   "expiry": 1793030400,
+   "strike": 215,
+   "isCall": false
+  },
+  {
+   "seriesId": 232,
+   "qty": 16.0,
+   "mark": 7.111175,
+   "id": 232,
+   "underlying": "SPY",
+   "expiry": 1791216000,
+   "strike": 770,
+   "isCall": false
+  },
+  {
+   "seriesId": 411,
+   "qty": -17.0,
+   "mark": 23.747427,
+   "id": 411,
+   "underlying": "AAPL",
+   "expiry": 1793030400,
+   "strike": 315,
+   "isCall": true
+  },
+  {
+   "seriesId": 223,
+   "qty": -28.0,
+   "mark": 38.460694,
+   "id": 223,
+   "underlying": "SPY",
+   "expiry": 1791216000,
+   "strike": 730,
+   "isCall": true
+  },
+  {
+   "seriesId": 293,
+   "qty": 5.0,
+   "mark": 2.11639,
+   "id": 293,
+   "underlying": "SPY",
+   "expiry": 1792425600,
+   "strike": 800,
+   "isCall": true
+  },
+  {
+   "seriesId": 244,
+   "qty": -19.0,
+   "mark": 61.570333,
+   "id": 244,
+   "underlying": "SPY",
+   "expiry": 1791216000,
+   "strike": 830,
+   "isCall": false
+  },
+  {
+   "seriesId": 187,
+   "qty": 16.0,
+   "mark": 6.213292,
+   "id": 187,
+   "underlying": "TSLA",
+   "expiry": 1792425600,
+   "strike": 430,
+   "isCall": true
+  },
+  {
+   "seriesId": 243,
+   "qty": -17.0,
+   "mark": 0.000333,
+   "id": 243,
+   "underlying": "SPY",
+   "expiry": 1791216000,
+   "strike": 830,
+   "isCall": true
+  },
+  {
+   "seriesId": 178,
+   "qty": -9.0,
+   "mark": 21.513088,
+   "id": 178,
+   "underlying": "TSLA",
+   "expiry": 1792425600,
+   "strike": 380,
+   "isCall": false
+  },
+  {
+   "seriesId": 418,
+   "qty": -29.0,
+   "mark": 6.925564,
+   "id": 418,
+   "underlying": "AAPL",
+   "expiry": 1793030400,
+   "strike": 330,
+   "isCall": false
+  },
+  {
+   "seriesId": 271,
+   "qty": 11.0,
+   "mark": 0.041008,
+   "id": 271,
+   "underlying": "SPY",
+   "expiry": 1791820800,
+   "strike": 830,
+   "isCall": true
+  },
+  {
+   "seriesId": 17,
+   "qty": 12.0,
+   "mark": 4.098232,
+   "id": 17,
+   "underlying": "NVDA",
+   "expiry": 1791216000,
+   "strike": 230,
+   "isCall": true
+  },
+  {
+   "seriesId": 432,
+   "qty": -29.0,
+   "mark": 30.403693,
+   "id": 432,
+   "underlying": "AAPL",
+   "expiry": 1793030400,
+   "strike": 365,
+   "isCall": false
+  },
+  {
+   "seriesId": 13,
+   "qty": -18.0,
+   "mark": 9.121078,
+   "id": 13,
+   "underlying": "NVDA",
+   "expiry": 1791216000,
+   "strike": 220,
+   "isCall": true
+  },
+  {
+   "seriesId": 279,
+   "qty": -21.0,
+   "mark": 39.528707,
+   "id": 279,
+   "underlying": "SPY",
+   "expiry": 1792425600,
+   "strike": 730,
+   "isCall": true
+  },
+  {
+   "seriesId": 419,
+   "qty": 22.0,
+   "mark": 10.500046,
+   "id": 419,
+   "underlying": "AAPL",
+   "expiry": 1793030400,
+   "strike": 335,
+   "isCall": true
+  },
+  {
+   "seriesId": 146,
+   "qty": -8.0,
+   "mark": 5.794836,
+   "id": 146,
+   "underlying": "TSLA",
+   "expiry": 1791820800,
+   "strike": 350,
+   "isCall": false
+  },
+  {
+   "seriesId": 322,
+   "qty": -7.0,
+   "mark": 34.840681,
+   "id": 322,
+   "underlying": "SPY",
+   "expiry": 1793030400,
+   "strike": 800,
+   "isCall": false
+  },
+  {
+   "seriesId": 186,
+   "qty": -15.0,
+   "mark": 47.946188,
+   "id": 186,
+   "underlying": "TSLA",
+   "expiry": 1792425600,
+   "strike": 420,
+   "isCall": false
+  },
+  {
+   "seriesId": 285,
+   "qty": -3.0,
+   "mark": 16.124589,
+   "id": 285,
+   "underlying": "SPY",
+   "expiry": 1792425600,
+   "strike": 760,
+   "isCall": true
+  },
+  {
+   "seriesId": 332,
+   "qty": -5.0,
+   "mark": 0.034975,
+   "id": 332,
+   "underlying": "AAPL",
+   "expiry": 1791216000,
+   "strike": 310,
+   "isCall": false
+  },
+  {
+   "seriesId": 420,
+   "qty": -5.0,
+   "mark": 9.190046,
+   "id": 420,
+   "underlying": "AAPL",
+   "expiry": 1793030400,
+   "strike": 335,
+   "isCall": false
+  },
+  {
+   "seriesId": 253,
+   "qty": -12.0,
+   "mark": 29.585389,
+   "id": 253,
+   "underlying": "SPY",
+   "expiry": 1791820800,
+   "strike": 740,
+   "isCall": true
+  },
+  {
+   "seriesId": 227,
+   "qty": 12.0,
+   "mark": 19.333829,
+   "id": 227,
+   "underlying": "SPY",
+   "expiry": 1791216000,
+   "strike": 750,
+   "isCall": true
+  },
+  {
+   "seriesId": 309,
+   "qty": -27.0,
+   "mark": 31.933579,
+   "id": 309,
+   "underlying": "SPY",
+   "expiry": 1793030400,
+   "strike": 740,
+   "isCall": true
+  },
+  {
+   "seriesId": 319,
+   "qty": -45.0,
+   "mark": 5.389364,
+   "id": 319,
+   "underlying": "SPY",
+   "expiry": 1793030400,
+   "strike": 790,
+   "isCall": true
+  },
+  {
+   "seriesId": 164,
+   "qty": 18.0,
+   "mark": 62.046891,
+   "id": 164,
+   "underlying": "TSLA",
+   "expiry": 1791820800,
+   "strike": 440,
+   "isCall": false
+  },
+  {
+   "seriesId": 36,
+   "qty": 5.0,
+   "mark": 1.844322,
+   "id": 36,
+   "underlying": "NVDA",
+   "expiry": 1791820800,
+   "strike": 205,
+   "isCall": false
+  },
+  {
+   "seriesId": 221,
+   "qty": 27.0,
+   "mark": 48.433117,
+   "id": 221,
+   "underlying": "SPY",
+   "expiry": 1791216000,
+   "strike": 720,
+   "isCall": true
+  },
+  {
+   "seriesId": 19,
+   "qty": 26.0,
+   "mark": 2.528721,
+   "id": 19,
+   "underlying": "NVDA",
+   "expiry": 1791216000,
+   "strike": 235,
+   "isCall": true
+  },
+  {
+   "seriesId": 288,
+   "qty": 19.0,
+   "mark": 12.294739,
+   "id": 288,
+   "underlying": "SPY",
+   "expiry": 1792425600,
+   "strike": 770,
+   "isCall": false
+  },
+  {
+   "seriesId": 140,
+   "qty": -18.0,
+   "mark": 1.179833,
+   "id": 140,
+   "underlying": "TSLA",
+   "expiry": 1791820800,
+   "strike": 320,
+   "isCall": false
+  },
+  {
+   "seriesId": 184,
+   "qty": 23.0,
+   "mark": 40.419429,
+   "id": 184,
+   "underlying": "TSLA",
+   "expiry": 1792425600,
+   "strike": 410,
+   "isCall": false
+  },
+  {
+   "seriesId": 141,
+   "qty": 12.0,
+   "mark": 52.388363,
+   "id": 141,
+   "underlying": "TSLA",
+   "expiry": 1791820800,
+   "strike": 330,
+   "isCall": true
+  },
+  {
+   "seriesId": 328,
+   "qty": 19.0,
+   "mark": 62.103173,
+   "id": 328,
+   "underlying": "SPY",
+   "expiry": 1793030400,
+   "strike": 830,
+   "isCall": false
+  },
+  {
+   "seriesId": 228,
+   "qty": -20.0,
+   "mark": 0.903829,
+   "id": 228,
+   "underlying": "SPY",
+   "expiry": 1791216000,
+   "strike": 750,
+   "isCall": false
+  },
+  {
+   "seriesId": 314,
+   "qty": -12.0,
+   "mark": 9.475079,
+   "id": 314,
+   "underlying": "SPY",
+   "expiry": 1793030400,
+   "strike": 760,
+   "isCall": false
+  },
+  {
+   "seriesId": 201,
+   "qty": 16.0,
+   "mark": 30.256907,
+   "id": 201,
+   "underlying": "TSLA",
+   "expiry": 1793030400,
+   "strike": 370,
+   "isCall": true
+  },
+  {
+   "seriesId": 105,
+   "qty": -8.0,
+   "mark": 7.147246,
+   "id": 105,
+   "underlying": "NVDA",
+   "expiry": 1793030400,
+   "strike": 240,
+   "isCall": true
+  },
+  {
+   "seriesId": 306,
+   "qty": 10.0,
+   "mark": 0.95728,
+   "id": 306,
+   "underlying": "SPY",
+   "expiry": 1793030400,
+   "strike": 720,
+   "isCall": false
+  },
+  {
+   "seriesId": 210,
+   "qty": 3.0,
+   "mark": 43.640217,
+   "id": 210,
+   "underlying": "TSLA",
+   "expiry": 1793030400,
+   "strike": 410,
+   "isCall": false
+  },
+  {
+   "seriesId": 97,
+   "qty": -20.0,
+   "mark": 15.539914,
+   "id": 97,
+   "underlying": "NVDA",
+   "expiry": 1793030400,
+   "strike": 220,
+   "isCall": true
+  },
+  {
+   "seriesId": 190,
+   "qty": 20.0,
+   "mark": 64.411315,
+   "id": 190,
+   "underlying": "TSLA",
+   "expiry": 1792425600,
+   "strike": 440,
+   "isCall": false
+  },
+  {
+   "seriesId": 191,
+   "qty": -29.0,
+   "mark": 64.703098,
+   "id": 191,
+   "underlying": "TSLA",
+   "expiry": 1793030400,
+   "strike": 320,
+   "isCall": true
+  },
+  {
+   "seriesId": 233,
+   "qty": 10.0,
+   "mark": 2.161585,
+   "id": 233,
+   "underlying": "SPY",
+   "expiry": 1791216000,
+   "strike": 780,
+   "isCall": true
+  },
+  {
+   "seriesId": 205,
+   "qty": 15.0,
+   "mark": 20.879006,
+   "id": 205,
+   "underlying": "TSLA",
+   "expiry": 1793030400,
+   "strike": 390,
+   "isCall": true
+  },
+  {
+   "seriesId": 225,
+   "qty": 26.0,
+   "mark": 28.630702,
+   "id": 225,
+   "underlying": "SPY",
+   "expiry": 1791216000,
+   "strike": 740,
+   "isCall": true
+  },
+  {
+   "seriesId": 234,
+   "qty": 3.0,
+   "mark": 13.731585,
+   "id": 234,
+   "underlying": "SPY",
+   "expiry": 1791216000,
+   "strike": 780,
+   "isCall": false
+  },
+  {
+   "seriesId": 286,
+   "qty": -20.0,
+   "mark": 7.694589,
+   "id": 286,
+   "underlying": "SPY",
+   "expiry": 1792425600,
+   "strike": 760,
+   "isCall": false
+  },
+  {
+   "seriesId": 61,
+   "qty": -24.0,
+   "mark": 27.769374,
+   "id": 61,
+   "underlying": "NVDA",
+   "expiry": 1792425600,
+   "strike": 200,
+   "isCall": true
+  },
+  {
+   "seriesId": 172,
+   "qty": 14.0,
+   "mark": 9.056691,
+   "id": 172,
+   "underlying": "TSLA",
+   "expiry": 1792425600,
+   "strike": 350,
+   "isCall": false
+  },
+  {
+   "seriesId": 197,
+   "qty": 19.0,
+   "mark": 42.203565,
+   "id": 197,
+   "underlying": "TSLA",
+   "expiry": 1793030400,
+   "strike": 350,
+   "isCall": true
+  },
+  {
+   "seriesId": 70,
+   "qty": 27.0,
+   "mark": 8.253826,
+   "id": 70,
+   "underlying": "NVDA",
+   "expiry": 1792425600,
+   "strike": 220,
+   "isCall": false
+  },
+  {
+   "seriesId": 100,
+   "qty": -24.0,
+   "mark": 12.417515,
+   "id": 100,
+   "underlying": "NVDA",
+   "expiry": 1793030400,
+   "strike": 225,
+   "isCall": false
+  },
+  {
+   "seriesId": 416,
+   "qty": -23.0,
+   "mark": 5.061335,
+   "id": 416,
+   "underlying": "AAPL",
+   "expiry": 1793030400,
+   "strike": 325,
+   "isCall": false
+  },
+  {
+   "seriesId": 42,
+   "qty": 17.0,
+   "mark": 6.214873,
+   "id": 42,
+   "underlying": "NVDA",
+   "expiry": 1791820800,
+   "strike": 220,
+   "isCall": false
+  },
+  {
+   "seriesId": 281,
+   "qty": -4.0,
+   "mark": 30.753487,
+   "id": 281,
+   "underlying": "SPY",
+   "expiry": 1792425600,
+   "strike": 740,
+   "isCall": true
+  },
+  {
+   "seriesId": 336,
+   "qty": 2.0,
+   "mark": 0.384396,
+   "id": 336,
+   "underlying": "AAPL",
+   "expiry": 1791216000,
+   "strike": 320,
+   "isCall": false
+  }
+ ],
+ "collateral": {},
  "grid": [
   7364.943723,
   6169.956508,

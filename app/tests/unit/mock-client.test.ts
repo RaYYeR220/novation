@@ -46,4 +46,35 @@ describe('MockClient', () => {
     const approx = await c.whatIf(7, series.seriesId, -1, 1);
     expect(approx.approx).toBe(true);
   });
+
+  it('premium is a positive magnitude; cash moves the same way on exact and approx paths', async () => {
+    const a = await c.account(7);
+    const call = a.positions[0]!;
+    const cash0 = a.state.cash;
+    const sellExact = await c.whatIf(7, call.seriesId, -60, 0);
+    expect(sellExact.premium).toBeGreaterThan(0);
+    expect(sellExact.after.cash).toBeGreaterThan(cash0);
+    const sellApprox = await c.whatIf(7, call.seriesId, -1, 10);
+    expect(sellApprox.after.cash).toBeCloseTo(cash0 + 10 - sellApprox.fee, 9);
+    const buyApprox = await c.whatIf(7, call.seriesId, 1, 10);
+    expect(buyApprox.after.cash).toBeCloseTo(cash0 - 10 - buyApprox.fee, 9);
+    expect(sellApprox.after.equity).toBeCloseTo(a.state.equity - sellApprox.fee, 9);
+  });
+
+  it('market-maker account(1) works and fixtures are cloned', async () => {
+    const mm = await c.account(1);
+    expect(mm.positions.length).toBeGreaterThan(0);
+    expect(mm.state.im).toBeGreaterThan(0);
+    mm.positions.length = 0;
+    expect((await c.account(1)).positions.length).toBeGreaterThan(0);
+  });
+
+  it('refusal numbers agree across agents, feed and what-if', async () => {
+    const series = (await c.account(7)).positions[0]!;
+    const wi = (await c.whatIf(7, series.seriesId, -60, 0)).refusal!;
+    const ag = (await c.agents(7))[0]!.lastRefusal!;
+    const feed = (await c.refusalsFeed()).find((r) => r.code === 'AgentRiskBudgetExceeded')!;
+    expect(ag.numbers).toEqual(wi.numbers);
+    expect(feed.numbers).toEqual(wi.numbers);
+  });
 });

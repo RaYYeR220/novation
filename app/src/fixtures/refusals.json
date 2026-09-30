@@ -1,11 +1,12 @@
 [
  {
   "code": "AgentRiskBudgetExceeded",
-  "message": "Worst-case loss 1612.40 exceeds the risk budget of 1500.00.",
+  "message": "Worst-case loss 2130.01 exceeds the risk budget of 1500.00.",
   "numbers": {
-   "worstLoss": 1612.4,
-   "budget": 1500,
-   "used": 1180
+   "worstLoss": 2130.01,
+   "budget": 1500.0,
+   "used": 1180.0,
+   "remaining": 320.0
   },
   "txHash": "0x7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c",
   "at": 1790694000,

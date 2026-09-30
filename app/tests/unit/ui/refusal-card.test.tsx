@@ -7,6 +7,7 @@ import type { Refusal } from '@/lib/client/types';
 import { axe } from './axe';
 
 const budget = (refusals as Refusal[])[0]!;
+const fmt = (v: number) => v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 describe('RefusalCard', () => {
   it('reads as code, reason, numbers and what would pass', async () => {
@@ -26,9 +27,9 @@ describe('RefusalCard', () => {
     const card = screen.getByRole('article', { name: /risk budget/ });
     expect(card).toHaveAttribute('data-code', 'AgentRiskBudgetExceeded');
     expect(screen.getByText('AgentRiskBudgetExceeded')).toBeInTheDocument();
-    expect(screen.getByText('1,612.40')).toBeInTheDocument();
-    expect(screen.getAllByText('1,500.00').length).toBeGreaterThan(0);
-    expect(screen.getByText('112.40')).toHaveClass('text-loss-1');
+    expect(screen.getByText(fmt(budget.numbers!.worstLoss!))).toBeInTheDocument();
+    expect(screen.getAllByText(fmt(budget.numbers!.budget!)).length).toBeGreaterThan(0);
+    expect(screen.getByText(fmt(budget.numbers!.worstLoss! - budget.numbers!.budget!))).toHaveClass('text-loss-1');
     expect(screen.getByText('What would pass')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'View transaction (opens in a new tab)' })).toHaveAttribute('rel', 'noreferrer');
     expect(await axe(container)).toHaveNoViolations();
