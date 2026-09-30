@@ -3,6 +3,7 @@ pragma solidity 0.8.30;
 
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {CHS, CHStorage, CHErrors, Deps} from "../ClearinghouseStorage.sol";
+import {MarketDataHub} from "../MarketDataHub.sol";
 import {AccountState} from "../../interfaces/IClearinghouse.sol";
 import {UnderlyingParams, GlobalParams} from "../../interfaces/IRiskParams.sol";
 import {FixedPointMath as F} from "../../libraries/FixedPointMath.sol";
@@ -22,6 +23,18 @@ import {
 /// @notice The margin procedure: turns an account (optionally with one hypothetical position
 /// and cash change) into kernel input, runs the risk kernel and derives equity / IM / MM.
 /// Read-only; linked into the Clearinghouse and run against its storage.
+///
+/// Unpriceable underlyings. When the hub can't price an underlying (spot reverts NoPrice or
+/// ImplausiblePrice):
+///  - collateral-only (no live option position on it): the collateral is valued at 0 and the
+///    underlying is left out of the kernel input, so a broken feed on a token someone parked in
+///    the account can neither freeze withdrawals nor hide the account from liquidation;
+///  - with a live option position on it: the procedure reverts with the hub's error. The
+///    options can't be valued without a price, so the account (its withdrawals, margin checks
+///    and liquidation) waits for the feed to recover. This is a known limit: opening a position
+///    needs a price, but a feed can break while positions are open.
+/// Any other failure of the price call (including empty revert data, e.g. out of gas) always
+/// reverts, so a caller can't starve the call to make collateral disappear.
 library MarginLogic {
     using SafeCast for uint256;
 
@@ -141,7 +154,9 @@ library MarginLogic {
     /// underlyings in first-seen order over the book, deduplicated, at most MAX_UNDERLYINGS.
     /// Positions whose series expired and whose (underlying, expiry) is settled in the registry
     /// leave the kernel: their payoff goes to settledValue, rounded against the account (and
-    /// their underlying is not needed, so its oracle can't block the account).
+    /// their underlying is not needed, so its oracle can't block the account). Collateral-only
+    /// underlyings the hub can't price are dropped (see the library notes); the kept ones keep
+    /// their relative order and the position indices are remapped onto them.
     function _input(Deps memory d, uint256 id, Book memory book) private view returns (Input memory inp) {
         CHStorage storage $ = CHS.s();
         GlobalParams memory g = d.params.globals();
@@ -154,6 +169,7 @@ library MarginLogic {
         inp.mmRatio = g.mmRatio;
 
         address[] memory us = new address[](MAX_UNDERLYINGS);
+        bool[] memory hasPosition = new bool[](MAX_UNDERLYINGS);
         uint256 nu;
         address[] storage toks = $.collateralTokens[id];
         for (uint256 i = 0; i < toks.length; ++i) {
@@ -162,7 +178,7 @@ library MarginLogic {
         }
 
         uint256 n = book.seriesIds.length;
-        inp.ps = new KPosition[](n);
+        KPosition[] memory kps = new KPosition[](n);
         uint256 np;
         for (uint256 i = 0; i < n; ++i) {
             Series memory s = d.registry.series(book.seriesIds[i]);
@@ -180,24 +196,47 @@ library MarginLogic {
                 if (nu == MAX_UNDERLYINGS) revert CHErrors.TooManyUnderlyings();
                 us[nu++] = s.underlying;
             }
-            inp.ps[np++] = KPosition({u: ui, isCall: s.isCall, expiry: s.expiry, strike: s.strike, qty: qty});
+            hasPosition[ui] = true;
+            kps[np++] = KPosition({u: ui, isCall: s.isCall, expiry: s.expiry, strike: s.strike, qty: qty});
         }
-        KPosition[] memory kps = inp.ps;
         assembly ("memory-safe") {
             mstore(kps, np)
         }
 
-        inp.us = new KUnderlying[](nu);
+        KUnderlying[] memory kus = new KUnderlying[](nu);
+        uint256[] memory newIndex = new uint256[](nu);
+        uint256 kept;
         for (uint256 i = 0; i < nu; ++i) {
-            inp.us[i] = _underlying(d, us[i], $.collateral[id][us[i]]);
+            (bool priced, KUnderlying memory k) = _underlying(d, us[i], $.collateral[id][us[i]], hasPosition[i]);
+            if (!priced) continue;
+            newIndex[i] = kept;
+            kus[kept++] = k;
         }
+        if (kept != nu) {
+            assembly ("memory-safe") {
+                mstore(kus, kept)
+            }
+            for (uint256 i = 0; i < np; ++i) {
+                kps[i].u = newIndex[kps[i].u];
+            }
+        }
+        inp.us = kus;
+        inp.ps = kps;
     }
 
     /// @dev Step 2: spot, mark vol and the session-scaled shock range of one underlying.
     ///   base = max(minShock, shockK * vol * sqrt(horizonDays / 365))
     ///   shockRange = min(0.9, base * sessionMult)
-    function _underlying(Deps memory d, address u, uint256 tokenQty) private view returns (KUnderlying memory k) {
-        (uint256 spot, Session sess,) = d.hub.spot(u);
+    /// `priced` is false only for a collateral-only underlying the hub can't price.
+    function _underlying(Deps memory d, address u, uint256 tokenQty, bool hasPosition)
+        private
+        view
+        returns (bool priced, KUnderlying memory k)
+    {
+        uint256 spot;
+        Session sess;
+        (priced, spot, sess) = _spot(d, u, !hasPosition);
+        if (!priced) return (false, k);
         uint256 vol = d.hub.markVol(u);
         UnderlyingParams memory p = d.params.underlying(u);
         uint256 mult = sess == Session.REGULAR
@@ -214,13 +253,37 @@ library MarginLogic {
         });
     }
 
-    /// @dev Fast-path mtm: collateral at spot, truncated exactly like the kernel's token value.
+    /// @dev Fast-path mtm: collateral at spot, truncated exactly like the kernel's token value;
+    /// collateral the hub can't price counts as 0.
     function _collateralValue(Deps memory d, uint256 id) private view returns (int256 mtm) {
         CHStorage storage $ = CHS.s();
         address[] storage toks = $.collateralTokens[id];
         for (uint256 i = 0; i < toks.length; ++i) {
-            (uint256 spot,,) = d.hub.spot(toks[i]);
-            mtm += F.mulWad($.collateral[id][toks[i]].toInt256(), spot.toInt256());
+            (bool priced, uint256 spot,) = _spot(d, toks[i], true);
+            if (priced) mtm += F.mulWad($.collateral[id][toks[i]].toInt256(), spot.toInt256());
+        }
+    }
+
+    /// @dev hub.spot. With `mayDrop`, the hub's NoPrice / ImplausiblePrice come back as
+    /// priced == false; every other failure (and any failure without `mayDrop`) is re-raised
+    /// with its original revert data.
+    function _spot(Deps memory d, address u, bool mayDrop)
+        private
+        view
+        returns (bool priced, uint256 spot, Session sess)
+    {
+        try d.hub.spot(u) returns (uint256 price, Session s, bool) {
+            return (true, price, s);
+        } catch (bytes memory reason) {
+            if (mayDrop && reason.length == 4) {
+                bytes4 sel = bytes4(reason);
+                if (sel == MarketDataHub.NoPrice.selector || sel == MarketDataHub.ImplausiblePrice.selector) {
+                    return (false, 0, Session.HALTED);
+                }
+            }
+            assembly ("memory-safe") {
+                revert(add(reason, 0x20), mload(reason))
+            }
         }
     }
 

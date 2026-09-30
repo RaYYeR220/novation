@@ -75,6 +75,7 @@ library CHErrors {
     error TokenNotAllowed(address token);
     error ZeroAmount();
     error ZeroAddress();
+    error InvalidRecipient();
     error BadDecimals();
     // agents
     error InvalidAgent();

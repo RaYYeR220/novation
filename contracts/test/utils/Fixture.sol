@@ -187,12 +187,26 @@ abstract contract Fixture is Test {
         uint128 maxPrice
     ) internal returns (MockStockToken token) {
         token = new MockStockToken(symbol, symbol);
+        _registerUnderlying(address(token), symbol, priceWad, volFloor, volCap, minPrice, maxPrice);
+    }
+
+    /// @notice Registers an already deployed token (e.g. a test-only token variant) as an
+    /// underlying: new 8-decimal feed with a fresh round, default schema, vol initialised.
+    function _registerUnderlying(
+        address token,
+        string memory symbol,
+        uint256 priceWad,
+        uint64 volFloor,
+        uint64 volCap,
+        uint128 minPrice,
+        uint128 maxPrice
+    ) internal {
         MockAggregator feed = new MockAggregator(8, string.concat(symbol, " / USD"));
-        feedOf[address(token)] = feed;
+        feedOf[token] = feed;
         feed.pushRound(_answer(priceWad), block.timestamp);
-        params.addUnderlying(address(token), _defaultUnderlying(address(feed), volFloor, volCap, minPrice, maxPrice));
-        hub.initVol(address(token));
-        vm.label(address(token), symbol);
+        params.addUnderlying(token, _defaultUnderlying(address(feed), volFloor, volCap, minPrice, maxPrice));
+        hub.initVol(token);
+        vm.label(token, symbol);
     }
 
     // ---------------------------------------------------------------- accounts and funds

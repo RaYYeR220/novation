@@ -128,13 +128,18 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
     // ================================================================ funds
 
     /// @notice Anyone may fund any existing account. USDG becomes cash; an enabled underlying
-    /// becomes collateral. The amount credited is what actually arrived (balance delta).
+    /// becomes collateral, but only while the hub can price it (hub.spot reverts NoPrice /
+    /// ImplausiblePrice otherwise; a HALTED session is fine). The amount credited is what
+    /// actually arrived (balance delta).
     function deposit(uint256 id, address token, uint256 amount) external nonReentrant {
         CHStorage storage $ = CHS.s();
         if ($.accounts[id].owner == address(0)) revert CHErrors.UnknownAccount(id);
         if (amount == 0) revert CHErrors.ZeroAmount();
         bool isCash = token == usdg;
-        if (!isCash && !params.underlying(token).enabled) revert CHErrors.TokenNotAllowed(token);
+        if (!isCash) {
+            if (!params.underlying(token).enabled) revert CHErrors.TokenNotAllowed(token);
+            hub.spot(token);
+        }
         uint256 scale = isCash ? _usdgScale : _scaleOf(token);
 
         uint256 before = IERC20(token).balanceOf(address(this));
@@ -155,7 +160,7 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
         if (msg.sender != a.owner) revert CHErrors.NotOwner(id, msg.sender);
         if (a.deficitTotal != 0) revert CHErrors.InDeficit();
         if (amount == 0) revert CHErrors.ZeroAmount();
-        if (to == address(0)) revert CHErrors.ZeroAddress();
+        if (to == address(0) || to == address(this)) revert CHErrors.InvalidRecipient();
 
         bool isCash = token == usdg;
         uint256 wad = amount * (isCash ? _usdgScale : _scaleOf(token));

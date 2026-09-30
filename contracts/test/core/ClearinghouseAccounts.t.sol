@@ -11,6 +11,7 @@ import {IMarketDataHub} from "../../src/interfaces/IMarketDataHub.sol";
 import {ISeriesRegistry} from "../../src/interfaces/ISeriesRegistry.sol";
 import {IInsuranceFund} from "../../src/interfaces/IInsuranceFund.sol";
 import {MockStockToken} from "../../src/mocks/MockStockToken.sol";
+import {MarketDataHub} from "../../src/core/MarketDataHub.sol";
 import {FixedPointMath as F} from "../../src/libraries/FixedPointMath.sol";
 import {NyseCalendar} from "../../src/libraries/NyseCalendar.sol";
 import {
@@ -23,6 +24,20 @@ import {
     KMarginOut,
     MAX_POSITIONS
 } from "../../src/types/Types.sol";
+
+/// @notice Test-only stock token that burns 1% of every transfer (fee-on-transfer).
+contract FeeOnTransferToken is MockStockToken {
+    constructor() MockStockToken("Fee Stock", "FEE") {}
+
+    function _update(address from, address to, uint256 value) internal override {
+        if (from != address(0) && to != address(0)) {
+            uint256 fee = value / 100;
+            super._update(from, address(0), fee);
+            value -= fee;
+        }
+        super._update(from, to, value);
+    }
+}
 
 contract ClearinghouseAccountsTest is Fixture {
     // Golden shock ranges: an independent integer evaluation (Python) of
@@ -173,9 +188,17 @@ contract ClearinghouseAccountsTest is Fixture {
         vm.prank(agent);
         ch.withdraw(id, address(nvda), 1, agent);
 
-        vm.expectRevert(CHErrors.ZeroAddress.selector);
-        vm.prank(alice);
+        // neither the zero address nor the clearinghouse itself (that would strand the funds)
+        vm.startPrank(alice);
+        vm.expectRevert(CHErrors.InvalidRecipient.selector);
         ch.withdraw(id, address(usdg), 1, address(0));
+        vm.expectRevert(CHErrors.InvalidRecipient.selector);
+        ch.withdraw(id, address(usdg), 10 * USDG, address(ch));
+        vm.expectRevert(CHErrors.InvalidRecipient.selector);
+        ch.withdraw(id, address(nvda), 1e18, address(ch));
+        vm.stopPrank();
+        assertEq(ch.cashOf(id), 100e18);
+        assertEq(ch.collateralOf(id, address(nvda)), 1e18);
 
         vm.expectEmit(true, true, false, true, address(ch));
         emit IClearinghouse.Withdrawn(id, address(usdg), 40e18, bob);
@@ -637,6 +660,157 @@ contract ClearinghouseAccountsTest is Fixture {
         ch.marginAfter(id, 0, 0, -int256(cash + 1));
     }
 
+    // ================================================================ unpriceable collateral
+
+    function test_depositRejectsUnpriceableCollateral() public {
+        uint256 id = _fund(alice, 100 * USDG, 0);
+        spy.mint(bob, 3);
+        vm.prank(bob);
+        spy.approve(address(ch), 3);
+
+        _setPrice(address(spy), 7000e18); // above maxPrice 6000
+        vm.expectRevert(MarketDataHub.ImplausiblePrice.selector);
+        vm.prank(bob);
+        ch.deposit(id, address(spy), 1);
+
+        _setPrice(address(spy), 0); // no usable answer
+        vm.expectRevert(MarketDataHub.NoPrice.selector);
+        vm.prank(bob);
+        ch.deposit(id, address(spy), 1);
+        assertEq(ch.collateralTokensOf(id).length, 0);
+
+        // priced but HALTED is still accepted: a deposit only adds collateral
+        _setPrice(address(spy), 600e18);
+        spy.setPaused(true);
+        (,, bool ok) = hub.spot(address(spy));
+        assertFalse(ok);
+        vm.prank(bob);
+        ch.deposit(id, address(spy), 1);
+        assertEq(ch.collateralOf(id, address(spy)), 1);
+    }
+
+    /// Collateral whose oracle breaks after it was deposited is valued at 0 and left out of the
+    /// kernel, so nobody (the owner or a third party who topped it up) can freeze the account.
+    function test_unpriceableCollateralValuedAtZero() public {
+        uint64 e = _expiry();
+        uint32 call180 = _list(address(nvda), e, 180e18, true);
+        uint256 id = _fund(alice, 1000 * USDG, 0);
+        _deposit(bob, id, address(spy), 1); // third-party dust, accepted while SPY is priced
+        _deposit(alice, id, address(spy), 2e18);
+        _cheatMovePosition(id, call180, 1e18);
+        uint256 idle = _fund(bob, 5 * USDG, 0);
+        _deposit(bob, idle, address(spy), 3e18);
+        AccountState memory before = ch.accountState(id);
+
+        _setPrice(address(spy), 7000e18);
+        vm.expectRevert(MarketDataHub.ImplausiblePrice.selector);
+        hub.spot(address(spy));
+
+        // evaluated as if it held no SPY
+        AccountState memory st = _assertMatchesDirect(id, _addrs(address(nvda)), _nums(NVDA_SHOCK_REGULAR));
+        assertEq(st.mtm, before.mtm - int256(1200e18 + 600)); // SPY was (2e18 + 1) x 600
+        (KParams memory kp, KUnderlying[] memory ku, KPosition[] memory kpos,) =
+            _directInput(id, _addrs(address(nvda)), _nums(NVDA_SHOCK_REGULAR));
+        assertEq(ch.scenarioGrid(id), kernel.scenarioGrid(kp, ku, kpos));
+
+        // fast path: the broken token is worth 0
+        AccountState memory idleSt = ch.accountState(idle);
+        assertEq(idleSt.mtm, 0);
+        assertEq(idleSt.equity, 5e18);
+        assertTrue(idleSt.healthy);
+
+        // withdrawals keep working, including of the broken token itself
+        vm.startPrank(alice);
+        ch.withdraw(id, address(usdg), 1 * USDG, alice);
+        ch.withdraw(id, address(spy), 2e18 + 1, alice);
+        vm.stopPrank();
+        assertEq(ch.collateralTokensOf(id).length, 0);
+    }
+
+    /// An underwater account can't hide from liquidation behind a broken-oracle token.
+    function test_unpriceableCollateralCannotHideLiquidation() public {
+        uint64 e = _expiry();
+        uint32 call180 = _list(address(nvda), e, 180e18, true);
+        uint256 id = _fund(alice, 100 * USDG, 0);
+        _deposit(alice, id, address(spy), 1); // parked while SPY is priced
+        _cheatMovePosition(id, call180, -10e18); // naked short 10 calls
+        _setPrice(address(nvda), 260e18);
+        assertTrue(ch.accountState(id).liquidatable);
+
+        _setPrice(address(spy), 7000e18);
+        spy.mint(alice, 1);
+        vm.startPrank(alice);
+        spy.approve(address(ch), 1);
+        vm.expectRevert(MarketDataHub.ImplausiblePrice.selector);
+        ch.deposit(id, address(spy), 1);
+        vm.stopPrank();
+
+        AccountState memory st = _assertMatchesDirect(id, _addrs(address(nvda)), _nums(NVDA_SHOCK_REGULAR));
+        assertTrue(st.liquidatable);
+    }
+
+    /// An underlying the account has live option positions on still needs a price.
+    function test_unpriceableOptionUnderlyingStillReverts() public {
+        uint64 e = _expiry();
+        uint32 spyCall = _list(address(spy), e, 600e18, true);
+        uint256 id = _fund(alice, 1000 * USDG, 0);
+        _deposit(alice, id, address(spy), 1e18);
+        _cheatMovePosition(id, spyCall, 1e18);
+
+        _setPrice(address(spy), 7000e18);
+        vm.expectRevert(MarketDataHub.ImplausiblePrice.selector);
+        ch.accountState(id);
+        vm.expectRevert(MarketDataHub.ImplausiblePrice.selector);
+        vm.prank(alice);
+        ch.withdraw(id, address(usdg), 1 * USDG, alice);
+    }
+
+    /// Only the hub's NoPrice / ImplausiblePrice are absorbed. Any other failure of the price
+    /// call, including one with empty revert data such as running out of gas, still reverts, so
+    /// a caller can't starve the call to make collateral disappear.
+    function test_onlyPriceErrorsAreAbsorbed() public {
+        uint64 e = _expiry();
+        uint32 call180 = _list(address(nvda), e, 180e18, true);
+        uint256 id = _fund(alice, 1000 * USDG, 0);
+        _deposit(alice, id, address(spy), 1e18);
+        _cheatMovePosition(id, call180, 1e18);
+        bytes memory spotSpy = abi.encodeWithSelector(IMarketDataHub.spot.selector, address(spy));
+
+        vm.mockCallRevert(address(hub), spotSpy, bytes("boom"));
+        vm.expectRevert(bytes("boom"));
+        ch.accountState(id);
+
+        vm.mockCallRevert(address(hub), spotSpy, bytes(""));
+        vm.expectRevert(bytes(""));
+        ch.accountState(id);
+
+        vm.mockCallRevert(address(hub), spotSpy, abi.encodeWithSelector(MarketDataHub.NoPrice.selector));
+        _assertMatchesDirect(id, _addrs(address(nvda)), _nums(NVDA_SHOCK_REGULAR));
+    }
+
+    function test_depositCreditsBalanceDelta() public {
+        FeeOnTransferToken fot = new FeeOnTransferToken();
+        _registerUnderlying(address(fot), "FEE", 100e18, 0.2e18, 1e18, 10e18, 1000e18);
+        uint256 id = _newAccount(alice);
+        fot.mint(alice, 100e18);
+
+        vm.startPrank(alice);
+        fot.approve(address(ch), 100e18);
+        vm.expectEmit(true, true, false, true, address(ch));
+        emit IClearinghouse.Deposited(id, address(fot), 99e18);
+        ch.deposit(id, address(fot), 100e18);
+        vm.stopPrank();
+        assertEq(fot.balanceOf(address(ch)), 99e18);
+        assertEq(ch.collateralOf(id, address(fot)), 99e18);
+
+        // the credited amount is fully backed: withdrawing it empties the clearinghouse exactly
+        vm.prank(alice);
+        ch.withdraw(id, address(fot), 99e18, alice);
+        assertEq(fot.balanceOf(address(ch)), 0);
+        assertEq(fot.balanceOf(alice), 98.01e18);
+        assertEq(ch.collateralOf(id, address(fot)), 0);
+    }
+
     // ================================================================ ledger caps and bookkeeping
 
     function test_tooManyUnderlyingsReverts() public {
@@ -661,9 +835,10 @@ contract ClearinghouseAccountsTest is Fixture {
 
         // topping up a token already held is fine
         _deposit(alice, id, address(nvda), 1e18);
-        // emptying a token frees its slot
+        // emptying a token frees its slot and drops it from the collateral list
         vm.prank(alice);
         ch.withdraw(id, toks[7], 1e18, alice);
+        _assertTokens(id, _slice(toks, 0, 7));
         _deposit(alice, id, toks[8], 1e18);
 
         // option underlyings share the same cap: toks[7] would be a 9th underlying again
@@ -679,6 +854,9 @@ contract ClearinghouseAccountsTest is Fixture {
         vm.prank(alice);
         ch.withdraw(id, address(nvda), 2e18, alice);
         assertEq(ch.collateralOf(id, address(nvda)), 0);
+        address[] memory left = _slice(toks, 0, 7); // swap-and-pop: the last token (toks[8]) takes slot 0
+        left[0] = toks[8];
+        _assertTokens(id, left);
         MockStockToken(toks[7]).mint(alice, 1e18);
         vm.startPrank(alice);
         MockStockToken(toks[7]).approve(address(ch), 1e18);
@@ -875,6 +1053,21 @@ contract ClearinghouseAccountsTest is Fixture {
             qty: -1e18,
             premium: premium
         });
+    }
+
+    function _assertTokens(uint256 id, address[] memory expected) internal view {
+        address[] memory got = ch.collateralTokensOf(id);
+        assertEq(got.length, expected.length, "collateral token count");
+        for (uint256 i = 0; i < got.length; ++i) {
+            assertEq(got[i], expected[i], "collateral token");
+        }
+    }
+
+    function _slice(address[] memory a, uint256 from, uint256 to) internal pure returns (address[] memory r) {
+        r = new address[](to - from);
+        for (uint256 i = from; i < to; ++i) {
+            r[i - from] = a[i];
+        }
     }
 
     function _shortQty(uint64 e) internal view returns (uint256 q) {
