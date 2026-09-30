@@ -9,6 +9,8 @@
   --color-navy-400: #4a6fb5;
   --color-navy-200: #a9bce0;
   --color-navy-50: #eef3fb;
+  /* the top of the scale: primary fill on hover only */
+  --color-navy-0: #ffffff;
   /* interactive + IM datum only */
   --color-cyan: #10e1ff;
   /* data ramp; lime only for gains and data */

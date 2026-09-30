@@ -6,6 +6,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useRef,
   useState,
   type ComponentProps,
   type KeyboardEvent,
@@ -22,6 +23,9 @@ interface TabsContextValue {
   /** Values that have a mounted TabPanel; a tab only points aria-controls at a panel that exists. */
   panels: ReadonlySet<string>;
   registerPanel: (value: string) => () => void;
+  /** When no enabled tab is selected, the first enabled tab holds the tab stop. */
+  fallbackStop: string | undefined;
+  setFallbackStop: (value: string | undefined) => void;
 }
 
 const TabsContext = createContext<TabsContextValue | null>(null);
@@ -50,6 +54,7 @@ export function Tabs({ value, defaultValue, onValueChange, activation = 'automat
   const [inner, setInner] = useState(defaultValue);
   const current = value ?? inner;
   const [panels, setPanels] = useState<ReadonlySet<string>>(() => new Set());
+  const [fallbackStop, setFallbackStop] = useState<string | undefined>(undefined);
   const select = (next: string) => {
     if (value === undefined) setInner(next);
     onValueChange?.(next);
@@ -64,7 +69,7 @@ export function Tabs({ value, defaultValue, onValueChange, activation = 'automat
       });
   }, []);
   return (
-    <TabsContext value={{ baseId, value: current, activation, select, panels, registerPanel }}>
+    <TabsContext value={{ baseId, value: current, activation, select, panels, registerPanel, fallbackStop, setFallbackStop }}>
       <div className={className}>{children}</div>
     </TabsContext>
   );
@@ -75,8 +80,19 @@ export interface TabListProps extends ComponentProps<'div'> {
   'aria-label'?: string;
 }
 
-export function TabList({ className, children, onKeyDown, ...rest }: TabListProps) {
+export function TabList({ className, children, onKeyDown, ref, ...rest }: TabListProps) {
   const ctx = useTabs('TabList');
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const { setFallbackStop } = ctx;
+
+  // Keep the list reachable by Tab when nothing (or only a disabled tab) is selected.
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const selected = list.querySelector('[role="tab"][aria-selected="true"]:not(:disabled)');
+    const first = list.querySelector<HTMLElement>('[role="tab"]:not(:disabled)');
+    setFallbackStop(selected ? undefined : first?.dataset.value);
+  });
 
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     onKeyDown?.(e);
@@ -99,6 +115,11 @@ export function TabList({ className, children, onKeyDown, ...rest }: TabListProp
 
   return (
     <div
+      ref={(node) => {
+        listRef.current = node;
+        if (typeof ref === 'function') ref(node);
+        else if (ref) ref.current = node;
+      }}
       role="tablist"
       aria-orientation="horizontal"
       className={cn('flex flex-wrap gap-x-s5 border-b border-navy-700', className)}
@@ -126,7 +147,7 @@ export function Tab({ value, count, disabled, className, children, onClick, ...r
       id={tabId(ctx.baseId, value)}
       aria-controls={ctx.panels.has(value) ? panelId(ctx.baseId, value) : undefined}
       aria-selected={selected}
-      tabIndex={selected ? 0 : -1}
+      tabIndex={selected || ctx.fallbackStop === value ? 0 : -1}
       disabled={disabled}
       data-value={value}
       onClick={(e) => {

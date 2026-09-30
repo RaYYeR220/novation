@@ -59,6 +59,13 @@ test('/system keyboard: segmented switch, tabs and dialog', async ({ page }) => 
   const dialog = page.getByRole('dialog', { name: 'Revoke hedge-bot?' });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Keep grant' })).toBeFocused();
+  // Tab order inside: Close, Keep grant, Revoke grant. Focus wraps both ways and never leaves.
+  await page.keyboard.press('Tab');
+  await expect(dialog.getByRole('button', { name: 'Revoke grant' })).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(dialog.getByRole('button', { name: 'Close' })).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(dialog.getByRole('button', { name: 'Revoke grant' })).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();
   await expect(opener).toBeFocused();

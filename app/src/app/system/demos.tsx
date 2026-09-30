@@ -7,9 +7,10 @@ import { Dialog, DialogSurface } from '@/components/ui/dialog';
 import { Segment, SegmentedControl } from '@/components/ui/segmented-control';
 import { Toast, ToastProvider, useToast } from '@/components/ui/toast';
 import { fmtNumber, fmtSigned, SESSION_LABEL } from '@/lib/format';
-import type { Session } from '@/lib/client/types';
+import type { Refusal, Session } from '@/lib/client/types';
 import account7 from '@/fixtures/account7.json';
 import chains from '@/fixtures/chains.json';
+import refusals from '@/fixtures/refusals.json';
 
 /* ---------- segmented control, live ---------- */
 
@@ -127,6 +128,11 @@ export function TableStates() {
 
 /* ---------- toasts ---------- */
 
+const budgetRefusal = (refusals as Refusal[]).find((r) => r.code === 'AgentRiskBudgetExceeded');
+const refusedLine = budgetRefusal?.numbers
+  ? `${budgetRefusal.code}: worst case ${fmtNumber(budgetRefusal.numbers.worstLoss ?? 0)}, budget ${fmtNumber(budgetRefusal.numbers.budget ?? 0)}.`
+  : 'AgentRiskBudgetExceeded';
+
 function ToastButtons() {
   const { toast } = useToast();
   return (
@@ -143,7 +149,7 @@ function ToastButtons() {
           toast({
             tone: 'refused',
             title: 'Trade refused',
-            description: 'AgentRiskBudgetExceeded: worst case 1,612.40, budget 1,500.00.',
+            description: refusedLine,
           })
         }
       >
@@ -163,7 +169,7 @@ export function ToastDemo() {
           <Toast
             tone="refused"
             title="Trade refused"
-            description="AgentRiskBudgetExceeded: worst case 1,612.40, budget 1,500.00."
+            description={refusedLine}
             onDismiss={() => {}}
           />
           <Toast tone="pending" title="Submitting trade" description="Waiting for the sequencer." />

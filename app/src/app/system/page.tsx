@@ -300,11 +300,11 @@ export default function SystemPage() {
                 <dl className="grid grid-cols-[48px_1fr_auto] items-baseline gap-x-s4 gap-y-s2">
                   {(
                     [
-                      ['t20', 'text-t20', 'Initial margin', 10321.599641],
-                      ['t17', 'text-t17', 'Worst case', 1612.4],
-                      ['t15', 'text-t15', 'Budget', 1500],
-                      ['t13', 'text-t13', 'Premium', 1546.1847],
-                      ['t12', 'text-t12', 'Fee', 0.773092],
+                      ['t20', 'text-t20', 'Equity', acct.equity],
+                      ['t17', 'text-t17', 'Worst case', budgetRefusal!.numbers!.worstLoss!],
+                      ['t15', 'text-t15', 'Budget', budgetRefusal!.numbers!.budget!],
+                      ['t13', 'text-t13', 'Premium', ticket.premium],
+                      ['t12', 'text-t12', 'Fee', ticket.quote.fee],
                     ] as const
                   ).map(([k, cls, label, n]) => (
                     <div key={k} className="contents">
@@ -529,7 +529,7 @@ export default function SystemPage() {
                   label="Size"
                   unit="contracts"
                   defaultValue="60"
-                  error="Over hedge-bot's budget. 12 fits."
+                  error={`Over hedge-bot's ${fmtNumber(hedgeBot.maxWorstLoss)} USDG budget.`}
                   className="w-full"
                 />
               </State>
@@ -795,13 +795,13 @@ export default function SystemPage() {
               {ticketRefusal && (
                 <RefusalCard
                   code={ticketRefusal.code}
-                  reason="The ticket's worst case is bigger than what is left of the agent's budget."
+                  reason="The ticket's worst case is bigger than hedge-bot's risk budget."
                   context="Account 7, hedge-bot, selling 60 NVDA 200 calls."
                   breach={{
                     attempted: { label: 'Worst-case loss', value: ticketRefusal.numbers.worstLoss },
-                    limit: { label: 'Budget left', value: ticketRefusal.numbers.remaining },
+                    limit: { label: 'Budget', value: ticketRefusal.numbers.budget },
                   }}
-                  hint={`${fmtNumber(ticketRefusal.numbers.remaining)} USDG of budget is left. Shrink the ticket to fit, or trade from the owner wallet.`}
+                  hint={`Shrink the ticket until its worst case is at or under ${fmtNumber(ticketRefusal.numbers.budget)} USDG, or trade from the owner wallet.`}
                   action={<Button size="sm">Edit ticket</Button>}
                 />
               )}

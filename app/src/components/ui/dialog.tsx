@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useId, useRef, type ReactNode } from 'react';
+import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode } from 'react';
 import { cn } from '@/lib/cn';
 
 export interface DialogSurfaceProps {
@@ -46,6 +46,26 @@ export function DialogSurface({ title, titleId, description, descriptionId, chil
   );
 }
 
+const FOCUSABLE =
+  'a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
+
+/** Tab from the last control goes to the first and Shift+Tab from the first to the last, so focus never leaves. */
+function wrapTab(e: KeyboardEvent<HTMLDialogElement>) {
+  if (e.key !== 'Tab') return;
+  const items = Array.from(e.currentTarget.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => !el.closest('[hidden]'));
+  const first = items[0];
+  const last = items[items.length - 1];
+  if (!first || !last) return;
+  const active = document.activeElement;
+  if (e.shiftKey && (active === first || active === e.currentTarget)) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && active === last) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
 export interface DialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -60,8 +80,8 @@ export interface DialogProps {
 }
 
 /**
- * A modal on the native <dialog>: top layer, inert page behind it, Escape closes, focus goes back
- * to whatever opened it. Put `data-autofocus` on the safest action; otherwise the close button gets focus.
+ * A modal on the native <dialog>: top layer, inert page behind it, Escape closes, Tab wraps inside,
+ * focus goes back to whatever opened it. Put `data-autofocus` on the safest action; otherwise the close button gets focus.
  */
 export function Dialog({
   open,
@@ -125,6 +145,7 @@ export function Dialog({
       aria-labelledby={titleId}
       aria-describedby={description ? descriptionId : undefined}
       onClose={handleClose}
+      onKeyDown={wrapTab}
       onClick={(e) => {
         if (dismissible && e.target === e.currentTarget) onOpenChange(false);
       }}

@@ -26,7 +26,7 @@ const base =
 const variants: Record<ButtonVariant, string> = {
   primary:
     // Hover lifts the key with a navy lip along its bottom edge; active presses it flat.
-    'bg-navy-50 text-navy-950 font-semibold ui-hover:bg-white ui-hover:shadow-[inset_0_-2px_0_var(--color-navy-200)] ' +
+    'bg-navy-50 text-navy-950 font-semibold ui-hover:bg-navy-0 ui-hover:shadow-[inset_0_-2px_0_var(--color-navy-200)] ' +
     'ui-active:bg-navy-200 ui-active:shadow-none disabled:bg-navy-800 disabled:text-navy-400',
   secondary:
     'border border-navy-600 bg-transparent text-navy-50 ui-hover:border-navy-400 ui-hover:bg-navy-800 ' +

@@ -66,6 +66,24 @@ describe('Dialog', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
+  it('wraps Tab and Shift+Tab inside the dialog', async () => {
+    render(<Harness />);
+    await userEvent.click(screen.getByRole('button', { name: 'Revoke hedge-bot' }));
+    const close = screen.getByRole('button', { name: 'Close' });
+    const keep = screen.getByRole('button', { name: 'Keep grant' });
+    const revoke = screen.getByRole('button', { name: 'Revoke grant' });
+    expect(keep).toHaveFocus();
+    await userEvent.tab();
+    expect(revoke).toHaveFocus();
+    await userEvent.tab();
+    expect(close).toHaveFocus();
+    await userEvent.tab({ shift: true });
+    expect(revoke).toHaveFocus();
+    await userEvent.tab();
+    await userEvent.tab();
+    expect(keep).toHaveFocus();
+  });
+
   it('syncs when the browser closes it (Escape)', async () => {
     render(<Harness />);
     await userEvent.click(screen.getByRole('button', { name: 'Revoke hedge-bot' }));

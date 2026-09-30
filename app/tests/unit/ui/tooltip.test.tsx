@@ -51,6 +51,26 @@ describe('Tooltip', () => {
     expect(screen.getByRole('tooltip')).toBeVisible();
   });
 
+  it('stays open while the pointer moves onto the panel', async () => {
+    render(
+      <Tooltip content="Initial margin across 39 scenarios" delay={20}>
+        <button type="button">IM</button>
+      </Tooltip>,
+    );
+    const trigger = screen.getByRole('button', { name: 'IM' });
+    await userEvent.hover(trigger);
+    await act(() => new Promise((r) => setTimeout(r, 40)));
+    const panel = screen.getByRole('tooltip');
+    // Leave the trigger across the gap, then land on the panel before the close delay runs out.
+    await userEvent.unhover(trigger);
+    await userEvent.hover(panel);
+    await act(() => new Promise((r) => setTimeout(r, 250)));
+    expect(screen.getByRole('tooltip')).toBeVisible();
+    await userEvent.unhover(panel);
+    await act(() => new Promise((r) => setTimeout(r, 250)));
+    expect(screen.queryByRole('tooltip')).toBeNull();
+  });
+
   it('can be pinned open and keeps an existing description', () => {
     render(
       <>

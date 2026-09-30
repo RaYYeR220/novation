@@ -4,6 +4,9 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode 
 import { cn } from '@/lib/cn';
 import { Skeleton } from './skeleton';
 
+/** Controls inside a row that handle their own clicks. */
+const NESTED_CONTROL = 'a[href], button, input, select, textarea, label, [role="button"], [role="link"], [role="checkbox"]';
+
 export interface Column<T> {
   key: string;
   header: ReactNode;
@@ -78,6 +81,8 @@ export function DataTable<T>({
   const interactive = Boolean(onRowActivate) && !loading && !error;
 
   const moveFocus = (e: KeyboardEvent<HTMLTableRowElement>, row: T) => {
+    // Keys typed into a button, link or input inside the row belong to that control.
+    if (e.target !== e.currentTarget) return;
     const list = Array.from(bodyRef.current?.querySelectorAll<HTMLTableRowElement>('tr[data-key]') ?? []);
     const at = list.indexOf(e.currentTarget);
     let next = -1;
@@ -177,7 +182,14 @@ export function DataTable<T>({
                   tabIndex={interactive ? (key === tabStop ? 0 : -1) : undefined}
                   onFocus={interactive ? () => setFocusKey(key) : undefined}
                   onKeyDown={interactive ? (e) => moveFocus(e, row) : undefined}
-                  onClick={interactive ? () => onRowActivate?.(row) : undefined}
+                  onClick={
+                    interactive
+                      ? (e) => {
+                          if (e.target !== e.currentTarget && (e.target as Element).closest(NESTED_CONTROL)) return;
+                          onRowActivate?.(row);
+                        }
+                      : undefined
+                  }
                   className={cn(
                     'group/row outline-offset-[-2px]',
                     interactive && 'cursor-pointer',

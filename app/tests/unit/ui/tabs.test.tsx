@@ -59,6 +59,27 @@ describe('Tabs', () => {
     expect(screen.getByRole('tab', { name: 'History' })).toHaveAttribute('aria-selected', 'true');
   });
 
+  it('puts the tab stop on the first enabled tab when nothing is selected', async () => {
+    render(
+      <Tabs>
+        <TabList aria-label="Views">
+          <Tab value="agents" disabled>
+            Agents
+          </Tab>
+          <Tab value="positions">Positions</Tab>
+          <Tab value="history">History</Tab>
+        </TabList>
+      </Tabs>,
+    );
+    const stops = () => screen.getAllByRole('tab').filter((t) => t.tabIndex === 0);
+    expect(stops()).toEqual([screen.getByRole('tab', { name: 'Positions' })]);
+    await userEvent.tab();
+    expect(screen.getByRole('tab', { name: 'Positions' })).toHaveFocus();
+    await userEvent.keyboard('{ArrowRight}');
+    expect(screen.getByRole('tab', { name: 'History' })).toHaveAttribute('aria-selected', 'true');
+    expect(stops()).toEqual([screen.getByRole('tab', { name: 'History' })]);
+  });
+
   it('keeps one tab stop in the list', async () => {
     render(<Example />);
     const stops = screen.getAllByRole('tab').filter((t) => t.tabIndex === 0);

@@ -51,6 +51,38 @@ describe('DataTable', () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 
+  it('leaves keys and clicks inside nested controls alone', async () => {
+    const onRowActivate = vi.fn();
+    const onClose = vi.fn();
+    const withAction: Column<Row>[] = [
+      ...columns,
+      {
+        key: 'action',
+        header: 'Action',
+        hideHeader: true,
+        cell: (r) => (
+          <button type="button" onClick={() => onClose(r.id)}>
+            Close {r.series}
+          </button>
+        ),
+      },
+    ];
+    render(<DataTable caption="Positions" columns={withAction} rows={rows} rowKey={(r) => r.id} onRowActivate={onRowActivate} />);
+    const button = screen.getByRole('button', { name: 'Close NVDA 200 call' });
+    button.focus();
+    await userEvent.keyboard('{Enter}');
+    await userEvent.keyboard(' ');
+    expect(onClose).toHaveBeenCalledTimes(2);
+    expect(onRowActivate).not.toHaveBeenCalled();
+    await userEvent.keyboard('{ArrowDown}');
+    expect(button).toHaveFocus();
+    await userEvent.click(button);
+    expect(onClose).toHaveBeenCalledTimes(3);
+    expect(onRowActivate).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByText('NVDA 170 put'));
+    expect(onRowActivate).toHaveBeenCalledWith(rows[1]);
+  });
+
   it('keeps a tab stop when the focused row goes away', async () => {
     const { rerender } = render(
       <DataTable caption="Positions" columns={columns} rows={rows} rowKey={(r) => r.id} onRowActivate={() => {}} />,

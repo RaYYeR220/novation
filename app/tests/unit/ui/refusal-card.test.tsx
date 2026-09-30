@@ -2,22 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { RefusalCard } from '@/components/ui/refusal-card';
 import { Button } from '@/components/ui/button';
-import refusals from '@/fixtures/refusals.json';
-import type { Refusal } from '@/lib/client/types';
 import { axe } from './axe';
-
-const budget = (refusals as Refusal[])[0]!;
-const fmt = (v: number) => v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 describe('RefusalCard', () => {
   it('reads as code, reason, numbers and what would pass', async () => {
     const { container } = render(
       <RefusalCard
-        code={budget.code}
+        code="AgentRiskBudgetExceeded"
         reason="This trade's worst case is bigger than hedge-bot's risk budget."
         breach={{
-          attempted: { label: 'Worst-case loss', value: budget.numbers!.worstLoss! },
-          limit: { label: 'Budget', value: budget.numbers!.budget! },
+          attempted: { label: 'Worst-case loss', value: 1612.4 },
+          limit: { label: 'Budget', value: 1500 },
         }}
         hint="Keep the trade's worst case at or under 1,500.00 USDG."
         proof={{ href: 'https://sepolia.arbiscan.io/tx/0x7c', label: 'View transaction' }}
@@ -27,9 +22,9 @@ describe('RefusalCard', () => {
     const card = screen.getByRole('article', { name: /risk budget/ });
     expect(card).toHaveAttribute('data-code', 'AgentRiskBudgetExceeded');
     expect(screen.getByText('AgentRiskBudgetExceeded')).toBeInTheDocument();
-    expect(screen.getByText(fmt(budget.numbers!.worstLoss!))).toBeInTheDocument();
-    expect(screen.getAllByText(fmt(budget.numbers!.budget!)).length).toBeGreaterThan(0);
-    expect(screen.getByText(fmt(budget.numbers!.worstLoss! - budget.numbers!.budget!))).toHaveClass('text-loss-1');
+    expect(screen.getByText('1,612.40')).toBeInTheDocument();
+    expect(screen.getAllByText('1,500.00').length).toBeGreaterThan(0);
+    expect(screen.getByText('112.40')).toHaveClass('text-loss-1');
     expect(screen.getByText('What would pass')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'View transaction (opens in a new tab)' })).toHaveAttribute('rel', 'noreferrer');
     expect(await axe(container)).toHaveNoViolations();
