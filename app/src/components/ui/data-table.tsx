@@ -70,9 +70,11 @@ export function DataTable<T>({
     if (el.firstElementChild) ro.observe(el.firstElementChild);
     return () => ro.disconnect();
   }, []);
-  const firstKey = rows[0] ? rowKey(rows[0]) : undefined;
+  const keys = rows.map(rowKey);
   const [focusKey, setFocusKey] = useState<string | undefined>(undefined);
-  const tabStop = focusKey ?? currentKey ?? firstKey;
+  // The one row in the tab order: the last focused, else the current, else the first. A key that
+  // has left the rows is skipped so the table never drops out of the tab order.
+  const tabStop = [focusKey, currentKey].find((k) => k !== undefined && keys.includes(k)) ?? keys[0];
   const interactive = Boolean(onRowActivate) && !loading && !error;
 
   const moveFocus = (e: KeyboardEvent<HTMLTableRowElement>, row: T) => {

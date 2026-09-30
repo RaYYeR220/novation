@@ -51,6 +51,19 @@ describe('DataTable', () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 
+  it('keeps a tab stop when the focused row goes away', async () => {
+    const { rerender } = render(
+      <DataTable caption="Positions" columns={columns} rows={rows} rowKey={(r) => r.id} onRowActivate={() => {}} />,
+    );
+    await userEvent.tab();
+    await userEvent.keyboard('{End}');
+    rerender(
+      <DataTable caption="Positions" columns={columns} rows={rows.slice(0, 2)} rowKey={(r) => r.id} onRowActivate={() => {}} />,
+    );
+    const bodyRows = within(screen.getByRole('table')).getAllByRole('row').slice(1);
+    expect(bodyRows.filter((r) => r.tabIndex === 0)).toEqual([bodyRows[0]]);
+  });
+
   it('marks the current row', () => {
     render(<DataTable caption="Positions" columns={columns} rows={rows} rowKey={(r) => r.id} currentKey="126" />);
     expect(screen.getByText('TSLA 380 put').closest('tr')).toHaveAttribute('aria-current', 'true');
