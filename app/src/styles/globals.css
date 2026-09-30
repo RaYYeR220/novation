@@ -1,19 +1,74 @@
 @import 'tailwindcss';
 @import './tokens.css';
 
-html,
-body {
-  background: var(--color-navy-900);
-  color: var(--color-navy-50);
-  font-family: var(--font-text);
-  font-variant-numeric: tabular-nums;
-  -webkit-font-smoothing: antialiased;
+/*
+ * Interaction variants. `data-force` pins a state so /system can show hover and
+ * active side by side; real pointers and keys go through the pseudo-classes.
+ */
+@custom-variant ui-hover {
+  @media (hover: hover) {
+    &:hover:not(:disabled, [aria-disabled='true']) {
+      @slot;
+    }
+  }
+  &[data-force~='hover'] {
+    @slot;
+  }
+}
+@custom-variant ui-active {
+  &:active:not(:disabled, [aria-disabled='true']) {
+    @slot;
+  }
+  &[data-force~='active'] {
+    @slot;
+  }
 }
 
-h1,
-h2,
-h3,
-.font-display {
-  font-family: var(--font-display);
-  letter-spacing: var(--tracking-display);
+@layer base {
+  html,
+  body {
+    background: var(--color-navy-900);
+    color: var(--color-navy-50);
+    font-family: var(--font-text);
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1,
+  h2,
+  h3,
+  .font-display {
+    font-family: var(--font-display);
+    letter-spacing: var(--tracking-display);
+  }
+}
+
+@keyframes ui-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes ui-sweep {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+@keyframes ui-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0ms !important;
+  }
 }
