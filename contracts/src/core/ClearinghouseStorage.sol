@@ -92,6 +92,10 @@ library CHErrors {
     error OpenInterestCap();
     error AgentRiskBudgetExceeded(uint256 id, uint256 worstLoss, uint256 budget);
     error AgentPremiumExceeded();
+    error AgentValueDrainExceeded(uint256 id, int256 loss, uint256 cap);
+    error RiskIncreaseNotAllowed(uint256 id, uint256 im, uint256 preIm);
+    error DustPosition(uint256 id, int256 qty);
+    error UnderlyingDisabled();
     // setup
     error NotSetupAdmin();
     error SetupAlreadyFinalized();

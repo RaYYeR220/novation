@@ -25,9 +25,11 @@ library TradeLogic {
         int256 delta; // position change
         bool agent; // acted for by an agent rather than the owner
         bool opening;
-        int256 preEquity; // closing sides only
-        uint256 preIm; // closing sides only
+        bool restricted; // reducing side while opening is blocked for its account
+        int256 preEquity; // reducing and agent-acted sides only
+        uint256 preIm; // reducing and agent-acted sides only
         uint256 feePaid;
+        int256 equity; // post-trade
         uint256 im; // post-trade
     }
 
@@ -43,19 +45,17 @@ library TradeLogic {
         uint256 absQty = _abs(t.qty);
         if (absQty == 0 || absQty < g.minTradeQty) revert CHErrors.QtyTooSmall();
 
-        // 2. who acts for each side
+        // 2. who acts for each side, and what its position becomes
         UnderlyingParams memory up = d.params.underlying(s.underlying);
-        Side memory tk = _side($, t.takerId, t.takerActor, t.seriesId, t.qty, up.index);
-        Side memory mk = _side($, t.makerId, t.makerActor, t.seriesId, -t.qty, up.index);
+        Side memory tk = _side($, t.takerId, t.takerActor, t.seriesId, t.qty, up.index, g.minTradeQty);
+        Side memory mk = _side($, t.makerId, t.makerActor, t.seriesId, -t.qty, up.index, g.minTradeQty);
 
-        // 3. opening gates
-        if (tk.opening || mk.opening) {
-            bool closedToOpening = d.params.openingPaused() || d.hub.session(s.underlying) == Session.HALTED;
-            _gate($, tk, closedToOpening);
-            _gate($, mk, closedToOpening);
-        }
+        // 3. opening gates; while opening is blocked, reducing sides are held to §5.3 after the trade
+        bool closedToOpening = !up.enabled || d.params.openingPaused() || d.hub.session(s.underlying) == Session.HALTED;
+        _gate($, tk, up.enabled, closedToOpening);
+        _gate($, mk, up.enabled, closedToOpening);
 
-        // 4. pre-trade equity of reducing sides, for the off-market-close test
+        // 4. pre-trade state of reducing and agent-acted sides
         _snapshot(d, tk);
         _snapshot(d, mk);
 
@@ -103,14 +103,18 @@ library TradeLogic {
     }
 
     /// @dev Authorises `actor` for `id` and classifies the side. The owner (never the zero address)
-    /// acts freely; an agent needs a live policy that allows the series' underlying. A side opens
-    /// when it grows |qty| or moves the position to the other side of zero (a flip is a close plus
-    /// an open).
-    function _side(CHStorage storage $, uint256 id, address actor, uint32 seriesId, int256 delta, uint8 uIndex)
-        private
-        view
-        returns (Side memory x)
-    {
+    /// acts freely; an agent needs a live policy that allows the series' underlying. The resulting
+    /// position must be flat or at least minTradeQty. A side opens when it grows |qty| or moves the
+    /// position to the other side of zero (a flip is a close plus an open).
+    function _side(
+        CHStorage storage $,
+        uint256 id,
+        address actor,
+        uint32 seriesId,
+        int256 delta,
+        uint8 uIndex,
+        uint256 minQty
+    ) private view returns (Side memory x) {
         x.id = id;
         x.actor = actor;
         x.delta = delta;
@@ -124,36 +128,52 @@ library TradeLogic {
         uint256 slot1 = $.posIndex[id][seriesId];
         int256 oldQty = slot1 == 0 ? int256(0) : int256($.positions[id][slot1 - 1].qty);
         int256 newQty = oldQty + delta;
+        if (newQty != 0 && _abs(newQty) < minQty) revert CHErrors.DustPosition(id, newQty);
         x.opening = newQty != 0 && (_abs(newQty) > _abs(oldQty) || (oldQty > 0) != (newQty > 0));
     }
 
-    function _gate(CHStorage storage $, Side memory x, bool closedToOpening) private view {
-        if (x.opening && (closedToOpening || $.accounts[x.id].deficitTotal != 0)) {
+    /// @dev Opening is blocked on a disabled underlying, while paused or HALTED, and for an account
+    /// in deficit. A reducing side in any of those states is marked `restricted`.
+    function _gate(CHStorage storage $, Side memory x, bool enabled, bool closedToOpening) private view {
+        bool blocked = closedToOpening || $.accounts[x.id].deficitTotal != 0;
+        if (!x.opening) {
+            x.restricted = blocked;
+        } else if (!enabled) {
+            revert CHErrors.UnderlyingDisabled();
+        } else if (blocked) {
             revert CHErrors.OpeningNotAllowed(x.id);
         }
     }
 
     function _snapshot(Deps memory d, Side memory x) private view {
-        if (x.opening) return;
+        if (x.opening && !x.agent) return;
         AccountState memory pre = MarginLogic.accountState(d, x.id);
         x.preEquity = pre.equity;
         x.preIm = pre.im;
     }
 
-    /// @dev Opening: equity >= IM. Reducing: equity >= IM, or the trade didn't lower the equity
-    /// (the fee aside, which goes to the protocol, not the counterparty). An underwater account can
-    /// always reduce at or below mark, but can't pay value away through an off-market price.
+    /// @dev Post-trade margin of one side:
+    ///  - a restricted (reducing, opening blocked) side may not raise the worst-case loss (§5.3);
+    ///  - then equity >= IM, except that a reducing side may stay below IM when the trade is a pure
+    ///    reduction: lossIM didn't rise and equity didn't fall (the fee aside, which goes to the
+    ///    protocol, not the counterparty). An underwater account can cut risk at or below mark, but
+    ///    can't strip a hedge or pay value away through an off-market price.
     function _checkMargin(Deps memory d, Side memory x) private view {
         AccountState memory st = MarginLogic.accountState(d, x.id);
+        x.equity = st.equity;
         x.im = st.im;
+        if (x.restricted && st.im > x.preIm) revert CHErrors.RiskIncreaseNotAllowed(x.id, st.im, x.preIm);
         if (st.equity >= st.im.toInt256()) return;
-        if (!x.opening && st.equity + x.feePaid.toInt256() >= x.preEquity) return;
+        if (!x.opening && st.im <= x.preIm && st.equity + x.feePaid.toInt256() >= x.preEquity) return;
         revert CHErrors.InsufficientMargin(x.id, st.equity, st.im);
     }
 
-    /// @dev An agent-acted side must leave the account's worst-case loss (lossIM) within the
-    /// policy's budget. A reducing side that doesn't raise lossIM passes regardless, so an agent can
-    /// always cut risk. The premium cap holds for every agent-acted side.
+    /// @dev Agent-acted sides:
+    ///  - the account's worst-case loss (lossIM) must stay within maxWorstLoss; a reducing side that
+    ///    doesn't raise lossIM passes regardless, so an agent can always cut risk;
+    ///  - premium <= maxPremiumPerTrade;
+    ///  - the trade may cost the account at most maxPremiumPerTrade of equity against the kernel
+    ///    mark (the fee aside), so an agent can't give positions away or overpay for them.
     function _checkBudget(CHStorage storage $, Side memory x, uint256 premium) private view {
         if (!x.agent) return;
         AgentPolicy storage p = $.agents[x.id][x.actor];
@@ -161,7 +181,10 @@ library TradeLogic {
         if (x.im > budget && (x.opening || x.im > x.preIm)) {
             revert CHErrors.AgentRiskBudgetExceeded(x.id, x.im, budget);
         }
-        if (premium > p.maxPremiumPerTrade) revert CHErrors.AgentPremiumExceeded();
+        uint256 cap = p.maxPremiumPerTrade;
+        if (premium > cap) revert CHErrors.AgentPremiumExceeded();
+        int256 loss = x.preEquity - (x.equity + x.feePaid.toInt256());
+        if (loss > cap.toInt256()) revert CHErrors.AgentValueDrainExceeded(x.id, loss, cap);
     }
 
     /// @dev ins = fee * insuranceShare to the InsuranceFund, the rest to the treasury, each floored

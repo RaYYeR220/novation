@@ -680,7 +680,235 @@ contract ClearinghouseTradeTest is Fixture {
         );
     }
 
+    // ================================================================ hedge stripping, value drain, dust
+
+    function test_healthySpreadCannotShedLongLeg() public {
+        (uint256 x, uint32 call190) = _spread();
+        uint256 y = _fund(carol, 100_000 * USDG, 0);
+        AccountState memory pre = ch.accountState(x);
+        assertTrue(pre.healthy);
+        AccountState memory naked = ch.marginAfter(x, call190, -10e18, 0);
+        assertFalse(naked.healthy); // a naked short 10 on this account would be refused outright
+
+        // selling the long leg at exactly the kernel mark keeps equity (fee aside) but strips the hedge
+        uint256 premium = uint256(pre.mtm - naked.mtm);
+        uint256 fee = _fee(address(nvda), -10e18, premium);
+        AccountState memory post = ch.marginAfter(x, call190, -10e18, int256(premium) - int256(fee));
+        assertEq(post.equity + int256(fee), pre.equity);
+        assertGt(post.im, pre.im);
+        assertTrue(post.liquidatable);
+        _expectTradeRevert(
+            _tp(x, alice, y, carol, call190, -10e18, premium),
+            abi.encodeWithSelector(CHErrors.InsufficientMargin.selector, x, post.equity, post.im)
+        );
+
+        // with enough cash behind the naked short the same sale is fine
+        _deposit(alice, x, address(usdg), 1000 * USDG);
+        venue.trade(_tp(x, alice, y, carol, call190, -10e18, premium));
+        assertTrue(ch.accountState(x).healthy);
+    }
+
+    function test_underwaterHedgeStripReverts() public {
+        (uint256 x, uint32 call190) = _spread();
+        uint256 y = _fund(carol, 100_000 * USDG, 0);
+        vm.prank(alice);
+        ch.withdraw(x, address(usdg), 10 * USDG, alice);
+        _setPrice(address(nvda), 205e18); // the spread goes deep in the money
+        AccountState memory pre = ch.accountState(x);
+        assertFalse(pre.healthy);
+
+        // dumping the long 190s on a colluder at mark would leave a naked short 10 180s
+        uint256 premium = uint256(pre.mtm - ch.marginAfter(x, call190, -10e18, 0).mtm);
+        uint256 fee = _fee(address(nvda), -10e18, premium);
+        AccountState memory post = ch.marginAfter(x, call190, -10e18, int256(premium) - int256(fee));
+        assertGt(post.im, pre.im * 5);
+        _expectTradeRevert(
+            _tp(x, alice, y, carol, call190, -10e18, premium),
+            abi.encodeWithSelector(CHErrors.InsufficientMargin.selector, x, post.equity, post.im)
+        );
+    }
+
+    function test_agentCannotGiveLongsAway() public {
+        uint256 x = _fund(alice, 1000 * USDG, 0);
+        uint256 b = _fund(bob, 100_000 * USDG, 0);
+        uint256 y = _fund(carol, 100_000 * USDG, 0);
+        _trade(x, b, call180, 10e18, 80e18); // the owner buys 10 calls
+        _grant(x, alice, 1e18, 1e18, NVDA_MASK);
+
+        // the agent hands them to a colluder for nothing: risk falls, premium 0 is under the cap,
+        // but the account loses the calls' whole value
+        AccountState memory pre = ch.accountState(x);
+        int256 loss = pre.equity - ch.marginAfter(x, call180, -10e18, 0).equity; // premium 0, fee 0
+        assertGt(loss, 80e18);
+        _expectTradeRevert(
+            _tp(x, agent, y, carol, call180, -10e18, 0),
+            abi.encodeWithSelector(CHErrors.AgentValueDrainExceeded.selector, x, loss, 1e18)
+        );
+        // the owner may give its own calls away
+        _trade(x, y, call180, -10e18, 0);
+        assertEq(ch.positionsOf(x).length, 0);
+    }
+
+    function test_agentValueDrainCap() public {
+        uint256 x = _fund(alice, 1000 * USDG, 0);
+        uint256 b = _fund(bob, 100_000 * USDG, 0);
+        uint256 y = _fund(carol, 100_000 * USDG, 0);
+        _trade(x, b, call180, 10e18, 80e18);
+        _grant(x, alice, 1000e18, 5e18, NVDA_MASK); // maxPremiumPerTrade 5 also bounds the leak
+
+        // selling one call exactly 5 below the kernel mark leaks exactly the cap
+        AccountState memory pre = ch.accountState(x);
+        int256 markValue = pre.mtm - ch.marginAfter(x, call180, -1e18, 0).mtm;
+        uint256 low = uint256(markValue) - 5e18;
+        _expectTradeRevert(
+            _tp(x, agent, y, carol, call180, -1e18, low - 1),
+            abi.encodeWithSelector(CHErrors.AgentValueDrainExceeded.selector, x, int256(5e18 + 1), 5e18)
+        );
+        uint256 fee = _fee(address(nvda), -1e18, low);
+        venue.trade(_tp(x, agent, y, carol, call180, -1e18, low));
+        assertEq(ch.accountState(x).equity + int256(fee), pre.equity - 5e18);
+
+        // an opening buy paying a little over mark is within the cap too
+        venue.trade(_tp(x, agent, b, bob, put170, 1e18, 5e18));
+        _assertPos(x, put170, 1e18);
+
+        // but writing new options for nothing gives their value away: an opening drain
+        uint32 put175 = _list(address(nvda), e, 175e18, false);
+        AccountState memory before = ch.accountState(x);
+        int256 loss = before.equity - ch.marginAfter(x, put175, -5e18, 0).equity; // premium 0, fee 0
+        assertGt(loss, 5e18);
+        _expectTradeRevert(
+            _tp(x, agent, y, carol, put175, -5e18, 0),
+            abi.encodeWithSelector(CHErrors.AgentValueDrainExceeded.selector, x, loss, 5e18)
+        );
+    }
+
+    function test_healthyShortClosesAtMark() public {
+        uint256 a = _fund(alice, 1000 * USDG, 0);
+        uint256 b = _fund(bob, 1000 * USDG, 0);
+        _trade(a, b, call180, -1e18, 8e18);
+        AccountState memory pre = ch.accountState(a);
+        assertTrue(pre.healthy);
+
+        int256 half = ch.marginAfter(a, call180, 0.5e18, 0).mtm - pre.mtm;
+        _trade(a, b, call180, 0.5e18, uint256(half));
+        _assertPos(a, call180, -0.5e18);
+        AccountState memory mid = ch.accountState(a);
+        _trade(a, b, call180, 0.5e18, uint256(ch.marginAfter(a, call180, 0.5e18, 0).mtm - mid.mtm));
+        assertEq(ch.positionsOf(a).length, 0);
+        assertTrue(ch.accountState(a).healthy);
+    }
+
+    function test_hedgeSaleBlockedWhileOpeningBlocked() public {
+        (uint256 a, uint256 b) = _collar();
+        TradeParams memory sale = _tp(a, alice, b, bob, put170, -5e18, 15e18); // sell half the puts
+        uint256 fee = _fee(address(nvda), -5e18, 15e18);
+
+        // paused: the sale closes a position but raises the worst-case loss (§5.3)
+        vm.prank(GUARDIAN);
+        params.pauseOpening();
+        AccountState memory pre = ch.accountState(a);
+        AccountState memory post = ch.marginAfter(a, put170, -5e18, int256(15e18 - fee));
+        assertTrue(post.healthy);
+        assertGt(post.im, pre.im);
+        _expectTradeRevert(sale, abi.encodeWithSelector(CHErrors.RiskIncreaseNotAllowed.selector, a, post.im, pre.im));
+        vm.prank(GUARDIAN);
+        params.unpauseOpening();
+
+        // in deficit
+        _cheatDeficitTotal(a, 1);
+        _expectTradeRevert(sale, abi.encodeWithSelector(CHErrors.RiskIncreaseNotAllowed.selector, a, post.im, pre.im));
+        _cheatDeficitTotal(a, 0);
+
+        // HALTED (stale feed)
+        vm.warp(block.timestamp + STALE);
+        pre = ch.accountState(a);
+        post = ch.marginAfter(a, put170, -5e18, int256(15e18 - fee));
+        assertGt(post.im, pre.im);
+        _expectTradeRevert(sale, abi.encodeWithSelector(CHErrors.RiskIncreaseNotAllowed.selector, a, post.im, pre.im));
+
+        // once the feed is fresh again the healthy account may sell its hedge
+        _setPrice(address(nvda), 180e18);
+        venue.trade(sale);
+        _assertPos(a, put170, 5e18);
+    }
+
+    function test_dustPositionReverts() public {
+        uint256 a = _fund(alice, 1000 * USDG, 0);
+        uint256 b = _fund(bob, 1000 * USDG, 0);
+        uint256 c = _fund(carol, 1000 * USDG, 0);
+        _trade(a, b, call180, 1e18, 8e18);
+
+        // a partial close leaving 0.005 (< minTradeQty 0.01), and a flip landing on -0.005
+        _expectTradeRevert(
+            _tp(a, alice, b, bob, call180, -0.995e18, 8e18),
+            abi.encodeWithSelector(CHErrors.DustPosition.selector, a, int256(0.005e18))
+        );
+        _expectTradeRevert(
+            _tp(a, alice, c, carol, call180, -1.005e18, 8e18),
+            abi.encodeWithSelector(CHErrors.DustPosition.selector, a, -int256(0.005e18))
+        );
+        // the maker side too: bob buying back all but 0.005 of his short
+        _expectTradeRevert(
+            _tp(c, carol, b, bob, call180, -0.995e18, 8e18),
+            abi.encodeWithSelector(CHErrors.DustPosition.selector, b, -int256(0.005e18))
+        );
+        // exactly minTradeQty left over is fine, and so is flat
+        _trade(a, b, call180, -0.99e18, 7e18);
+        _assertPos(a, call180, 0.01e18);
+        _assertPos(b, call180, -0.01e18);
+        _trade(a, b, call180, -0.01e18, 0.05e18);
+        assertEq(ch.positionsOf(a).length, 0);
+    }
+
+    function test_openingOnDisabledUnderlyingReverts() public {
+        (uint256 a, uint256 b) = _collar();
+        uint256 c = _fund(carol, 1000 * USDG, 0);
+        uint256 d = _fund(_user("dave"), 1000 * USDG, 0);
+        _trade(c, d, call180, 1e18, 8e18); // carol long 1, dave short 1
+        UnderlyingParams memory p = params.underlying(address(nvda));
+        p.enabled = false;
+        params.setUnderlying(address(nvda), p);
+
+        _expectTradeRevert(
+            _tp(c, carol, b, bob, call180, 1e18, 8e18), abi.encodeWithSelector(CHErrors.UnderlyingDisabled.selector)
+        );
+        _expectTradeRevert(
+            _tp(a, alice, b, bob, call180, -1e18, 8e18), abi.encodeWithSelector(CHErrors.UnderlyingDisabled.selector)
+        );
+        // unwinding risk is always possible
+        _trade(c, d, call180, -1e18, 7e18);
+        assertEq(ch.positionsOf(c).length, 0);
+        assertEq(ch.positionsOf(d).length, 0);
+        // opening is blocked, so a closing side may not raise its worst-case loss either
+        uint256 fee = _fee(address(nvda), -5e18, 15e18);
+        AccountState memory pre = ch.accountState(a);
+        AccountState memory post = ch.marginAfter(a, put170, -5e18, int256(15e18 - fee));
+        _expectTradeRevert(
+            _tp(a, alice, b, bob, put170, -5e18, 15e18),
+            abi.encodeWithSelector(CHErrors.RiskIncreaseNotAllowed.selector, a, post.im, pre.im)
+        );
+        _assertPos(a, put170, 10e18);
+    }
+
     // ================================================================ helpers
+
+    /// @dev alice: a 180/190 call spread on 100 USDG (long 10 190s, short 10 180s), bob the dealer.
+    function _spread() internal returns (uint256 x, uint32 call190) {
+        call190 = _list(address(nvda), e, 190e18, true);
+        x = _fund(alice, 100 * USDG, 0);
+        uint256 b = _fund(bob, 100_000 * USDG, 0);
+        _trade(x, b, call190, 10e18, 30e18);
+        _trade(x, b, call180, -10e18, 60e18);
+    }
+
+    /// @dev alice: 10 NVDA, short 10 calls 180, long 10 puts 170 (worst loss ~75); bob the dealer.
+    function _collar() internal returns (uint256 a, uint256 b) {
+        a = _fund(alice, 1000 * USDG, 10e18);
+        b = _fund(bob, 10_000 * USDG, 0);
+        _trade(a, b, call180, -10e18, 80e18);
+        _trade(a, b, put170, 10e18, 40e18);
+    }
 
     function _tp(
         uint256 takerId,
