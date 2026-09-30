@@ -242,4 +242,56 @@ contract RfqVenueTest is Fixture {
         vm.expectRevert(RfqVenue.BadSignature.selector);
         _fill(q, sig, 0.1e18);
     }
+
+    function test_digestMatchesIndependentConstruction() public view {
+        Quote memory q = _quote(true, 2e18, 8e18);
+        bytes32 structHash = keccak256(
+            abi.encode(
+                keccak256(
+                    "Quote(address signer,uint256 makerId,uint32 seriesId,bool makerSells,uint256 maxQty,uint256 price,uint64 deadline,uint256 nonce)"
+                ),
+                q.signer,
+                q.makerId,
+                q.seriesId,
+                q.makerSells,
+                q.maxQty,
+                q.price,
+                q.deadline,
+                q.nonce
+            )
+        );
+        bytes32 domain = keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256("Novation RFQ"),
+                keccak256("1"),
+                block.chainid,
+                address(rfq)
+            )
+        );
+        assertEq(rfq.hashQuote(q), keccak256(abi.encodePacked(hex"1901", domain, structHash)));
+    }
+
+    function test_qtyZeroReverts() public {
+        Quote memory q = _quote(true, 1e18, 8e18);
+        bytes memory sig = _sign(MAKER_PK, q);
+        vm.expectRevert(CHErrors.QtyTooSmall.selector);
+        _fill(q, sig, 0);
+    }
+
+    function test_selfTradeReverts() public {
+        Quote memory q = _quote(true, 1e18, 8e18);
+        bytes memory sig = _sign(MAKER_PK, q);
+        vm.prank(maker);
+        vm.expectRevert(CHErrors.SelfTrade.selector);
+        rfq.fill(q, sig, makerId, 0.1e18);
+    }
+
+    function test_takerNotAuthorizedReverts() public {
+        Quote memory q = _quote(true, 1e18, 8e18);
+        bytes memory sig = _sign(MAKER_PK, q);
+        vm.prank(other);
+        vm.expectRevert(abi.encodeWithSelector(CHErrors.NotAuthorized.selector, takerId, other));
+        rfq.fill(q, sig, takerId, 0.1e18);
+    }
 }

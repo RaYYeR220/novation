@@ -79,7 +79,7 @@ contract RfqVenue is EIP712("Novation RFQ", "1"), ReentrancyGuardTransient {
         uint256 newFilled = filled[h] + qty;
         if (newFilled > q.maxQty) revert Overfill();
         filled[h] = newFilled;
-
+        // maker sells: the taker pays, rounded up against the taker. maker buys: the maker pays, floored, which favours the paying maker and is against the receiving taker
         // the taker pays up on a buy and the maker pays down on a sell: both round against the payer
         premium = q.makerSells ? FixedPointMath.mulWadUp(qty, q.price) : Math.mulDiv(qty, q.price, 1e18);
         ch.trade(
@@ -97,7 +97,7 @@ contract RfqVenue is EIP712("Novation RFQ", "1"), ReentrancyGuardTransient {
     }
 
     /// @notice Cancels one of the caller's own nonces.
-    function cancelNonce(uint256 nonce) external {
+    function cancelNonce(uint256 nonce) external nonReentrant {
         _cancelled[msg.sender][nonce >> 8] |= 1 << (nonce & 0xff);
         emit NonceCancelledBy(msg.sender, nonce);
     }
