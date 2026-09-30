@@ -1,0 +1,35 @@
+[
+ {
+  "address": "0xa100000000000000000000000000000000000000",
+  "kind": "coveredCall",
+  "underlying": "NVDA",
+  "tvl": 612000,
+  "nav": 608940,
+  "apy7d": 0.184,
+  "utilization": 0.62,
+  "epoch": 14,
+  "live": true
+ },
+ {
+  "address": "0xa200000000000000000000000000000000000000",
+  "kind": "putWrite",
+  "underlying": "NVDA",
+  "tvl": 430000,
+  "nav": 428710,
+  "apy7d": 0.231,
+  "utilization": 0.48,
+  "epoch": 14,
+  "live": true
+ },
+ {
+  "address": "0xa300000000000000000000000000000000000000",
+  "kind": "coveredCall",
+  "underlying": "TSLA",
+  "tvl": 288000,
+  "nav": 286850,
+  "apy7d": 0.152,
+  "utilization": 0.55,
+  "epoch": 9,
+  "live": true
+ }
+]

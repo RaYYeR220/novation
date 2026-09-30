@@ -1,0 +1,26 @@
+{
+ "7": [
+  {
+   "agent": "0xb0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0",
+   "label": "hedge-bot",
+   "maxWorstLoss": 1500,
+   "maxPremiumPerTrade": 500,
+   "allowed": [
+    "NVDA",
+    "SPY"
+   ],
+   "expiresAt": 1793289600,
+   "used": 1180,
+   "lastRefusal": {
+    "code": "AgentRiskBudgetExceeded",
+    "message": "Worst-case loss 1612.40 exceeds the risk budget of 1500.00.",
+    "numbers": {
+     "worstLoss": 1612.4,
+     "budget": 1500,
+     "used": 1180
+    },
+    "txHash": "0x7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c"
+   }
+  }
+ ]
+}

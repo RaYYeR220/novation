@@ -1,0 +1,42 @@
+[
+ {
+  "address": "0x0101010101010101010101010101010101010101",
+  "symbol": "NVDA",
+  "name": "NVIDIA",
+  "spot": 225.57,
+  "session": "REGULAR",
+  "markVol": 0.52,
+  "uiMultiplier": 1.0007751591646306,
+  "halted": false
+ },
+ {
+  "address": "0x0202020202020202020202020202020202020202",
+  "symbol": "TSLA",
+  "name": "Tesla",
+  "spot": 380.245,
+  "session": "REGULAR",
+  "markVol": 0.61,
+  "uiMultiplier": 1.0,
+  "halted": false
+ },
+ {
+  "address": "0x0303030303030303030303030303030303030303",
+  "symbol": "SPY",
+  "name": "SPDR S&P 500 ETF",
+  "spot": 768.43,
+  "session": "REGULAR",
+  "markVol": 0.16,
+  "uiMultiplier": 1.001717991187472,
+  "halted": false
+ },
+ {
+  "address": "0x0404040404040404040404040404040404040404",
+  "symbol": "AAPL",
+  "name": "Apple",
+  "spot": 336.31,
+  "session": "REGULAR",
+  "markVol": 0.27,
+  "uiMultiplier": 1.0005660800610925,
+  "halted": false
+ }
+]

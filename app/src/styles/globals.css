@@ -1,0 +1,19 @@
+@import 'tailwindcss';
+@import './tokens.css';
+
+html,
+body {
+  background: var(--color-navy-900);
+  color: var(--color-navy-50);
+  font-family: var(--font-text);
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+.font-display {
+  font-family: var(--font-display);
+  letter-spacing: var(--tracking-display);
+}

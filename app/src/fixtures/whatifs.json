@@ -1,0 +1,34 @@
+[
+ {
+  "id": 7,
+  "seriesId": 5,
+  "qtyDelta": -60.0,
+  "premium": 1546.1847,
+  "quote": {
+   "premium": 1546.1847,
+   "fee": 0.773092,
+   "after": {
+    "cash": 3945.411608,
+    "mtm": 6375.414942,
+    "settledValue": 3945.411608,
+    "deficit": 0.0,
+    "equity": 10320.82655,
+    "im": 1741.603995,
+    "mm": 1306.202996,
+    "worstScenario": 38,
+    "healthy": true,
+    "liquidatable": false
+   },
+   "refusal": {
+    "code": "AgentRiskBudgetExceeded",
+    "message": "Worst-case loss after this trade exceeds the agent's remaining risk budget.",
+    "numbers": {
+     "worstLoss": 1493.22,
+     "budget": 1500.0,
+     "used": 1180.0,
+     "remaining": 320.0
+    }
+   }
+  }
+ }
+]

@@ -1,0 +1,31 @@
+[
+ {
+  "code": "AgentRiskBudgetExceeded",
+  "message": "Worst-case loss 1612.40 exceeds the risk budget of 1500.00.",
+  "numbers": {
+   "worstLoss": 1612.4,
+   "budget": 1500,
+   "used": 1180
+  },
+  "txHash": "0x7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c",
+  "at": 1790694000,
+  "account": 7
+ },
+ {
+  "code": "InsufficientMargin",
+  "message": "Initial margin after trade exceeds equity.",
+  "numbers": {
+   "im": 3120.5,
+   "equity": 2890.0
+  },
+  "at": 1790690400,
+  "txHash": "0x3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e",
+  "account": 12
+ },
+ {
+  "code": "OpeningNotAllowed",
+  "message": "Opening trades are closed while the session is halted.",
+  "at": 1790611200,
+  "account": 31
+ }
+]
