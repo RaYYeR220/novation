@@ -186,6 +186,8 @@ pnpm install
 pnpm --filter @novation/app dev
 ```
 
+The RFQ market maker in `mm-bot/` prices, margin-checks and signs quotes over HTTP: `pnpm --filter @novation/mm-bot start` (setup and endpoints in [mm-bot/README.md](mm-bot/README.md)).
+
 ## License
 
 [MIT](LICENSE)
