@@ -988,9 +988,9 @@ contract ClearinghouseSettlementTest is Fixture {
     }
 
     /// Review PoC: stock parked in an emptied defaulter can't hold socialization (and so every
-    /// claim of the expiry) hostage. Third parties can't deposit stock into an account in deficit,
-    /// collateral worth at most dustEquity (5 USD) is ignored, and so is collateral the hub can't
-    /// price.
+    /// claim of the expiry) hostage. Nobody can deposit stock into an account in deficit and
+    /// collateral worth at most dustEquity (5 USD) is ignored. Collateral the hub can't price
+    /// holds the socialization until it can.
     function test_dustCollateralCannotBlockSocialize() public {
         (uint256 v, uint256 b) = _nakedShortSold();
 
@@ -1025,10 +1025,20 @@ contract ClearinghouseSettlementTest is Fixture {
         ch.deposit(v, address(nvda), 1e18);
         vm.stopPrank();
 
-        // collateral the hub can't price counts as 0
+        // collateral the hub can't price doesn't count as 0: the socialization, which can't be
+        // undone, waits for a price, here even for a dust amount
         _setPrice(address(nvda), 5000e18); // outside the plausibility band
         vm.expectRevert(MarketDataHub.ImplausiblePrice.selector);
-        hub.spot(address(nvda));
+        ch.socializeRemainder(v, e);
+        vm.revertToState(snap);
+        _deposit(alice, v, address(nvda), 0.02e18);
+        _defaultAt300(v, b);
+        _setPrice(address(nvda), 0);
+        vm.expectRevert(MarketDataHub.NoPrice.selector);
+        ch.socializeRemainder(v, e);
+        assertEq(_pending(e), 108e18);
+        // once the feed prices it again, the dust test applies
+        _setPrice(address(nvda), 250e18);
         ch.socializeRemainder(v, e);
         assertEq(_pending(e), 0);
         ch.claim(b, e);

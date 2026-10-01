@@ -200,8 +200,10 @@ library SettlementLogic {
 
     /// @notice Spreads the pending deficit of an emptied account over all cash through the cash
     /// index. Permissionless. The account must hold no positions, and no collateral worth more
-    /// than globals.dustEquity at spot (collateral the hub can't price counts as 0; dust stays on
-    /// the account). Any cash that reached it repays the deficit first.
+    /// than globals.dustEquity at spot (dust stays on the account). While any of its collateral
+    /// can't be priced, the call reverts with the hub's error: a socialization can't be undone, so
+    /// it waits for a price that may show the collateral covers the debt (the deficit sale sells
+    /// it then). Any cash that reached the account repays the deficit first.
     ///
     /// The defaulter is not let off: the socialized amount and the fund's bridge (written off in
     /// the fund's books) become its socializedDebt, still part of its deficit. It keeps blocking

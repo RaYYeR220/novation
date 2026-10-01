@@ -79,10 +79,13 @@ library MarginLogic {
         return _state(d, id, seriesId, qtyDelta, cashDelta);
     }
 
-    /// @notice The account's collateral at spot, valued as on the fast path: a token the hub can't
-    /// price (NoPrice / ImplausiblePrice) counts as 0; any other failure reverts.
+    /// @notice The account's collateral at spot, for the socialization dust test. Unlike the margin
+    /// procedure, a token the hub can't price doesn't count as 0 here: the call reverts with the
+    /// hub's NoPrice / ImplausiblePrice. A socialization can't be undone (the cash index never
+    /// rises), so it waits for the price rather than write off a loss that collateral the account
+    /// still holds might cover.
     function collateralValue(Deps memory d, uint256 id) external view returns (int256) {
-        return _collateralValue(d, id);
+        return _collateralValue(d, id, false);
     }
 
     /// @notice Correlated portfolio PnL per scenario (39 values) of the account's live risk.
@@ -113,7 +116,7 @@ library MarginLogic {
 
         // Fast path: nothing but cash, collateral and claims, nothing owed.
         if (book.seriesIds.length == 0 && st.deficit == 0) {
-            st.mtm = _collateralValue(d, id);
+            st.mtm = _collateralValue(d, id, true);
             st.settledValue = claims;
             st.equity = cash.toInt256() + st.mtm + claims;
             st.healthy = true;
@@ -270,13 +273,13 @@ library MarginLogic {
         });
     }
 
-    /// @dev Fast-path mtm: collateral at spot, truncated exactly like the kernel's token value;
-    /// collateral the hub can't price counts as 0.
-    function _collateralValue(Deps memory d, uint256 id) private view returns (int256 mtm) {
+    /// @dev Collateral at spot, truncated exactly like the kernel's token value. With `mayDrop`
+    /// (the fast-path mtm) collateral the hub can't price counts as 0; without it, it reverts.
+    function _collateralValue(Deps memory d, uint256 id, bool mayDrop) private view returns (int256 mtm) {
         CHStorage storage $ = CHS.s();
         address[] storage toks = $.collateralTokens[id];
         for (uint256 i = 0; i < toks.length; ++i) {
-            (bool priced, uint256 spot,) = _spot(d, toks[i], true);
+            (bool priced, uint256 spot,) = _spot(d, toks[i], mayDrop);
             if (priced) mtm += F.mulWad($.collateral[id][toks[i]].toInt256(), spot.toInt256());
         }
     }
