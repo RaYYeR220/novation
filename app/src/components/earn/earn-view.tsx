@@ -1,7 +1,8 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { accountLabel, useAccountId } from '@/components/app/account-context';
+import { useAccount } from 'wagmi';
+import { useAccountId } from '@/components/app/account-context';
 import { Page, SectionHead } from '@/components/app/section-head';
 import { NavChart, NavSparkline, type NavMark } from '@/components/charts/nav-chart';
 import { Button } from '@/components/ui/button';
@@ -10,7 +11,7 @@ import { DataTable, type Column } from '@/components/ui/data-table';
 import { Lamp } from '@/components/ui/lamp';
 import { Panel } from '@/components/ui/panel';
 import { Skeleton } from '@/components/ui/skeleton';
-import { useAsOf, useFeeds, useIsDemo, useSubaccount, useVault, useVaults, useWallet } from '@/lib/client/hooks';
+import { useAsOf, useFeeds, useIsDemo, useSubaccount, useUnderlyings, useVault, useVaults, useWallet } from '@/lib/client/hooks';
 import type { Vault, VaultDetail, VaultEpoch } from '@/lib/client/types';
 import { cn } from '@/lib/cn';
 import { fmtAddress, fmtDuration, fmtExpiry, fmtNumber, fmtPct, fmtQty, fmtSigned } from '@/lib/format';
@@ -51,8 +52,8 @@ function VaultRow({ v, history, selected, onSelect }: { v: Vault; history?: Vaul
         </span>
         <span className="grid gap-0.5">
           <span className="text-t12 text-navy-200 md:sr-only">7-day APY</span>
-          <span className="text-t17 font-semibold tabular-nums text-navy-50">{fmtPct(v.apy7d)}</span>
-          <span className="text-t12 text-navy-200 max-md:hidden">7 days</span>
+          <span className="text-t17 font-semibold tabular-nums text-navy-50">{Number.isFinite(v.apy7d) ? fmtPct(v.apy7d) : '—'}</span>
+          <span className="text-t12 text-navy-200 max-md:hidden">{Number.isFinite(v.apy7d) ? '7 days' : 'needs 7 days of NAV'}</span>
         </span>
         <span className="grid gap-1.5">
           <span className="flex items-baseline justify-between text-t12 text-navy-200">
@@ -162,12 +163,15 @@ function Rules({ v }: { v: VaultDetail }) {
 
 function VaultDetailView({ address }: { address: string }) {
   const { data: v, isPending, isError } = useVault(address);
-  const { id } = useAccountId();
+  const { id, label } = useAccountId();
   const account = useSubaccount(id);
-  const wallet = useWallet(account.data?.owner);
+  const demo = useIsDemo();
+  const { address: connected } = useAccount();
+  // the demo reads the selected account owner's wallet; live mode the connected one
+  const wallet = useWallet(demo ? account.data?.owner : connected);
+  const underlyings = useUnderlyings();
   const feeds = useFeeds();
   const { data: asOf } = useAsOf();
-  const demo = useIsDemo();
   const [deposit, setDeposit] = useState(false);
   const [withdraw, setWithdraw] = useState(false);
   const marks: NavMark[] = useMemo(
@@ -191,7 +195,7 @@ function VaultDetailView({ address }: { address: string }) {
   const holding = wallet.data?.vaults.find((h) => h.vault.toLowerCase() === v.address.toLowerCase());
   const balance = wallet.data?.tokens[v.asset] ?? 0;
   const cooling = holding ? asOf < holding.lastReceive + v.cooldown : false;
-  const spot = v.navHistory.at(-1)?.spot ?? 0;
+  const spot = v.navHistory.at(-1)?.spot ?? underlyings.data?.find((u) => u.symbol === v.underlying)?.spot ?? 0;
   const value = holding ? holding.shares * v.navPerShare : 0;
   const checks = [
     { ok: v.live, text: `${v.underlying} price readable, inside its band and fresh for the session` },
@@ -235,10 +239,17 @@ function VaultDetailView({ address }: { address: string }) {
             }
           >
             <NavChart points={v.navHistory} unit={v.asset} marks={marks} label={`${v.symbol} NAV per share`} />
-            <p className="mt-s3 text-t12 text-pretty text-navy-200">
-              Demo replay: the vault&apos;s rules run week by week over the real {v.underlying}/USD Chainlink rounds, settling each expiry on the last print at
-              or before the close. Takers are assumed to buy {fmtPct(v.fillShare, 0)} of capacity at each roll; marks use a {fmtPct(v.markVol, 0)} vol.
-            </p>
+            {demo ? (
+              <p className="mt-s3 text-t12 text-pretty text-navy-200">
+                Demo replay: the vault&apos;s rules run week by week over the real {v.underlying}/USD Chainlink rounds, settling each expiry on the last print at
+                or before the close. Takers are assumed to buy {fmtPct(v.fillShare, 0)} of capacity at each roll; marks use a {fmtPct(v.markVol, 0)} vol.
+              </p>
+            ) : (
+              <p className="text-t13 text-pretty text-navy-200">
+                No NAV history yet. The vault launched {fmtEt(v.launchedAt)} and the chain keeps only today&apos;s NAV, read live above from the
+                kernel&apos;s marks at a {fmtPct(v.markVol, 0)} mark vol. A history needs an indexer recording it block by block.
+              </p>
+            )}
           </Panel>
 
           <Panel title="Strategy rules">
@@ -252,6 +263,7 @@ function VaultDetailView({ address }: { address: string }) {
               rows={[...v.epochs].reverse()}
               rowKey={(e) => String(e.epoch)}
               maxHeight={340}
+              empty={`No roll yet. The first follows the ${fmtCloseEt(v.nextRoll)} expiry, once it settles.`}
             />
           </Panel>
         </div>
@@ -265,7 +277,7 @@ function VaultDetailView({ address }: { address: string }) {
             </p>
           </Panel>
 
-          <Panel title="Your position" meta={<span>{accountLabel(id)} owner</span>}>
+          <Panel title="Your position" meta={<span>{demo ? `${label(id)} owner` : 'Connected wallet'}</span>}>
             {holding ? (
               <dl className="grid text-t13 tabular-nums">
                 {[
@@ -290,7 +302,9 @@ function VaultDetailView({ address }: { address: string }) {
               </p>
             ) : (
               <p className="text-t13 text-navy-200">
-                No shares in this vault. Your wallet holds {fmtQty(balance)} {v.asset}.
+                {!demo && !connected
+                  ? 'Connect a wallet to see your shares.'
+                  : `No shares in this vault. Your wallet holds ${fmtQty(balance)} ${v.asset}.`}
               </p>
             )}
           </Panel>

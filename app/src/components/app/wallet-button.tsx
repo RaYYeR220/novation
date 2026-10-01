@@ -5,7 +5,10 @@ import { useAccount, useConnect, useDisconnect } from 'wagmi';
 import { Button } from '@/components/ui/button';
 import { Chip } from '@/components/ui/chip';
 import { Lamp } from '@/components/ui/lamp';
-import { fmtAddress } from '@/lib/format';
+import { fmtAddress, fmtNumber } from '@/lib/format';
+import { useChainClient } from '@/lib/client/context';
+import { useWallet } from '@/lib/client/hooks';
+import { useLiveTx } from './live-tx';
 import { CHAINS } from '@/lib/wallet/chains';
 import { cn } from '@/lib/cn';
 import { Popover } from './popover';
@@ -42,6 +45,30 @@ function ExperimentalToggle() {
 
 const connectorName = (name: string) => (name === 'Injected' ? 'Browser wallet' : name);
 
+/** Live mode: the wallet's testnet balances and a mint of the mock tokens (their mint is public). */
+function TestTokens({ address }: { address: string }) {
+  const { run, busy } = useLiveTx();
+  const { data } = useWallet(address);
+  const shown = ['USDG', 'NVDA', 'TSLA'];
+  return (
+    <div className="grid gap-s2 border-t border-navy-700 pt-s3">
+      <p className="text-t13 font-medium text-navy-50">Testnet balances</p>
+      <p className="text-t12 tabular-nums text-navy-200">
+        {data ? shown.map((k) => `${fmtNumber(data.tokens[k] ?? 0)} ${k}`).join(' · ') : 'Reading'}
+      </p>
+      <p className="text-t12 text-pretty text-navy-200">
+        USDG, NVDA and TSLA here are testnet mocks with a public mint: three transactions give you 10,000 USDG, 10 NVDA and 10 TSLA. Gas is
+        testnet ETH from the Robinhood Chain faucet.
+      </p>
+      <div>
+        <Button size="sm" variant="secondary" loading={busy} loadingLabel="Minting" onClick={() => void run('Mint test tokens', (c) => c.mintTestTokens())}>
+          Get test tokens
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 /** Connect through an injected wallet or WalletConnect; once connected, the address and a way out. */
 export function WalletButton() {
   const { address, isConnected, chainId, connector } = useAccount();
@@ -49,6 +76,7 @@ export function WalletButton() {
   const { disconnect } = useDisconnect();
   const [copied, setCopied] = useState(false);
   const chain = CHAINS.find((c) => c.id === chainId);
+  const live = Boolean(useChainClient());
 
   if (isConnected && address) {
     return (
@@ -89,6 +117,7 @@ export function WalletButton() {
                 Disconnect
               </Button>
             </div>
+            {live && <TestTokens address={address} />}
             <ExperimentalToggle />
           </div>
         )}

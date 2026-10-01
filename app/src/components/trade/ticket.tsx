@@ -6,6 +6,7 @@ import { MarginMeter } from '@/components/charts/margin-meter';
 import { ScenarioStrip } from '@/components/charts/scenario-strip';
 import { RefusalNotice } from '@/components/app/refusal-card';
 import { useNetworkStatus } from '@/components/app/network-guard';
+import { useLiveTx } from '@/components/app/live-tx';
 import { Button } from '@/components/ui/button';
 import { Chip } from '@/components/ui/chip';
 import { NumberField } from '@/components/ui/number-field';
@@ -97,6 +98,7 @@ function Section({ title, meta, children, className }: { title: string; meta?: R
 export function Ticket({ headingRef, ...p }: TicketProps) {
   const { toast } = useToast();
   const net = useNetworkStatus();
+  const live = useLiveTx();
   const { series, quote, now } = p;
   const refusal = quote?.refusal;
   const fit = useFit(p.args, Boolean(refusal));
@@ -143,7 +145,7 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
       ? `The ${p.vault.kind === 'coveredCall' ? 'covered-call' : 'put-write'} vault fills now at the ${p.side === 'buy' ? 'ask' : 'bid'}, ${fmtNumber(p.price ?? 0)}.`
       : p.demo
         ? `Best RFQ quote: the demo maker at mid, ${fmtNumber(p.price ?? 0)}.`
-        : 'Best signed quote from the RFQ relay.';
+        : `No RFQ maker relay is connected here: the what-if prices at the kernel mark, ${fmtNumber(p.price ?? 0)}, and the ticket can't be sent.`;
   const noVault = !p.vault;
   const signerNote = grant
     ? `${grant.label} may leave at most ${fmtNumber(grant.maxWorstLoss)} of worst-case loss (now ${fmtNumber(now?.im ?? grant.used)}) and pay at most ${fmtNumber(grant.maxPremiumPerTrade)} premium per trade.`
@@ -168,12 +170,28 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
       net.switchToTarget();
       return;
     }
-    toast({
-      tone: 'neutral',
-      title: net.status === 'disconnected' ? 'Connect a wallet to sign' : 'Signing is not wired yet',
-      description:
-        net.status === 'disconnected' ? 'Use Connect wallet in the top bar.' : 'The chain client lands with the SDK; the what-if above is live.',
-    });
+    if (net.status === 'disconnected') {
+      toast({ tone: 'neutral', title: 'Connect a wallet to sign', description: 'Use Connect wallet in the top bar.' });
+      return;
+    }
+    if (p.venue === 'rfq') {
+      toast({
+        tone: 'neutral',
+        title: 'No RFQ relay connected',
+        description: "An RFQ fill needs a maker's signed quote. The what-if above ran on chain; buy from the vault to trade here.",
+      });
+      return;
+    }
+    if (grant) {
+      toast({ tone: 'neutral', title: `${grant.label} signs with its own key`, description: 'Agents trade through the SDK or the MCP server. The owner wallet signs here.' });
+      return;
+    }
+    if (!quote) return;
+    const qty = Number(p.qty);
+    // a 1% band: the vault re-prices at the block the transaction lands in
+    void live.run(label, (c) =>
+      p.side === 'buy' ? c.buyFromVault(p.accountId, series.id, qty, quote.premium * 1.01) : c.sellToVault(p.accountId, series.id, qty, quote.premium * 0.99),
+    );
   };
 
   return (
@@ -191,7 +209,9 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
                 content={
                   quote.approx
                     ? 'Estimated with a float twin of the kernel. The chain re-checks the exact figures when you sign.'
-                    : 'Exact: computed by the bit-exact kernel reference.'
+                    : p.demo
+                      ? 'Exact: computed by the bit-exact kernel reference.'
+                      : 'Exact: Clearinghouse.marginAfter and the risk kernel on chain, plus a simulation of the transaction.'
                 }
               >
                 <button type="button" className="rounded-control" aria-label={quote.approx ? 'Estimate: how it is computed' : 'Exact: how it is computed'}>
@@ -351,6 +371,8 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
             size="lg"
             lamp
             disabled={!qtyOk || !quote || Boolean(refusal) || p.pending}
+            loading={live.busy}
+            loadingLabel="Signing"
             onClick={sign}
             className="w-full"
           >
@@ -363,7 +385,9 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
                 ? 'Refused before signing. Change the ticket and the check runs again.'
                 : p.demo
                 ? 'Demo mode: the ticket is checked, nothing is sent.'
-                : 'Your wallet signs; the Clearinghouse re-runs the same margin check on chain.'}
+                : p.venue === 'rfq'
+                  ? 'Checked on chain. An RFQ fill needs a signed maker quote, which this build has no relay for.'
+                  : 'Your wallet signs; the Clearinghouse re-runs the same margin check on chain.'}
           </p>
           <p className="text-t12 text-navy-200">Stock tokens are not available to US persons.</p>
         </div>

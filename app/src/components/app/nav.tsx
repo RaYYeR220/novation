@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/cn';
+import { useDataSource, withSource } from '@/lib/client/source';
 
 export const NAV = [
   { href: '/app/trade', label: 'Trade', blurb: 'Chain, ticket, what-if margin' },
@@ -20,6 +21,7 @@ export function useSection() {
 /** The five app sections. Vertical in the rail, a single scrolling row on smaller screens. */
 export function Nav({ orientation }: { orientation: 'vertical' | 'horizontal' }) {
   const current = useSection();
+  const [source] = useDataSource();
   const vertical = orientation === 'vertical';
   return (
     <nav aria-label="App sections" className={vertical ? '' : 'min-w-0'}>
@@ -29,7 +31,7 @@ export function Nav({ orientation }: { orientation: 'vertical' | 'horizontal' })
           return (
             <li key={n.href} className="shrink-0">
               <Link
-                href={n.href}
+                href={withSource(n.href, source)}
                 aria-current={on ? 'page' : undefined}
                 className={cn(
                   'group flex items-center rounded-control transition-colors duration-(--duration-fast)',

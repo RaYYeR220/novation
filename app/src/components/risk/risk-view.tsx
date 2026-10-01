@@ -25,6 +25,7 @@ import { cn } from '@/lib/cn';
 import { fmtDuration, fmtExpiry, fmtNumber, fmtPct, fmtQty } from '@/lib/format';
 import { fmtCloseEt, fmtEt } from '@/lib/nyse';
 import { RefusalFeed } from './refusal-feed';
+import { LIVE_CHAIN } from '@/lib/client/chain';
 
 const d = (h: HaltEpisode) => h.detail as Record<string, number>;
 
@@ -53,7 +54,7 @@ function haltText(h: HaltEpisode, f: FeedStatus): ReactNode {
   return h.reason;
 }
 
-function SessionRow({ f }: { f: FeedStatus }) {
+function SessionRow({ f, demo }: { f: FeedStatus; demo: boolean }) {
   const stale = f.halts.filter((h) => h.reason === 'stale');
   const other = f.halts.filter((h) => h.reason !== 'stale');
   const checks = [
@@ -64,10 +65,12 @@ function SessionRow({ f }: { f: FeedStatus }) {
     },
     { ok: !f.oraclePaused && !f.paused, text: `Token not paused; oraclePaused false (read ${fmtExpiry(f.historyTo)})` },
     {
-      ok: true,
-      text: f.lastMultiplierChange
-        ? `Multiplier ${fmtNumber(f.uiMultiplier, 6)}, last changed ${fmtEt(f.lastMultiplierChange)}; none scheduled`
-        : `Multiplier ${fmtNumber(f.uiMultiplier, 6)}, never changed; none scheduled`,
+      ok: demo || f.session !== 'HALTED',
+      text: !demo
+        ? `Multiplier ${fmtNumber(f.uiMultiplier, 6)}, read from the token${f.session === 'HALTED' ? '' : '; no change inside the halt window'}`
+        : f.lastMultiplierChange
+          ? `Multiplier ${fmtNumber(f.uiMultiplier, 6)}, last changed ${fmtEt(f.lastMultiplierChange)}; none scheduled`
+          : `Multiplier ${fmtNumber(f.uiMultiplier, 6)}, never changed; none scheduled`,
     },
   ];
   return (
@@ -105,8 +108,14 @@ function SessionRow({ f }: { f: FeedStatus }) {
       </ul>
       <div className="grid content-start gap-s3">
         <p className="text-t12 text-navy-200">
-          Halts in the replay, {fmtExpiry(f.historyFrom)} to {fmtExpiry(f.historyTo)}
+          {demo ? `Halts in the replay, ${fmtExpiry(f.historyFrom)} to ${fmtExpiry(f.historyTo)}` : `Round ${f.lastRound} on the feed, ${f.description}`}
         </p>
+        {!demo && (
+          <p className="text-t13 text-pretty text-navy-200">
+            No halt history: the hub decides halts on every read and keeps no log of them. The status on the left is read from the chain now;
+            past episodes need an indexer.
+          </p>
+        )}
         <ul className="grid gap-s3 text-t13">
           {other.map((h) => (
             <li key={`${h.reason}-${h.from}`} data-halt={h.reason} className="grid gap-0.5">
@@ -302,14 +311,25 @@ export function RiskView() {
           title="Sessions and halts"
           dek="Each underlying trades in the NYSE session it is in, unless a check fails and the hub reports it halted. Halted means risk-reducing trades only, no vault exits, no auctions."
           aside={
-            f0 && (
+            f0 &&
+            (demo ? (
               <span className="tabular-nums">
                 Halts replayed over the real feeds, {fmtExpiry(f0.historyFrom)} to {fmtExpiry(f0.historyTo)}
               </span>
-            )
+            ) : (
+              <span>Read from MarketDataHub at the latest block</span>
+            ))
           }
         />
-        {feeds.isPending ? <Skeleton className="h-64 w-full" /> : <ul aria-label="Underlyings">{feeds.data?.map((f) => <SessionRow key={f.symbol} f={f} />)}</ul>}
+        {feeds.isPending ? (
+          <Skeleton className="h-64 w-full" />
+        ) : (
+          <ul aria-label="Underlyings">
+            {feeds.data?.map((f) => (
+              <SessionRow key={f.symbol} f={f} demo={demo} />
+            ))}
+          </ul>
+        )}
       </section>
 
       <section aria-labelledby="backstops" className="grid gap-s5">
@@ -324,13 +344,23 @@ export function RiskView() {
             k="Bridged, not yet repaid"
             v={insurance.data ? fmtNumber(insurance.data.outstanding) : '—'}
             unit="USDG"
-            note={`${insurance.data?.events.filter((e) => e.kind === 'cover').length ?? 0} covers so far, all repaid by collateral sales.`}
+            note={
+              demo
+                ? `${insurance.data?.events.filter((e) => e.kind === 'cover').length ?? 0} covers so far, all repaid by collateral sales.`
+                : `${insurance.data?.events.filter((e) => e.kind === 'cover').length ?? 0} covers so far.`
+            }
           />
           <Figure
             k="Socialized loss"
             v={insurance.data ? fmtNumber(insurance.data.socialized) : '—'}
             unit="USDG"
-            note={insurance.data ? `Cash index ${insurance.data.cashIndex.toFixed(6)}: no bad debt has reached depositors.` : undefined}
+            note={
+              insurance.data
+                ? insurance.data.cashIndex >= 1
+                  ? `Cash index ${insurance.data.cashIndex.toFixed(6)}: no bad debt has reached depositors.`
+                  : `Cash index ${insurance.data.cashIndex.toFixed(6)}: socialized losses have scaled every account's cash by that factor.`
+                : undefined
+            }
           />
           <Figure
             k="Short open interest"
@@ -421,13 +451,17 @@ export function RiskView() {
         <SectionHead
           id="refusals"
           title="Refusals"
-          dek="Every trade the clearinghouse turned down, with the rule it broke and the numbers that crossed."
+          dek={
+            demo
+              ? 'Every trade the clearinghouse turned down, with the rule it broke and the numbers that crossed.'
+              : 'Refused transactions from the end-to-end proof on this deployment, decoded from the chain. Reverts emit no events, so a feed of every refusal needs an indexer.'
+          }
           aside={<span className="tabular-nums">{refusals.data?.length ?? 0} recent</span>}
         />
         {refusals.isPending || asOf === undefined ? (
           <Skeleton className="h-64 w-full" />
         ) : (
-          <RefusalFeed items={refusals.data ?? []} agents={agents.data ?? []} asOf={asOf} demo={demo} />
+          <RefusalFeed items={refusals.data ?? []} agents={agents.data ?? []} asOf={asOf} demo={demo} chainId={demo ? undefined : LIVE_CHAIN.id} />
         )}
       </section>
     </Page>

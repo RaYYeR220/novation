@@ -7,7 +7,8 @@ import type { Series } from '@/lib/client/types';
 import { cn } from '@/lib/cn';
 import { fmtNumber, fmtSeries, fmtStrike } from '@/lib/format';
 
-export type ChainSeries = Series & { bid: number; ask: number; delta: number; iv: number };
+/** `bid`/`ask` are NaN where nobody quotes that side (live mode: the vault doesn't sell or buy back that series). */
+export type ChainSeries = Series & { bid: number; ask: number; delta: number; iv: number; mark?: number };
 export type Side = 'buy' | 'sell';
 
 interface Row {
@@ -48,12 +49,17 @@ function Quote({
   onPick: OptionsChainProps['onPick'];
 }) {
   const price = side === 'sell' ? s.bid : s.ask;
+  const quoted = Number.isFinite(price);
   return (
     <button
       type="button"
       tabIndex={-1}
       onClick={() => onPick(s, side)}
-      aria-label={`${side === 'buy' ? 'Buy' : 'Sell'} ${fmtSeries(s)} at ${side === 'buy' ? 'ask' : 'bid'} ${fmtNumber(price)}`}
+      aria-label={
+        quoted
+          ? `${side === 'buy' ? 'Buy' : 'Sell'} ${fmtSeries(s)} at ${side === 'buy' ? 'ask' : 'bid'} ${fmtNumber(price)}`
+          : `${side === 'buy' ? 'Buy' : 'Sell'} ${fmtSeries(s)}: no ${side === 'buy' ? 'ask' : 'bid'} quoted`
+      }
       aria-pressed={selected}
       data-quote={side}
       className={cn(
@@ -62,7 +68,7 @@ function Quote({
         selected ? 'bg-navy-700 text-navy-50 shadow-[inset_0_0_0_1px_var(--color-cyan)]' : itm ? 'text-navy-50' : 'text-navy-200',
       )}
     >
-      {fmtNumber(price)}
+      {quoted ? fmtNumber(price) : '—'}
     </button>
   );
 }

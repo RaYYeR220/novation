@@ -6,6 +6,7 @@ import { Dialog } from '@/components/ui/dialog';
 import { NumberField } from '@/components/ui/number-field';
 import { Segment, SegmentedControl } from '@/components/ui/segmented-control';
 import { useToast } from '@/components/ui/toast';
+import { useLiveTx } from '@/components/app/live-tx';
 import type { VaultDetail, VaultHolding } from '@/lib/client/types';
 import { fmtDuration, fmtNumber, fmtQty } from '@/lib/format';
 import { fmtCloseEt, fmtEt } from '@/lib/nyse';
@@ -39,9 +40,18 @@ export function DepositDialog({ vault, open, onOpenChange, asOf, demo, balance }
   const notLive = !vault.live;
   const error = notLive ? 'The vault is not live: deposits are closed until its underlying trades normally again.' : touched ? parsed.error : undefined;
   const shares = parsed.error ? 0 : parsed.value / vault.navPerShare;
-  const submit = () => {
+  const live = useLiveTx();
+  const submit = async () => {
     setTouched(true);
     if (parsed.error || notLive) return;
+    if (!demo) {
+      const r = await live.run(`Deposit ${fmtQty(parsed.value)} ${unit} into ${vault.symbol}`, (c) => c.vaultDeposit(vault.address, parsed.value));
+      if (!r.ok) return;
+      onOpenChange(false);
+      setRaw('');
+      setTouched(false);
+      return;
+    }
     toast({
       tone: 'neutral',
       title: demo ? 'Checked, not sent' : 'Deposit sent',
@@ -67,7 +77,7 @@ export function DepositDialog({ vault, open, onOpenChange, asOf, demo, balance }
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button variant="primary" lamp onClick={submit} disabled={notLive}>
+          <Button variant="primary" lamp onClick={() => void submit()} disabled={notLive} loading={live.busy} loadingLabel="Depositing">
             {parsed.error ? 'Deposit' : `Deposit ${fmtQty(parsed.value)} ${unit}`}
           </Button>
         </>
@@ -77,7 +87,7 @@ export function DepositDialog({ vault, open, onOpenChange, asOf, demo, balance }
         noValidate
         onSubmit={(e) => {
           e.preventDefault();
-          submit();
+          void submit();
         }}
         className="grid gap-s4"
       >
@@ -146,9 +156,22 @@ export function WithdrawDialog({ vault, open, onOpenChange, asOf, demo, holding 
   const blocked = Boolean(gate) && !(mode === 'queue' && !vault.live && !cooling && shares > 0);
   const error = gate ?? (touched ? parsed.error : undefined);
   const burn = parsed.error ? 0 : parsed.value / vault.navPerShare;
-  const submit = () => {
+  const live = useLiveTx();
+  const submit = async () => {
     setTouched(true);
     if (blocked || parsed.error) return;
+    if (!demo) {
+      const amount = parsed.value;
+      const r = await live.run(
+        mode === 'now' ? `Withdraw ${fmtQty(amount)} ${unit} from ${vault.symbol}` : `Queue ${fmtNumber(burn, 4)} ${vault.symbol} for the next roll`,
+        (c) => (mode === 'now' ? c.vaultWithdraw(vault.address, amount) : c.requestRedeem(vault.address, amount)),
+      );
+      if (!r.ok) return;
+      onOpenChange(false);
+      setRaw('');
+      setTouched(false);
+      return;
+    }
     toast({
       tone: 'neutral',
       title: demo ? 'Checked, not sent' : mode === 'now' ? 'Withdrawal sent' : 'Redemption requested',
@@ -175,7 +198,7 @@ export function WithdrawDialog({ vault, open, onOpenChange, asOf, demo, holding 
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button variant="primary" lamp onClick={submit} disabled={blocked}>
+          <Button variant="primary" lamp onClick={() => void submit()} disabled={blocked} loading={live.busy} loadingLabel="Sending">
             {mode === 'now' ? 'Withdraw' : 'Request redemption'}
           </Button>
         </>
@@ -185,7 +208,7 @@ export function WithdrawDialog({ vault, open, onOpenChange, asOf, demo, holding 
         noValidate
         onSubmit={(e) => {
           e.preventDefault();
-          submit();
+          void submit();
         }}
         className="grid gap-s4"
       >
