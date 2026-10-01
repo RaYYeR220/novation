@@ -1,0 +1,36 @@
+{
+ "source": "docs/gas.md (RH testnet, execution gas of one margin() call, gasleft() probe)",
+ "capNote": "Hand-optimized Solidity reaches the 32M per-tx gas limit at about 345 positions for one evaluation.",
+ "rows": [
+  {
+   "positions": 1,
+   "solidityOptimized": 109700,
+   "stylus": 42597
+  },
+  {
+   "positions": 8,
+   "solidityOptimized": 745420,
+   "stylus": 76352
+  },
+  {
+   "positions": 32,
+   "solidityOptimized": 2922648,
+   "stylus": 199415
+  },
+  {
+   "positions": 64,
+   "solidityOptimized": 5828423,
+   "stylus": 351072
+  },
+  {
+   "positions": 128,
+   "solidityOptimized": 11646851,
+   "stylus": 685075
+  },
+  {
+   "positions": 256,
+   "solidityOptimized": 23269339,
+   "stylus": 1323108
+  }
+ ]
+}

@@ -1,0 +1,9 @@
+Zodiak and Switzer are distributed by Fontshare (Indian Type Foundry) under the
+Fontshare End User License Agreement (FFL), which permits free personal and
+commercial use, including self-hosting as web fonts.
+
+  Zodiak  400, 700   https://www.fontshare.com/fonts/zodiak
+  Switzer 400, 500, 600   https://www.fontshare.com/fonts/switzer
+
+Full licence text: https://www.fontshare.com/licenses/ffl (Fontshare EULA).
+The files in this directory are the unmodified woff2 files served by the Fontshare CDN.

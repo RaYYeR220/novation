@@ -1,0 +1,96 @@
+/* E3 Clearing Crown tokens. Mapped into Tailwind v4 through @theme. */
+@theme {
+  /* navy scale */
+  --color-navy-950: #030e29;
+  --color-navy-900: #05163d;
+  --color-navy-800: #0a2257;
+  --color-navy-700: #12306f;
+  --color-navy-600: #1b418c;
+  --color-navy-400: #4a6fb5;
+  --color-navy-200: #a9bce0;
+  --color-navy-50: #eef3fb;
+  /* the top of the scale: primary fill on hover only */
+  --color-navy-0: #ffffff;
+  /* interactive + IM datum only */
+  --color-cyan: #10e1ff;
+  /* data ramp; lime only for gains and data */
+  --color-loss-3: #ff4400;
+  --color-loss-2: #ff7a3d;
+  --color-loss-1: #ffb68a;
+  --color-zero: #9fb3d9;
+  --color-gain-1: #ddefae;
+  --color-gain-2: #c7e36c;
+  --color-gain-3: #9dc93b;
+
+  /* families */
+  --font-display: var(--font-zodiak), Georgia, serif;
+  --font-text: var(--font-switzer), system-ui, sans-serif;
+
+  /* type scale: display (Zodiak, -0.02em) */
+  --text-display-1: 88px;
+  --text-display-1--line-height: 1;
+  --text-display-2: 64px;
+  --text-display-2--line-height: 1.02;
+  --text-display-3: 48px;
+  --text-display-3--line-height: 1.04;
+  --text-display-4: 36px;
+  --text-display-4--line-height: 1.08;
+  --tracking-display: -0.02em;
+  /* type scale: text (Switzer) */
+  --text-t20: 20px;
+  --text-t20--line-height: 1.5;
+  --text-t17: 17px;
+  --text-t17--line-height: 1.55;
+  --text-t15: 15px;
+  --text-t15--line-height: 1.5;
+  --text-t13: 13px;
+  --text-t13--line-height: 1.45;
+  --text-t12: 12px;
+  --text-t12--line-height: 1.4;
+
+  /* spacing: 4 8 12 16 24 32 48 64 96 128 */
+  --spacing-s1: 4px;
+  --spacing-s2: 8px;
+  --spacing-s3: 12px;
+  --spacing-s4: 16px;
+  --spacing-s5: 24px;
+  --spacing-s6: 32px;
+  --spacing-s7: 48px;
+  --spacing-s8: 64px;
+  --spacing-s9: 96px;
+  --spacing-s10: 128px;
+
+  /* radius: 4 on controls, circles for nodes */
+  --radius-control: 4px;
+  --radius-round: 999px;
+
+  /* motion */
+  --ease-out: cubic-bezier(0.2, 0.7, 0.1, 1);
+  --duration-fast: 160ms;
+  --duration-base: 320ms;
+  --duration-slow: 900ms;
+}
+
+:root {
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+  --focus-ring-color: var(--color-cyan);
+  --page-max: 1280px;
+}
+
+/* Layered so component utilities can move or inset the ring; the colour stays cyan. */
+@layer base {
+  :focus-visible,
+  [data-force~='focus'] {
+    outline: var(--focus-ring-width) solid var(--focus-ring-color);
+    outline-offset: var(--focus-ring-offset);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 0ms;
+    --duration-base: 0ms;
+    --duration-slow: 0ms;
+  }
+}
