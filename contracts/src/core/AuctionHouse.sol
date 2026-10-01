@@ -20,8 +20,13 @@ import {Session, WAD} from "../types/Types.sol";
 /// InsuranceFund; if not, the fund pays the bidder to take it. The bidder must meet initial margin
 /// afterwards, and the account must not be left riskier (initial margin may not rise). The
 /// auction ends once the account is healthy again or has no positions left. A bid moves its
-/// fraction of at most the first 128 positions (storage order) so that it fits a block on a full
-/// 256-position book; the difference to the fraction is settled at mark like any lot rounding.
+/// fraction of every position.
+///
+/// Gas: a 50% bid on an account at the 256-position cap (bidder receiving all 256) measures
+/// 23,221,375 gas outside the kernel: transferFraction 16.50M, three margin procedures 4.13M
+/// (without the kernel), the live-book check 2.19M, the rest 0.40M. Its three kernel calls cost
+/// about 1.66M each on the Stylus kernel (256 positions, measured on the Robinhood Chain
+/// testnet), so the whole bid is about 28.2M gas, under Arbitrum's 32M per-transaction limit.
 ///
 /// Deficit sale. The clearinghouse starts one when settlement leaves an account owing an expiry
 /// pool or the fund. Bidders buy the account's stock collateral at spot less the discount; the

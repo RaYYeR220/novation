@@ -728,8 +728,8 @@ contract AuctionHouseTest is Fixture {
     }
 
     /// Gas of a 50% bid on an account at the 256-position cap, end to end (gate, book check, three
-    /// margin calls, transferFraction, payment, penalty). The kernel here is KernelReference; see
-    /// the report for the split against the on-chain Stylus kernel.
+    /// margin calls, transferFraction, payment, penalty). The kernel here is KernelReference; the
+    /// split against the on-chain Stylus kernel is in the AuctionHouse notes.
     function test_gas_liquidation256() public {
         uint256 a = _newAccount(alice);
         uint256 b = _fund(bob, 100_000 * USDG, 0);
@@ -760,8 +760,97 @@ contract AuctionHouseTest is Fixture {
         ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
         uint256 used = g0 - gasleft();
         console2.log("bidLiquidation(256 positions, f=0.5) gas", used);
-        assertEq(ch.positionsOf(c).length, 128); // the first 128 in storage order
+        assertEq(ch.positionsOf(c).length, 256); // every position moves
         assertEq(ch.positionsOf(a).length, 256);
+    }
+
+    /// The owner can't arrange its book to block bids: 128 tiny long puts opened first, the real
+    /// short last. A bid moves its fraction of every position, so it takes the short too, and
+    /// once the account is insolvent a full takeover always goes through.
+    function test_hedgesFirstCantBlockLiquidation() public {
+        uint256 a = _newAccount(alice);
+        uint256 b = _fund(bob, 100_000 * USDG, 0);
+        uint64 ex = e1;
+        uint256 n;
+        for (uint256 w; w < 6 && n < 128; ++w) {
+            for (uint256 k = 90; k <= 270 && n < 128; k += 5) {
+                uint32 sid = _list(address(nvda), ex, uint128(k * 1e18), false);
+                if (sid == put170) continue;
+                _cheatMovePosition(a, sid, 0.01e18);
+                _cheatMovePosition(b, sid, -0.01e18);
+                ++n;
+            }
+            ex = uint64(NyseCalendar.nextWeeklyExpiry(ex + 1));
+        }
+        _cheatMovePosition(a, put170, -10e18);
+        _cheatMovePosition(b, put170, 10e18);
+        assertEq(ch.positionsOf(a).length, 129);
+        _setPrice(address(nvda), 150e18);
+        _fundToFractionOfMm(a);
+        AccountState memory st = ch.accountState(a);
+        assertTrue(st.liquidatable);
+        uint256 c = _fund(carol, 100_000 * USDG, 0);
+        ah.startLiquidation(a);
+        uint256 snap = vm.snapshotState();
+
+        vm.prank(carol);
+        ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
+        _assertPos(a, put170, -5e18);
+        _assertPos(c, put170, -5e18);
+        assertLt(ch.accountState(a).im, st.im);
+
+        vm.revertToState(snap);
+        _setPrice(address(nvda), 60e18);
+        assertLt(ch.accountState(a).equity, 0);
+        vm.prank(carol);
+        ah.bidLiquidation(a, 1e18, c, type(int256).max);
+        assertEq(ch.positionsOf(a).length, 0);
+        assertEq(ch.cashOf(a), 0);
+    }
+
+    /// 128 far out-of-the-money long SPY calls first, then a real NVDA short: one honest 50% bid
+    /// costs the owner the discount and the penalty on half its equity, once, and heals it.
+    function test_singleBidHealsMixedBook() public {
+        uint256 a = _newAccount(alice);
+        uint256 b = _fund(bob, 100_000 * USDG, 0);
+        uint64 ex = e1;
+        uint256 n;
+        for (uint256 w; w < 6 && n < 128; ++w) {
+            for (uint256 k = 795; k <= 900 && n < 128; k += 5) {
+                uint32 sid = _list(address(spy), ex, uint128(k * 1e18), true);
+                _cheatMovePosition(a, sid, 1e18);
+                _cheatMovePosition(b, sid, -1e18);
+                ++n;
+            }
+            ex = uint64(NyseCalendar.nextWeeklyExpiry(ex + 1));
+        }
+        _cheatMovePosition(a, put170, -50e18);
+        _cheatMovePosition(b, put170, 50e18);
+        _setPrice(address(nvda), 150e18);
+        _fundToFractionOfMm(a);
+        uint256 c = _fund(carol, 100_000 * USDG, 0);
+        ah.startLiquidation(a);
+        vm.warp(vm.getBlockTimestamp() + 900); // 7% off
+
+        AccountState memory st = ch.accountState(a);
+        assertTrue(st.liquidatable);
+        uint256 half = _mw(0.5e18, uint256(st.equity));
+        vm.prank(carol);
+        ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
+        AccountState memory sa = ch.accountState(a);
+        // the owner pays 7% + 1% on half its equity (the bid's price is rounded up: <= 2 wei)
+        assertApproxEqAbs(st.equity - sa.equity, int256(_mw(half, 0.07e18) + _mw(0.01e18, half)), 1e6);
+        _assertPos(a, put170, -25e18);
+        assertTrue(sa.healthy);
+        assertEq(ah.liquidationStartedAt(a), 0);
+    }
+
+    /// @dev Deposits cash so that the account's equity is about 80% of its maintenance margin.
+    function _fundToFractionOfMm(uint256 a) internal {
+        AccountState memory st = ch.accountState(a);
+        int256 need = int256(st.mm) * 8 / 10 - st.equity;
+        assertGt(need, 0);
+        _deposit(alice, a, address(usdg), uint256(need) / USDG_SCALE + 1);
     }
 
     // ================================================================ hooks
