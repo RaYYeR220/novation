@@ -129,7 +129,8 @@ export function TradeView() {
   const allSeries = chain.data?.series;
   const listed = useMemo(() => (allSeries ?? []).filter((s) => s.expiry === expiry), [allSeries, expiry]);
   const series = allSeries?.find((s) => s.id === pick);
-  const grants = agents.data ?? [];
+  // Only a grant that hasn't expired can sign; an expired one reverts NotAuthorized.
+  const grants = (agents.data ?? []).filter((g) => asOf === undefined || g.expiresAt > asOf);
   const grant = grants.find((g) => g.agent === signerPick);
   // An agent can only sign on the underlyings its grant allows; otherwise the owner signs.
   const signer = grant && series && !grant.allowed.includes(series.underlying) ? OWNER : grant ? signerPick : OWNER;

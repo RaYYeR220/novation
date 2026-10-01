@@ -12,7 +12,7 @@
    "after": {
     "cash": 3934.818177,
     "mtm": 6412.675491,
-    "settledValue": 3934.818177,
+    "settledValue": 0.0,
     "deficit": 0.0,
     "equity": 10347.493668,
     "im": 1762.715506,

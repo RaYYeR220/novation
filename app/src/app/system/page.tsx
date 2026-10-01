@@ -46,7 +46,10 @@ const after = ticket.quote.after;
 const imWeekend = account7.summary.im_weekend;
 const worst = worstCell(account7.grids.REGULAR.cells);
 const hedgeBot = agents['7'][0]!;
-const [budgetRefusal, marginRefusal, haltRefusal] = refusals as (Refusal & { txHash?: string })[];
+const refusalList = refusals as (Refusal & { txHash?: string })[];
+const budgetRefusal = refusalList.find((r) => r.code === 'AgentRiskBudgetExceeded');
+const marginRefusal = refusalList.find((r) => r.code === 'InsufficientMargin');
+const haltRefusal = refusalList.find((r) => r.code === 'OpeningNotAllowed');
 const ticketRefusal = ticket.quote.refusal;
 
 /* ---------- page furniture ---------- */
@@ -810,7 +813,7 @@ export default function SystemPage() {
                 reason="Opening trades are closed while the session is halted."
                 context={
                   <span className="inline-flex flex-wrap items-center gap-s2">
-                    Account 31 <Chip session="HALTED" size="sm" />
+                    Account 1 <Chip session="HALTED" size="sm" />
                   </span>
                 }
                 hint="Closing trades still clear. Opening resumes when the session reopens."

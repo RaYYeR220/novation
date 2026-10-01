@@ -22,6 +22,29 @@
     },
     "txHash": "0x7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c"
    }
+  },
+  {
+   "agent": "0xd3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3",
+   "label": "mcp-desk",
+   "maxWorstLoss": 1000.0,
+   "maxPremiumPerTrade": 250.0,
+   "allowed": [
+    "NVDA",
+    "TSLA"
+   ],
+   "expiresAt": 1791302400,
+   "used": 596.506189
+  },
+  {
+   "agent": "0xe1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1",
+   "label": "rebalancer",
+   "maxWorstLoss": 800.0,
+   "maxPremiumPerTrade": 150.0,
+   "allowed": [
+    "SPY"
+   ],
+   "expiresAt": 1789920000,
+   "used": 596.506189
   }
  ]
 }

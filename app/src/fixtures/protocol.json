@@ -1,8 +1,8 @@
 {
- "openInterestUsd": 1843200,
- "vaultTvlUsd": 1330000,
- "insuranceFundUsd": 25000,
- "premium7dUsd": 18450,
- "liquidations7d": 2,
- "socializedUsd": 0
+ "openInterestUsd": 1440900.91,
+ "vaultTvlUsd": 1344231.92,
+ "insuranceFundUsd": 25000.0,
+ "premium7dUsd": 5661.7,
+ "liquidations7d": 1,
+ "socializedUsd": 0.0
 }

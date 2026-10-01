@@ -140,3 +140,16 @@ export function fmtCloseEt(ts: number): string {
   const m = Math.floor((sec % 3600) / 60);
   return `${etFmt.format(new Date(day * DAY * 1000))}, ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')} ET`;
 }
+
+/** "Fri, Sep 25, 16:04 ET": any instant in New York time, from the calendar's own DST rule. */
+export function fmtEt(ts: number, opts: { weekday?: boolean; seconds?: boolean } = {}): string {
+  const { day, sec } = etParts(ts);
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.floor(sec % 60);
+  const date = (opts.weekday === false ? etDateFmt : etFmt).format(new Date(day * DAY * 1000));
+  const clock = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}${opts.seconds ? `:${String(s).padStart(2, '0')}` : ''}`;
+  return `${date}, ${clock} ET`;
+}
+
+const etDateFmt = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });

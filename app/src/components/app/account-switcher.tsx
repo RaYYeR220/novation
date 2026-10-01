@@ -34,7 +34,7 @@ function AccountOption({ id, selected, onPick }: { id: number; selected: boolean
   );
 }
 
-/** Which subaccount the app acts for. The demo has two: the fixture book and the RFQ maker. */
+/** Which subaccount the app acts for. The demo has three: the fixture book, the RFQ maker and the short book under liquidation. */
 export function AccountSwitcher({ compact = false }: { compact?: boolean }) {
   const { id, setId } = useAccountId();
   const demo = useIsDemo();

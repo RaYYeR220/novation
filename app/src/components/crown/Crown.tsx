@@ -76,6 +76,8 @@ export interface CrownProps {
   quality?: 'auto' | 'low';
   /** Lab only: render continuously and record frame timings. */
   measure?: boolean;
+  /** The pre-rendered stills show account 7's book; pass false for any other book so no other shape stands in for it. */
+  poster?: boolean;
 }
 
 type Phase = 'poster' | 'offer' | 'static' | 'loading' | 'live';
@@ -124,6 +126,7 @@ export function Crown({
   className,
   quality = 'auto',
   measure = false,
+  poster = true,
 }: CrownProps) {
   const labels = { ...DEFAULT_LABELS, ...labelsIn };
   const cells = grid.cells;
@@ -433,7 +436,7 @@ export function Crown({
         onKeyDown={onKeyDown}
         onBlur={onBlur}
       >
-        <CrownPoster session={session} priority={variant === 'hero'} className={styles.poster} gone={live} />
+        {poster ? <CrownPoster session={session} priority={variant === 'hero'} className={styles.poster} gone={live} /> : null}
         {mountScene ? (
           <div className={styles.canvas} data-ready={live}>
             <CrownScene rigRef={rigRef} measure={measure} low={quality === 'low'} onReady={onReady} onLost={onLost} />

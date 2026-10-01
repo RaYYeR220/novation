@@ -1,8 +1,11 @@
 import type { Metadata } from 'next';
-import { SectionPending } from '@/components/app/section-pending';
+import { PortfolioView } from '@/components/portfolio/portfolio-view';
 
-export const metadata: Metadata = { title: 'Portfolio' };
+export const metadata: Metadata = {
+  title: 'Portfolio',
+  description: 'Equity against margin, the scenario crown by session, positions, and where each expiry stands.',
+};
 
 export default function PortfolioPage() {
-  return <SectionPending title="Portfolio" body="The full margin view, the scenario crown and settlement status arrive with the next build." />;
+  return <PortfolioView />;
 }

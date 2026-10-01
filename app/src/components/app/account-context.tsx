@@ -6,6 +6,7 @@ import { createContext, use, useMemo, useState, type ReactNode } from 'react';
 export const DEMO_ACCOUNTS = [
   { id: 7, label: 'Demo book' },
   { id: 1, label: 'Demo maker' },
+  { id: 12, label: 'Demo short book' },
 ] as const;
 
 interface AccountContextValue {

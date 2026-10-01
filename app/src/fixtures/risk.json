@@ -1,0 +1,994 @@
+{
+ "feeds": [
+  {
+   "symbol": "NVDA",
+   "proxy": "0x379EC4f7C378F34a1B47E4F3cbeBCbAC3E8E9F15",
+   "description": "RHNVDA / USD",
+   "session": "REGULAR",
+   "spot": 225.57,
+   "lastRound": 1100,
+   "band": [
+    20.0,
+    2000.0
+   ],
+   "staleLimits": {
+    "REGULAR": 93600,
+    "EXTENDED": 93600,
+    "CLOSED": 345600
+   },
+   "haltWindow": 86400,
+   "uiMultiplier": 1.0007751591646306,
+   "lastMultiplierChange": 1788998430,
+   "oraclePaused": false,
+   "paused": false,
+   "corporateAction": {
+    "kind": "Cash dividend",
+    "amount": 0.25,
+    "status": "In progress",
+    "processDate": "2026-10-01"
+   },
+   "halts": [
+    {
+     "reason": "implausible",
+     "from": 1782086443,
+     "to": 1782222749,
+     "detail": {
+      "firstRound": 1,
+      "lastRound": 24,
+      "rounds": 24,
+      "price": 21316500000.0,
+      "band": [
+       20.0,
+       2000.0
+      ],
+      "resumedRound": 25
+     },
+     "symbol": "NVDA"
+    },
+    {
+     "reason": "stale",
+     "from": 1782691200,
+     "to": 1782691269,
+     "detail": {
+      "lastRound": 94,
+      "lastAt": 1782504117,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 95
+     },
+     "symbol": "NVDA"
+    },
+    {
+     "reason": "stale",
+     "from": 1783296000,
+     "to": 1783296042,
+     "detail": {
+      "lastRound": 183,
+      "lastAt": 1783022107,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 184
+     },
+     "symbol": "NVDA"
+    },
+    {
+     "reason": "stale",
+     "from": 1783900800,
+     "to": 1783900825,
+     "detail": {
+      "lastRound": 274,
+      "lastAt": 1783700623,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 275
+     },
+     "symbol": "NVDA"
+    },
+    {
+     "reason": "stale",
+     "from": 1784505600,
+     "to": 1784505628,
+     "detail": {
+      "lastRound": 378,
+      "lastAt": 1784316512,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 379
+     },
+     "symbol": "NVDA"
+    },
+    {
+     "reason": "stale",
+     "from": 1785110400,
+     "to": 1785110448,
+     "detail": {
+      "lastRound": 460,
+      "lastAt": 1784923036,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 461
+     },
+     "symbol": "NVDA"
+    },
+    {
+     "reason": "stale",
+     "from": 1785715200,
+     "to": 1785715222,
+     "detail": {
+      "lastRound": 605,
+      "lastAt": 1785534812,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 606
+     },
+     "symbol": "NVDA"
+    },
+    {
+     "reason": "stale",
+     "from": 1786320000,
+     "to": 1786320031,
+     "detail": {
+      "lastRound": 703,
+      "lastAt": 1786132537,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 704
+     },
+     "symbol": "NVDA"
+    },
+    {
+     "reason": "stale",
+     "from": 1786924800,
+     "to": 1786924822,
+     "detail": {
+      "lastRound": 751,
+      "lastAt": 1786721049,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 752
+     },
+     "symbol": "NVDA"
+    },
+    {
+     "reason": "stale",
+     "from": 1787529600,
+     "to": 1787529639,
+     "detail": {
+      "lastRound": 806,
+      "lastAt": 1787342266,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 807
+     },
+     "symbol": "NVDA"
+    },
+    {
+     "reason": "stale",
+     "from": 1788134400,
+     "to": 1788134454,
+     "detail": {
+      "lastRound": 930,
+      "lastAt": 1787946989,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 931
+     },
+     "symbol": "NVDA"
+    },
+    {
+     "reason": "stale",
+     "from": 1788825600,
+     "to": 1788825654,
+     "detail": {
+      "lastRound": 994,
+      "lastAt": 1788543984,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 995
+     },
+     "symbol": "NVDA"
+    },
+    {
+     "reason": "multiplier",
+     "from": 1788912030,
+     "to": 1789002030,
+     "detail": {
+      "effectiveAt": 1788998430,
+      "uiMultiplier": 1.0007751591646306,
+      "haltWindow": 86400
+     },
+     "symbol": "NVDA"
+    },
+    {
+     "reason": "stale",
+     "from": 1789344000,
+     "to": 1789344029,
+     "detail": {
+      "lastRound": 1025,
+      "lastAt": 1789157023,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 1026
+     },
+     "symbol": "NVDA"
+    },
+    {
+     "reason": "stale",
+     "from": 1789948800,
+     "to": 1789948820,
+     "detail": {
+      "lastRound": 1061,
+      "lastAt": 1789761332,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 1062
+     },
+     "symbol": "NVDA"
+    }
+   ],
+   "historyFrom": 1782086443,
+   "historyTo": 1790332200,
+   "rounds": 1100
+  },
+  {
+   "symbol": "TSLA",
+   "proxy": "0x4A1166a659A55625345e9515b32adECea5547C38",
+   "description": "RHTSLA / USD",
+   "session": "REGULAR",
+   "spot": 380.245,
+   "lastRound": 1337,
+   "band": [
+    30.0,
+    3000.0
+   ],
+   "staleLimits": {
+    "REGULAR": 93600,
+    "EXTENDED": 93600,
+    "CLOSED": 345600
+   },
+   "haltWindow": 86400,
+   "uiMultiplier": 1.0,
+   "lastMultiplierChange": null,
+   "oraclePaused": false,
+   "paused": false,
+   "corporateAction": null,
+   "halts": [
+    {
+     "reason": "implausible",
+     "from": 1782086444,
+     "to": 1782222736,
+     "detail": {
+      "firstRound": 1,
+      "lastRound": 37,
+      "rounds": 37,
+      "price": 41252000000.0,
+      "band": [
+       30.0,
+       3000.0
+      ],
+      "resumedRound": 38
+     },
+     "symbol": "TSLA"
+    },
+    {
+     "reason": "stale",
+     "from": 1782691200,
+     "to": 1782691285,
+     "detail": {
+      "lastRound": 122,
+      "lastAt": 1782504155,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 123
+     },
+     "symbol": "TSLA"
+    },
+    {
+     "reason": "stale",
+     "from": 1783296000,
+     "to": 1783296041,
+     "detail": {
+      "lastRound": 221,
+      "lastAt": 1783022135,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 222
+     },
+     "symbol": "TSLA"
+    },
+    {
+     "reason": "stale",
+     "from": 1783900800,
+     "to": 1783900825,
+     "detail": {
+      "lastRound": 314,
+      "lastAt": 1783713215,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 315
+     },
+     "symbol": "TSLA"
+    },
+    {
+     "reason": "stale",
+     "from": 1784505600,
+     "to": 1784505621,
+     "detail": {
+      "lastRound": 398,
+      "lastAt": 1784312665,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 399
+     },
+     "symbol": "TSLA"
+    },
+    {
+     "reason": "stale",
+     "from": 1785110400,
+     "to": 1785110448,
+     "detail": {
+      "lastRound": 524,
+      "lastAt": 1784922976,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 525
+     },
+     "symbol": "TSLA"
+    },
+    {
+     "reason": "stale",
+     "from": 1785715200,
+     "to": 1785715247,
+     "detail": {
+      "lastRound": 689,
+      "lastAt": 1785531647,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 690
+     },
+     "symbol": "TSLA"
+    },
+    {
+     "reason": "stale",
+     "from": 1786320000,
+     "to": 1786320020,
+     "detail": {
+      "lastRound": 769,
+      "lastAt": 1786129584,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 770
+     },
+     "symbol": "TSLA"
+    },
+    {
+     "reason": "stale",
+     "from": 1786924800,
+     "to": 1786924854,
+     "detail": {
+      "lastRound": 839,
+      "lastAt": 1786731562,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 840
+     },
+     "symbol": "TSLA"
+    },
+    {
+     "reason": "stale",
+     "from": 1787529600,
+     "to": 1787529642,
+     "detail": {
+      "lastRound": 942,
+      "lastAt": 1787342179,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 943
+     },
+     "symbol": "TSLA"
+    },
+    {
+     "reason": "stale",
+     "from": 1788134400,
+     "to": 1788134444,
+     "detail": {
+      "lastRound": 1013,
+      "lastAt": 1787946889,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 1014
+     },
+     "symbol": "TSLA"
+    },
+    {
+     "reason": "stale",
+     "from": 1788825600,
+     "to": 1788825649,
+     "detail": {
+      "lastRound": 1120,
+      "lastAt": 1788545676,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 1121
+     },
+     "symbol": "TSLA"
+    },
+    {
+     "reason": "stale",
+     "from": 1789344000,
+     "to": 1789344039,
+     "detail": {
+      "lastRound": 1189,
+      "lastAt": 1789138212,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 1190
+     },
+     "symbol": "TSLA"
+    },
+    {
+     "reason": "stale",
+     "from": 1789948800,
+     "to": 1789948839,
+     "detail": {
+      "lastRound": 1279,
+      "lastAt": 1789760927,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 1280
+     },
+     "symbol": "TSLA"
+    }
+   ],
+   "historyFrom": 1782086444,
+   "historyTo": 1790332200,
+   "rounds": 1337
+  },
+  {
+   "symbol": "SPY",
+   "proxy": "0x319724394D3A0e3669269846abE664Cd621f9f6A",
+   "description": "RHSPY / USD",
+   "session": "REGULAR",
+   "spot": 768.43,
+   "lastRound": 145,
+   "band": [
+    70.0,
+    7000.0
+   ],
+   "staleLimits": {
+    "REGULAR": 93600,
+    "EXTENDED": 93600,
+    "CLOSED": 345600
+   },
+   "haltWindow": 86400,
+   "uiMultiplier": 1.001717991187472,
+   "lastMultiplierChange": 1789690233,
+   "oraclePaused": false,
+   "paused": false,
+   "corporateAction": null,
+   "halts": [
+    {
+     "reason": "implausible",
+     "from": 1782086443,
+     "to": 1782222713,
+     "detail": {
+      "firstRound": 1,
+      "lastRound": 7,
+      "rounds": 7,
+      "price": 74991500000.0,
+      "band": [
+       70.0,
+       7000.0
+      ],
+      "resumedRound": 8
+     },
+     "symbol": "SPY"
+    },
+    {
+     "reason": "stale",
+     "from": 1782691200,
+     "to": 1782691246,
+     "detail": {
+      "lastRound": 17,
+      "lastAt": 1782482969,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 18
+     },
+     "symbol": "SPY"
+    },
+    {
+     "reason": "stale",
+     "from": 1783296000,
+     "to": 1783296035,
+     "detail": {
+      "lastRound": 29,
+      "lastAt": 1783022190,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 30
+     },
+     "symbol": "SPY"
+    },
+    {
+     "reason": "stale",
+     "from": 1783900800,
+     "to": 1783900842,
+     "detail": {
+      "lastRound": 36,
+      "lastAt": 1783700203,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 37
+     },
+     "symbol": "SPY"
+    },
+    {
+     "reason": "stale",
+     "from": 1784505600,
+     "to": 1784505649,
+     "detail": {
+      "lastRound": 47,
+      "lastAt": 1784297024,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 48
+     },
+     "symbol": "SPY"
+    },
+    {
+     "reason": "stale",
+     "from": 1785110400,
+     "to": 1785110449,
+     "detail": {
+      "lastRound": 60,
+      "lastAt": 1784917425,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 61
+     },
+     "symbol": "SPY"
+    },
+    {
+     "reason": "stale",
+     "from": 1785715200,
+     "to": 1785715232,
+     "detail": {
+      "lastRound": 80,
+      "lastAt": 1785533803,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 81
+     },
+     "symbol": "SPY"
+    },
+    {
+     "reason": "stale",
+     "from": 1786320000,
+     "to": 1786320024,
+     "detail": {
+      "lastRound": 90,
+      "lastAt": 1786105835,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 91
+     },
+     "symbol": "SPY"
+    },
+    {
+     "reason": "stale",
+     "from": 1786924800,
+     "to": 1786924823,
+     "detail": {
+      "lastRound": 96,
+      "lastAt": 1786715216,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 97
+     },
+     "symbol": "SPY"
+    },
+    {
+     "reason": "stale",
+     "from": 1787529600,
+     "to": 1787529619,
+     "detail": {
+      "lastRound": 104,
+      "lastAt": 1787311552,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 105
+     },
+     "symbol": "SPY"
+    },
+    {
+     "reason": "stale",
+     "from": 1788134400,
+     "to": 1788134433,
+     "detail": {
+      "lastRound": 112,
+      "lastAt": 1787933919,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 113
+     },
+     "symbol": "SPY"
+    },
+    {
+     "reason": "stale",
+     "from": 1788825600,
+     "to": 1788825651,
+     "detail": {
+      "lastRound": 120,
+      "lastAt": 1788534759,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 121
+     },
+     "symbol": "SPY"
+    },
+    {
+     "reason": "stale",
+     "from": 1789344000,
+     "to": 1789344026,
+     "detail": {
+      "lastRound": 126,
+      "lastAt": 1789131362,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 127
+     },
+     "symbol": "SPY"
+    },
+    {
+     "reason": "multiplier",
+     "from": 1789603833,
+     "to": 1789693833,
+     "detail": {
+      "effectiveAt": 1789690233,
+      "uiMultiplier": 1.001717991187472,
+      "haltWindow": 86400
+     },
+     "symbol": "SPY"
+    },
+    {
+     "reason": "stale",
+     "from": 1789948800,
+     "to": 1789948826,
+     "detail": {
+      "lastRound": 138,
+      "lastAt": 1789734121,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 139
+     },
+     "symbol": "SPY"
+    }
+   ],
+   "historyFrom": 1782086443,
+   "historyTo": 1790332200,
+   "rounds": 145
+  },
+  {
+   "symbol": "AAPL",
+   "proxy": "0x6B22A786bAa607d76728168703a39Ea9C99f2cD0",
+   "description": "Robinhood AAPL / USD",
+   "session": "REGULAR",
+   "spot": 336.31,
+   "lastRound": 668,
+   "band": [
+    30.0,
+    3000.0
+   ],
+   "staleLimits": {
+    "REGULAR": 93600,
+    "EXTENDED": 93600,
+    "CLOSED": 345600
+   },
+   "haltWindow": 86400,
+   "uiMultiplier": 1.0005660800610925,
+   "lastMultiplierChange": 1786720366,
+   "oraclePaused": false,
+   "paused": false,
+   "corporateAction": null,
+   "halts": [
+    {
+     "reason": "implausible",
+     "from": 1782086444,
+     "to": 1782222813,
+     "detail": {
+      "firstRound": 1,
+      "lastRound": 17,
+      "rounds": 17,
+      "price": 30145000000.0,
+      "band": [
+       30.0,
+       3000.0
+      ],
+      "resumedRound": 18
+     },
+     "symbol": "AAPL"
+    },
+    {
+     "reason": "stale",
+     "from": 1782691200,
+     "to": 1782691250,
+     "detail": {
+      "lastRound": 92,
+      "lastAt": 1782509948,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 93
+     },
+     "symbol": "AAPL"
+    },
+    {
+     "reason": "stale",
+     "from": 1783296000,
+     "to": 1783296018,
+     "detail": {
+      "lastRound": 138,
+      "lastAt": 1783008954,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 139
+     },
+     "symbol": "AAPL"
+    },
+    {
+     "reason": "stale",
+     "from": 1783900800,
+     "to": 1783900826,
+     "detail": {
+      "lastRound": 175,
+      "lastAt": 1783710274,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 176
+     },
+     "symbol": "AAPL"
+    },
+    {
+     "reason": "stale",
+     "from": 1784505600,
+     "to": 1784505627,
+     "detail": {
+      "lastRound": 241,
+      "lastAt": 1784317652,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 242
+     },
+     "symbol": "AAPL"
+    },
+    {
+     "reason": "stale",
+     "from": 1785110400,
+     "to": 1785110418,
+     "detail": {
+      "lastRound": 284,
+      "lastAt": 1784907796,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 285
+     },
+     "symbol": "AAPL"
+    },
+    {
+     "reason": "stale",
+     "from": 1785715200,
+     "to": 1785715231,
+     "detail": {
+      "lastRound": 378,
+      "lastAt": 1785533081,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 379
+     },
+     "symbol": "AAPL"
+    },
+    {
+     "reason": "stale",
+     "from": 1786320000,
+     "to": 1786320021,
+     "detail": {
+      "lastRound": 436,
+      "lastAt": 1786116082,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 437
+     },
+     "symbol": "AAPL"
+    },
+    {
+     "reason": "multiplier",
+     "from": 1786633966,
+     "to": 1786723966,
+     "detail": {
+      "effectiveAt": 1786720366,
+      "uiMultiplier": 1.0005660800610925,
+      "haltWindow": 86400
+     },
+     "symbol": "AAPL"
+    },
+    {
+     "reason": "stale",
+     "from": 1786924800,
+     "to": 1786924849,
+     "detail": {
+      "lastRound": 462,
+      "lastAt": 1786717307,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 463
+     },
+     "symbol": "AAPL"
+    },
+    {
+     "reason": "stale",
+     "from": 1787529600,
+     "to": 1787529619,
+     "detail": {
+      "lastRound": 495,
+      "lastAt": 1787336550,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 496
+     },
+     "symbol": "AAPL"
+    },
+    {
+     "reason": "stale",
+     "from": 1788134400,
+     "to": 1788134424,
+     "detail": {
+      "lastRound": 520,
+      "lastAt": 1787938651,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 521
+     },
+     "symbol": "AAPL"
+    },
+    {
+     "reason": "stale",
+     "from": 1788825600,
+     "to": 1788825654,
+     "detail": {
+      "lastRound": 568,
+      "lastAt": 1788551486,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 569
+     },
+     "symbol": "AAPL"
+    },
+    {
+     "reason": "stale",
+     "from": 1789344000,
+     "to": 1789344049,
+     "detail": {
+      "lastRound": 622,
+      "lastAt": 1789156288,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 623
+     },
+     "symbol": "AAPL"
+    },
+    {
+     "reason": "stale",
+     "from": 1789948800,
+     "to": 1789948820,
+     "detail": {
+      "lastRound": 645,
+      "lastAt": 1789744288,
+      "limit": 93600,
+      "session": "EXTENDED",
+      "nextRound": 646
+     },
+     "symbol": "AAPL"
+    }
+   ],
+   "historyFrom": 1782086444,
+   "historyTo": 1790332200,
+   "rounds": 668
+  }
+ ],
+ "auctions": [
+  {
+   "id": 1,
+   "kind": "liquidation",
+   "account": 12,
+   "startedAt": 1790696940,
+   "startDiscount": 0.02,
+   "maxDiscount": 0.12,
+   "duration": 1800,
+   "maxFractionPerBid": 0.5,
+   "penaltyBps": 100,
+   "equity": 734.9174,
+   "im": 1053.647173,
+   "mm": 790.235379,
+   "transferable": 734.9174,
+   "underlyings": [
+    "NVDA",
+    "TSLA"
+   ],
+   "status": "active"
+  }
+ ],
+ "insurance": {
+  "balance": 25000.0,
+  "outstanding": 0,
+  "socialized": 0.0,
+  "cashIndex": 1.0,
+  "events": [
+   {
+    "at": 1782223200,
+    "kind": "seed",
+    "amount": 25000.0,
+    "who": "Deployer"
+   },
+   {
+    "at": 1786132980,
+    "kind": "cover",
+    "amount": 7031,
+    "who": "Novation Covered Call NVDA",
+    "expiry": 1786132800
+   },
+   {
+    "at": 1786133580,
+    "kind": "recover",
+    "amount": 7031,
+    "who": "Novation Covered Call NVDA",
+    "expiry": 1786132800
+   },
+   {
+    "at": 1790366580,
+    "kind": "cover",
+    "amount": 198,
+    "who": "Account 12",
+    "expiry": 1790366400
+   },
+   {
+    "at": 1790367420,
+    "kind": "recover",
+    "amount": 198,
+    "who": "Account 12",
+    "expiry": 1790366400
+   }
+  ]
+ },
+ "openInterest": [
+  {
+   "underlying": "NVDA",
+   "shortContracts": 3140.0,
+   "notionalUsd": 708289.8
+  },
+  {
+   "underlying": "TSLA",
+   "shortContracts": 752.0,
+   "notionalUsd": 285944.24
+  },
+  {
+   "underlying": "SPY",
+   "shortContracts": 348.0,
+   "notionalUsd": 267413.64
+  },
+  {
+   "underlying": "AAPL",
+   "shortContracts": 533.0,
+   "notionalUsd": 179253.23
+  }
+ ],
+ "params": {
+  "maxSettlementLag": 87300,
+  "fallbackAfter": 259200,
+  "volStaleness": 172800,
+  "startDiscount": 0.02,
+  "maxDiscount": 0.12,
+  "duration": 1800,
+  "maxFractionPerBid": 0.5,
+  "penaltyBps": 100
+ }
+}
