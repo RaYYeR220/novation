@@ -13,12 +13,21 @@ import {Position, Series, WAD} from "../../types/Types.sol";
 library AuctionHookLogic {
     using SafeERC20 for IERC20;
 
+    /// @notice At most this many positions move per transfer, the first ones in storage order, so
+    /// that a bid on an account at the 256-position cap fits a block with room to spare (see
+    /// transferFraction).
+    uint256 internal constant MAX_POSITIONS_PER_TRANSFER = 128;
+
     /// @notice Moves the fraction `f` (WAD, 0 < f <= 1) of `fromId`'s book to `toId`:
     ///  - each position: trunc(qty * f), adjusted to whole lots so that no side is left with a
     ///    position below minTradeQty (see _lot); the receiver must not end up with one either;
     ///  - each collateral token: floor(amount * f);
     ///  - cash: floor(cashNorm * f) of index-scaled norm, so the cash index doesn't round it.
     /// Unpaid settlement claims and the deficit stay with `fromId`.
+    /// Only the first MAX_POSITIONS_PER_TRANSFER positions (storage order) move; cash and
+    /// collateral still move by the full fraction. The auction house settles whatever this
+    /// changes against the fraction at mark, so a bid on a bigger book is priced right, it just
+    /// takes more bids to work through the book.
     function transferFraction(Deps memory d, uint256 fromId, uint256 toId, uint256 f) external {
         if (fromId == toId) revert CHErrors.SelfTrade();
         if (f == 0 || f > WAD) revert CHErrors.InvalidFraction();
@@ -27,7 +36,8 @@ library AuctionHookLogic {
 
         // positions: copy first, movePosition reorders the array when a position closes
         Position[] memory ps = $.positions[fromId];
-        for (uint256 i = 0; i < ps.length; ++i) {
+        uint256 np = ps.length < MAX_POSITIONS_PER_TRANSFER ? ps.length : MAX_POSITIONS_PER_TRANSFER;
+        for (uint256 i = 0; i < np; ++i) {
             int256 q = ps[i].qty;
             int256 m = _lot(q, q * int256(f) / int256(WAD), minQty);
             if (m == 0) continue;
@@ -103,6 +113,22 @@ library AuctionHookLogic {
         }
         assembly ("memory-safe") {
             mstore(us, k)
+        }
+    }
+
+    /// @notice live: positions whose series hasn't expired; awaiting: expired positions whose
+    /// (underlying, expiry) the registry hasn't settled yet (valued on spot until it does).
+    function positionStatus(Deps memory d, uint256 id) external view returns (uint256 live, uint256 awaiting) {
+        Position[] storage ps = CHS.s().positions[id];
+        uint256 n = ps.length;
+        for (uint256 i = 0; i < n; ++i) {
+            Series memory s = d.registry.series(ps[i].seriesId);
+            if (s.expiry > block.timestamp) {
+                ++live;
+            } else {
+                (, bool settled) = d.registry.settlementPriceOf(s.underlying, s.expiry);
+                if (!settled) ++awaiting;
+            }
         }
     }
 

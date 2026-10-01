@@ -80,6 +80,7 @@ interface IClearinghouse {
     function claimable(uint256 id, uint64 expiry) external view returns (uint256);
     function claimableTotalOf(uint256 id) external view returns (uint256);
     function underlyingsOf(uint256 id) external view returns (address[] memory); // collateral tokens + option underlyings
+    function positionStatus(uint256 id) external view returns (uint256 live, uint256 awaiting); // unexpired; expired awaiting settlement
     function deficitOf(uint256 id, uint64 expiry) external view returns (uint256 total, uint256 bridged, uint256 pendingForExpiry);
     function cashIndex() external view returns (uint256);
     function openInterest(uint32 seriesId) external view returns (uint256);
