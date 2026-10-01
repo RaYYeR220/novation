@@ -425,10 +425,12 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
     }
 
     /// @notice Permissionless. For each expiry in `expiries`: settles the vault's positions once
-    /// the registry has the settlement price, and collects any claim. Then, if the vault owes
-    /// nothing, has no claim outstanding on those expiries, is live and its unlocked assets cover
-    /// the payout, pays the current epoch at the current NAV: the escrowed shares burn and their
-    /// assets move from the account into this contract for the receivers to claim.
+    /// the registry has the settlement price, and collects any claim. If the account owes a
+    /// deficit, its cash (premiums, or USDG anyone paid in) repays it (ch.repayDeficit; a failure
+    /// there doesn't stop the roll). Then, if the vault owes nothing, has no claim outstanding on
+    /// those expiries, is live and its unlocked assets cover the payout, pays the current epoch at
+    /// the current NAV: the escrowed shares burn and their assets move from the account into this
+    /// contract for the receivers to claim.
     /// Positions still open on other expiries don't hold the epoch back: the payout is priced and
     /// capped exactly like an instant withdrawal (live MTM NAV, unlocked assets only). Waiting for
     /// a flat book would let one dust-sized sale at the longest tenor block every queued
@@ -454,6 +456,9 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
                     _tolerate(err);
                 }
             }
+        }
+        if (_inDeficit()) {
+            try ch.repayDeficit(id) {} catch {}
         }
         _processEpoch(expiries);
     }

@@ -978,4 +978,36 @@ contract CoveredCallVaultTest is VaultFixture {
         assertEq(vault.epoch(), 1);
         assertGt(vault.redeemable(alice), 0);
     }
+
+    /// A roll spends the account's cash on its deficit before it decides on the epoch: cash that
+    /// reaches a vault in deficit heals it without anyone calling the clearinghouse.
+    function test_rollRepaysDeficitFromCash() public {
+        _skipWithoutSettlement();
+        DeficitSaleRecorder ah = new DeficitSaleRecorder();
+        ch.bindAuctionHouse(address(ah));
+        usdg.mint(address(insurance), 10_000 * USDG);
+
+        _vaultDeposit(vault, alice, 10e18);
+        _buy(vault, call190, 5e18);
+        _cooldown();
+        vm.prank(alice);
+        vault.requestRedeem(2e24, alice);
+        vm.warp(e + 1);
+        _settleExpiry(address(nvda), e, 220e18);
+        _pokeVol(address(nvda));
+        vault.roll(_one(e)); // settles: the fund bridges the shortfall, the vault owes it
+        (uint256 deficit,,) = ch.deficitOf(vid, e);
+        assertGt(deficit, 0);
+        assertEq(vault.epoch(), 0);
+
+        // USDG reaches the account (anyone may pay in); the next roll repays the fund and pays out
+        _deposit(_user("friend"), vid, address(usdg), deficit / 1e12 + 3 * USDG);
+        uint256 fund0 = insurance.balanceWad();
+        vault.roll(new uint64[](0));
+        (deficit,,) = ch.deficitOf(vid, e);
+        assertEq(deficit, 0);
+        assertGt(insurance.balanceWad(), fund0);
+        assertEq(vault.epoch(), 1);
+        assertGt(vault.redeemable(alice), 0);
+    }
 }
