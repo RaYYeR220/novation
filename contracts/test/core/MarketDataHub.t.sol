@@ -790,6 +790,82 @@ contract MarketDataHubTest is Test {
         hub.pokeVol(address(token), gap);
     }
 
+    function _volSnapshot() internal view returns (bytes memory) {
+        (uint256 r2, uint256 dt, uint80 id, uint256 px, uint64 at, uint64 pokeTs) = hub.volState(address(token));
+        return abi.encode(r2, dt, id, px, at, pokeTs);
+    }
+
+    function test_syncVolEqualsPokingEveryNewRound() public {
+        vm.warp(REGULAR_TS);
+        feed.pushRound(150e8, REGULAR_TS);
+        hub.initVol(address(token));
+        feed.pushRound(151e8, REGULAR_TS + 100);
+        feed.pushRound(148e8, REGULAR_TS + 250);
+        feed.pushRound(152e8, REGULAR_TS + 400);
+        vm.warp(REGULAR_TS + 500);
+
+        uint256 snap = vm.snapshotState();
+        _pokeN(2, 3);
+        bytes memory poked = _volSnapshot();
+        vm.revertToState(snap);
+
+        vm.expectEmit(true, false, false, false, address(hub));
+        emit IMarketDataHub.VolPoked(address(token), _roundId(1, 4), 0);
+        hub.syncVol(address(token));
+        assertEq(_volSnapshot(), poked);
+        (,, uint80 lastId,,,) = hub.volState(address(token));
+        (uint80 latest,,,,) = feed.latestRoundData();
+        assertEq(lastId, latest);
+    }
+
+    function test_syncVolNoopWhenCurrent() public {
+        vm.warp(REGULAR_TS);
+        feed.pushRound(150e8, REGULAR_TS);
+        hub.initVol(address(token));
+        bytes memory before = _volSnapshot();
+        vm.warp(REGULAR_TS + 100);
+        hub.syncVol(address(token)); // nothing new: no state change, staleness not refreshed
+        assertEq(_volSnapshot(), before);
+    }
+
+    function test_syncVolAtMost64PerCall() public {
+        vm.warp(REGULAR_TS);
+        feed.pushRound(150e8, REGULAR_TS);
+        hub.initVol(address(token));
+        for (uint64 i = 1; i <= 70; i++) {
+            feed.pushRound(150e8, REGULAR_TS + 60 * i);
+        }
+        hub.syncVol(address(token));
+        (,, uint80 lastId,,,) = hub.volState(address(token));
+        assertEq(lastId, _roundId(1, 65));
+        hub.syncVol(address(token));
+        (,, lastId,,,) = hub.volState(address(token));
+        assertEq(lastId, _roundId(1, 71));
+    }
+
+    function test_syncVolLeavesPhaseChangeToRebase() public {
+        vm.warp(REGULAR_TS);
+        feed.pushRound(150e8, REGULAR_TS);
+        hub.initVol(address(token));
+        feed.setPhase(2);
+        feed.pushRound(151e8, REGULAR_TS + 10);
+        feed.pushRound(151e8, REGULAR_TS + 15); // phase 2 is ahead of phase 1 in round count too
+        bytes memory before = _volSnapshot();
+        hub.syncVol(address(token));
+        assertEq(_volSnapshot(), before);
+
+        hub.rebaseVol(address(token));
+        feed.pushRound(152e8, REGULAR_TS + 20);
+        hub.syncVol(address(token));
+        (,, uint80 lastId,,,) = hub.volState(address(token));
+        assertEq(lastId, _roundId(2, 3));
+    }
+
+    function test_syncVolRequiresInit() public {
+        vm.expectRevert(MarketDataHub.NotInitialized.selector);
+        hub.syncVol(address(token));
+    }
+
     function test_markVolFromCalmRoundsBelowCapThenStaleIsCap() public {
         vm.warp(REGULAR_TS);
         feed.pushRound(150e8, REGULAR_TS);

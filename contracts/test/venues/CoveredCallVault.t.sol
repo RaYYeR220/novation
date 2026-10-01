@@ -14,6 +14,7 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {BlackScholes} from "../../src/libraries/BlackScholes.sol";
 import {FixedPointMath as F} from "../../src/libraries/FixedPointMath.sol";
 import {Session} from "../../src/types/Types.sol";
+import {NyseCalendar} from "../../src/libraries/NyseCalendar.sol";
 
 contract CoveredCallVaultTest is VaultFixture {
     CoveredCallVault vault;
@@ -60,6 +61,22 @@ contract CoveredCallVaultTest is VaultFixture {
         assertEq(c.maxTradeQty, 100e18);
 
         VaultConfig memory bad = _config();
+        bad.minDelta = 0.6e18; // above maxDelta
+        vm.expectRevert(OptionVaultBase.BadConfig.selector);
+        this.deployCoveredCall(address(nvda), bad);
+        bad = _config();
+        bad.maxDelta = 1e18 + 1;
+        vm.expectRevert(OptionVaultBase.BadConfig.selector);
+        this.deployCoveredCall(address(nvda), bad);
+        bad = _config();
+        bad.minNewSeriesQty = 0.01e18 - 1; // below minTradeQty
+        vm.expectRevert(OptionVaultBase.BadConfig.selector);
+        this.deployCoveredCall(address(nvda), bad);
+        bad = _config();
+        bad.minNewSeriesQty = 100e18 + 1; // above maxTradeQty: no series could ever open
+        vm.expectRevert(OptionVaultBase.BadConfig.selector);
+        this.deployCoveredCall(address(nvda), bad);
+        bad = _config();
         bad.minOtm = 1e18;
         vm.expectRevert(OptionVaultBase.BadConfig.selector);
         this.deployCoveredCall(address(nvda), bad);
@@ -203,9 +220,27 @@ contract CoveredCallVaultTest is VaultFixture {
         vault.buy(call190, 0, type(uint256).max, takerId);
         vm.expectRevert(OptionVaultBase.BadQty.selector);
         vault.buy(call190, 100e18 + 1, type(uint256).max, takerId);
-        // a sale below minTradeQty would leave the vault a dust position
-        vm.expectRevert(abi.encodeWithSelector(OptionVaultBase.DustPosition.selector, vid, int256(-0.005e18)));
-        vault.buy(call190, 0.005e18, type(uint256).max, takerId);
+        // a new series opens with at least minNewSeriesQty
+        vm.expectRevert(OptionVaultBase.BelowMinNewSeries.selector);
+        vault.buy(call190, 1e18 - 1, type(uint256).max, takerId);
+        vm.stopPrank();
+        _buy(vault, call190, 1e18);
+        _buy(vault, call190, 0.01e18); // adding to an open series has no such floor
+
+        // the offer band: |delta| at mark vol within [0.05, 0.5]
+        uint32 call250 = _list(address(nvda), e, 250e18, true); // a lottery ticket
+        uint64 x4 = uint64(NyseCalendar.nextWeeklyExpiry(NyseCalendar.nextWeeklyExpiry(e2)));
+        x4 = uint64(NyseCalendar.nextWeeklyExpiry(x4)); // four weeks after e: near-the-money at this vol
+        uint32 call190x4 = _list(address(nvda), x4, 190e18, true);
+        uint256 dLow = _absDelta(250e18, e);
+        uint256 dHigh = _absDelta(190e18, x4);
+        assertLt(dLow, 0.05e18);
+        assertGt(dHigh, 0.5e18);
+        vm.startPrank(taker);
+        vm.expectRevert(abi.encodeWithSelector(OptionVaultBase.OutsideOfferBand.selector, dLow));
+        vault.buy(call250, 1e18, type(uint256).max, takerId);
+        vm.expectRevert(abi.encodeWithSelector(OptionVaultBase.OutsideOfferBand.selector, dHigh));
+        vault.buy(call190x4, 1e18, type(uint256).max, takerId);
         vm.stopPrank();
 
         vm.warp(e);
@@ -213,6 +248,11 @@ contract CoveredCallVaultTest is VaultFixture {
         vm.prank(taker);
         vm.expectRevert(OptionVaultBase.SeriesExpired.selector);
         vault.buy(call190, 1e18, type(uint256).max, takerId);
+    }
+
+    function _absDelta(uint256 k, uint64 expiry) internal view returns (uint256) {
+        (int256 d,,,) = BlackScholes.greeks(180e18, k, expiry - _now(), hub.markVol(address(nvda)), 0, true);
+        return d < 0 ? uint256(-d) : uint256(d);
     }
 
     function test_buyRejectsUncovered() public {
@@ -378,8 +418,12 @@ contract CoveredCallVaultTest is VaultFixture {
         vault.requestRedeem(shares / 10, alice);
         assertEq(vault.escrowedShares(), shares / 10);
 
-        // a fresh round brings the vault back
+        // a fresh round brings the vault back: the views wait for it to reach the vol state,
+        // which any operation (or anyone) syncs
         _setPrice(address(nvda), 180e18);
+        assertFalse(vault.isLive());
+        assertEq(vault.maxDeposit(bob), 0);
+        hub.syncVol(address(nvda));
         assertTrue(vault.isLive());
         assertEq(vault.maxDeposit(bob), type(uint256).max);
         vm.prank(bob);
@@ -529,29 +573,54 @@ contract CoveredCallVaultTest is VaultFixture {
         vault.redeem(1e24, alice, alice);
     }
 
-    function test_notLiveWhenVolStale() public {
+    function test_volMustBeCurrentAndFresh() public {
         _vaultDeposit(vault, alice, 10e18);
-        _buy(vault, call190, 1e18);
-        // two days and a second after the vol state was last updated, with a fresh print
-        vm.warp(T0 + 2 days + 1);
-        _setPrice(address(nvda), 180e18);
-        assertTrue(hub.session(address(nvda)) != Session.HALTED); // the price itself is fine
+        _buy(vault, call190w2, 1e18);
+        _cooldown();
+
+        // a new round the vol state hasn't folded in: the views say not live, the operations
+        // sync it themselves and go ahead
+        _setPrice(address(nvda), 179e18);
         assertFalse(vault.isLive());
         assertEq(vault.maxDeposit(bob), 0);
         assertEq(vault.maxWithdraw(alice), 0);
         vm.expectRevert(OptionVaultBase.VaultNotLive.selector);
-        vault.quote(call190, 1e18, true);
-        vm.startPrank(taker);
-        vm.expectRevert(OptionVaultBase.VaultNotLive.selector);
-        vault.buy(call190, 1e18, type(uint256).max, takerId);
-        vm.expectRevert(OptionVaultBase.VaultNotLive.selector);
-        vault.sellBack(call190, 1e18, 0, takerId);
-        vm.stopPrank();
-
-        _pokeVol(address(nvda));
+        vault.quote(call190w2, 1e18, true);
+        (,, uint80 before,,,) = hub.volState(address(nvda));
+        _buy(vault, call190w2, 1e18);
+        (,, uint80 synced,,,) = hub.volState(address(nvda));
+        assertGt(synced, before);
         assertTrue(vault.isLive());
+
+        // more rounds than one sync folds in (64): the operation can't make it current
+        for (uint256 i = 1; i <= 65; ++i) {
+            vm.warp(_now() + 1);
+            _setPrice(address(nvda), 180e18);
+        }
         vm.prank(taker);
-        vault.sellBack(call190, 1e18, 0, takerId);
+        vm.expectRevert(OptionVaultBase.VolNotCurrent.selector);
+        vault.buy(call190w2, 1e18, type(uint256).max, takerId);
+        vm.prank(alice);
+        vm.expectRevert(OptionVaultBase.VolNotCurrent.selector);
+        vault.withdraw(1e18, alice, alice);
+        vm.prank(alice);
+        vm.expectRevert(OptionVaultBase.VolNotCurrent.selector);
+        vault.requestRedeem(1e24, alice);
+        hub.syncVol(address(nvda)); // anyone can catch it up
+        _buy(vault, call190w2, 1e18);
+
+        // no new round for over two days (a weekend): the vol is stale and nothing can refresh it
+        vm.warp(uint256(e) - 60); // Friday, a minute before the close
+        _refresh(180e18);
+        vm.warp(uint256(e) + 2 days + 1); // Sunday afternoon: the price is still usable (WEEKEND)
+        assertTrue(hub.session(address(nvda)) != Session.HALTED);
+        assertFalse(vault.isLive());
+        vm.prank(taker);
+        vm.expectRevert(OptionVaultBase.VaultNotLive.selector);
+        vault.sellBack(call190w2, 1e18, 0, takerId);
+        _setPrice(address(nvda), 180e18); // the next print revives it on the next operation
+        vm.prank(taker);
+        vault.sellBack(call190w2, 1e18, 0, takerId);
     }
 
     function test_queueReservedFromCapacityAndFreeAssets() public {

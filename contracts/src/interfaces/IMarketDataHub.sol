@@ -19,6 +19,7 @@ interface IMarketDataHub {
         returns (uint256 price);
     function initVol(address u) external;
     function pokeVol(address u, uint80[] calldata roundIds) external;
+    function syncVol(address u) external; // permissionless: pokes every round up to the feed's latest (same phase, <= 64 per call)
     function volState(address u)
         external
         view

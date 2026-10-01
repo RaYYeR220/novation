@@ -73,6 +73,9 @@ abstract contract VaultFixture is Fixture {
         c.sessionVolAdd = [uint64(0), 0.05e18, WEEKEND_ADD, 0.1e18, 0];
         c.maxTradeQty = 100e18;
         c.maxOpenSeries = 24;
+        c.minDelta = 0.05e18;
+        c.maxDelta = 0.5e18;
+        c.minNewSeriesQty = 1e18;
     }
 
     function _flatConfig() internal pure returns (VaultConfig memory c) {

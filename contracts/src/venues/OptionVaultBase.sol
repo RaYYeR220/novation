@@ -11,7 +11,8 @@ import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/Reentrancy
 import {IClearinghouse, TradeParams, AccountState} from "../interfaces/IClearinghouse.sol";
 import {ISeriesRegistry} from "../interfaces/ISeriesRegistry.sol";
 import {IMarketDataHub} from "../interfaces/IMarketDataHub.sol";
-import {IRiskParams, GlobalParams} from "../interfaces/IRiskParams.sol";
+import {IRiskParams, GlobalParams, UnderlyingParams} from "../interfaces/IRiskParams.sol";
+import {IAggregatorV3} from "../interfaces/IAggregatorV3.sol";
 import {BlackScholes} from "../libraries/BlackScholes.sol";
 import {FixedPointMath as F} from "../libraries/FixedPointMath.sol";
 import {Position, Series, Session, WAD} from "../types/Types.sol";
@@ -26,6 +27,9 @@ struct VaultConfig {
     uint64[5] sessionVolAdd; // absolute vol add per Session (REGULAR..HALTED); HALTED unused (no quotes)
     uint128 maxTradeQty; // contracts per buy, >= the clearinghouse's minTradeQty
     uint16 maxOpenSeries; // series the vault may be short at once, e.g. 24
+    uint64 minDelta; // offer band: the vault sells only if |delta| at mark vol is within
+    uint64 maxDelta; //   [minDelta, maxDelta], e.g. 0.05e18 .. 0.5e18
+    uint128 minNewSeriesQty; // smallest sale that opens a series the vault isn't short in, e.g. 1e18
 }
 
 /// @notice ERC-4626 option-selling vault on one clearinghouse subaccount. Shares are priced at
@@ -53,6 +57,9 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
     error TenorTooLong();
     error StrikeNotOtm();
     error TooManySeries();
+    error OutsideOfferBand(uint256 absDelta);
+    error BelowMinNewSeries();
+    error VolNotCurrent();
     error DustPosition(uint256 id, int256 qty); // same selector as the clearinghouse's
     error VaultInDeficit();
     error ExitCooldown(address owner, uint256 until);
@@ -148,9 +155,11 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
             address(ch_) == address(0) || address(registry_) == address(0) || address(hub_) == address(0)
                 || address(params_) == address(0)
         ) revert ZeroAddress();
+        uint256 minTradeQty = params_.globals().minTradeQty;
         if (
             cfg.minOtm >= WAD || cfg.spread >= WAD || cfg.maxTenorDays == 0 || cfg.maxOpenSeries == 0
-                || cfg.maxTradeQty < params_.globals().minTradeQty
+                || cfg.maxTradeQty < minTradeQty || cfg.minDelta > cfg.maxDelta || cfg.maxDelta > WAD
+                || cfg.minNewSeriesQty < minTradeQty || cfg.minNewSeriesQty > cfg.maxTradeQty
         ) revert BadConfig();
         if (!params_.underlying(underlying_).enabled) revert BadConfig();
         uint8 dec = asset_.decimals();
@@ -190,8 +199,9 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
     }
 
     /// @notice The underlying trades normally: its price is readable, plausible and fresh, the hub
-    /// doesn't report it HALTED, and its mark vol has been updated within its volStaleness (the
-    /// vault prices and marks at that vol).
+    /// doesn't report it HALTED, and its mark vol (which the vault prices and marks at) was updated
+    /// within its volStaleness and has folded in the feed's latest round. Every operation syncs
+    /// the vol first (hub.syncVol), so a view can read false here while the next operation runs.
     function isLive() public view returns (bool ok) {
         (,, ok) = _liveSpot();
     }
@@ -297,22 +307,26 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
     // ================================================================ ERC-4626 entry points
 
     function deposit(uint256 assets, address receiver) public override nonReentrant returns (uint256) {
+        _syncVol();
         _requireLive();
         return super.deposit(assets, receiver);
     }
 
     function mint(uint256 shares, address receiver) public override nonReentrant returns (uint256) {
+        _syncVol();
         _requireLive();
         return super.mint(shares, receiver);
     }
 
     function withdraw(uint256 assets, address receiver, address owner) public override nonReentrant returns (uint256) {
+        _syncVol();
         _requireLive();
         _requireCooledDown(owner);
         return super.withdraw(assets, receiver, owner);
     }
 
     function redeem(uint256 shares, address receiver, address owner) public override nonReentrant returns (uint256) {
+        _syncVol();
         _requireLive();
         _requireCooledDown(owner);
         return super.redeem(shares, receiver, owner);
@@ -329,14 +343,19 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         nonReentrant
         returns (uint256 premium)
     {
+        _syncVol();
         (Series memory s, uint256 spot, Session sess) = _liveSeries(seriesId);
         VaultConfig storage c = _cfg;
         if (qty == 0 || qty > c.maxTradeQty) revert BadQty();
         if (s.expiry > block.timestamp + uint256(c.maxTenorDays) * 1 days) revert TenorTooLong();
         _checkStrategy(s, spot);
-        Book memory b = _book(seriesId);
-        if (b.short == 0 && b.open >= c.maxOpenSeries) revert TooManySeries();
         GlobalParams memory g = params.globals();
+        _checkOfferBand(s, spot, g.rate);
+        Book memory b = _book(seriesId);
+        if (b.short == 0) {
+            if (b.open >= c.maxOpenSeries) revert TooManySeries();
+            if (qty < c.minNewSeriesQty) revert BelowMinNewSeries();
+        }
         _checkDust(b.short, qty, true, g.minTradeQty);
         uint256 lockedAfter = b.lockedWad + _lockedFor(seriesId, qty);
         uint256 required = lockedAfter + b.queued * _assetScale;
@@ -356,6 +375,7 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         nonReentrant
         returns (uint256 premium)
     {
+        _syncVol();
         (Series memory s, uint256 spot, Session sess) = _liveSeries(seriesId);
         if (qty == 0) revert BadQty();
         (uint256 deficit,,) = ch.deficitOf(vaultId, 0);
@@ -381,6 +401,7 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         if (receiver == address(0)) revert ZeroAddress();
         if (receiver == address(this)) revert BadReceiver();
         _requireCooledDown(msg.sender);
+        _syncVol();
         uint256 ep = epoch;
         PendingRedeem storage p = _pending[receiver];
         _fold(receiver, p);
@@ -413,6 +434,8 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
     /// a flat book would let one dust-sized sale at the longest tenor block every queued
     /// redemption for weeks, and a vault selling overlapping expiries would never pay at all.
     function roll(uint64[] calldata expiries) external nonReentrant {
+        // best effort: a sync failure mustn't block settlement; the payout below then waits
+        try hub.syncVol(underlying) {} catch {}
         uint256 id = vaultId;
         for (uint256 i = 0; i < expiries.length; ++i) {
             uint64 e = expiries[i];
@@ -509,8 +532,35 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
             (spot, sess, ok) = (p, ss, o);
         } catch {}
         if (!ok) return (spot, sess, false);
-        (,,,,, uint64 lastPokeTs) = hub.volState(underlying);
-        ok = uint256(lastPokeTs) + params.underlying(underlying).volStaleness >= block.timestamp;
+        UnderlyingParams memory up = params.underlying(underlying);
+        (,, uint80 lastId,,, uint64 lastPokeTs) = hub.volState(underlying);
+        ok = uint256(lastPokeTs) + up.volStaleness >= block.timestamp && _latestRound(up.feed) == lastId;
+    }
+
+    /// @dev Folds every pending feed round into the hub's vol (permissionless), then requires the
+    /// vol state to be at the feed's latest round: the mark vol this operation prices and marks at
+    /// can't move again within the transaction (a later poke has nothing left to fold in).
+    function _syncVol() private {
+        hub.syncVol(underlying);
+        (,, uint80 lastId,,,) = hub.volState(underlying);
+        if (_latestRound(params.underlying(underlying).feed) != lastId) revert VolNotCurrent();
+    }
+
+    function _latestRound(address feed) private view returns (uint80 id) {
+        try IAggregatorV3(feed).latestRoundData() returns (uint80 r, int256, uint256, uint256, uint80) {
+            id = r;
+        } catch {}
+    }
+
+    /// @dev The vault only sells options whose |delta| at the mark vol lies in the offer band: no
+    /// near-worthless lottery tickets that cost a taker nothing and pin a series slot, and no
+    /// near-the-money risk beyond the strategy's intent.
+    function _checkOfferBand(Series memory s, uint256 spot, int256 rate) private view {
+        (int256 delta,,,) =
+            BlackScholes.greeks(spot, s.strike, s.expiry - block.timestamp, hub.markVol(underlying), rate, s.isCall);
+        uint256 a = delta < 0 ? uint256(-delta) : uint256(delta);
+        VaultConfig storage c = _cfg;
+        if (a < c.minDelta || a > c.maxDelta) revert OutsideOfferBand(a);
     }
 
     /// @dev The series on the vault's underlying, not expired, with a live spot.

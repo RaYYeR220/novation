@@ -212,13 +212,35 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
     function pokeVol(address u, uint80[] calldata roundIds) external nonReentrant {
         uint256 n = roundIds.length;
         if (n == 0 || n > 64) revert BadRoundCount();
+        VolState storage v = _vol[u];
+        if (!v.initialized) revert NotInitialized();
+        _fold(u, v, params.underlying(u), roundIds);
+    }
 
+    /// @notice Permissionless: feeds every round after the stored one, up to the feed's latest in
+    /// the stored phase, into the EWMA, at most 64 per call (call again to catch up further). A
+    /// no-op when nothing is new, or when the feed has moved to a later phase (see rebaseVol).
+    /// Venues call it before pricing, so the mark vol can't change between their trades in one
+    /// transaction.
+    function syncVol(address u) external nonReentrant {
         VolState storage v = _vol[u];
         if (!v.initialized) revert NotInitialized();
         UnderlyingParams memory p = params.underlying(u);
+        (uint80 latest,,,,) = IAggregatorV3(p.feed).latestRoundData();
+        uint80 last = v.lastRoundId;
+        if ((latest >> 64) != (last >> 64) || latest <= last) return;
+        uint256 n = uint64(latest) - uint64(last);
+        if (n > 64) n = 64;
+        uint80[] memory ids = new uint80[](n);
+        for (uint256 i = 0; i < n; ++i) {
+            ids[i] = last + 1 + uint80(i);
+        }
+        _fold(u, v, p, ids);
+    }
 
+    function _fold(address u, VolState storage v, UnderlyingParams memory p, uint80[] memory ids) private {
         (uint256[] memory prices, uint256[] memory dts, uint80 lastId, uint256 lastAt) =
-            _collect(IAggregatorV3(p.feed), v.lastRoundId, v.lastUpdatedAt, roundIds);
+            _collect(IAggregatorV3(p.feed), v.lastRoundId, v.lastUpdatedAt, ids);
         uint256 m = prices.length;
         if (m == 0) return;
 
@@ -234,7 +256,7 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
         emit VolPoked(u, lastId, r2);
     }
 
-    function _collect(IAggregatorV3 feed, uint80 startId, uint256 startAt, uint80[] calldata ids)
+    function _collect(IAggregatorV3 feed, uint80 startId, uint256 startAt, uint80[] memory ids)
         private
         view
         returns (uint256[] memory prices, uint256[] memory dts, uint80 prevId, uint256 prevAt)

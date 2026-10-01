@@ -166,6 +166,13 @@ contract PutWriteVaultTest is VaultFixture {
         vault.buy(put170, 0, type(uint256).max, takerId);
         vm.expectRevert(OptionVaultBase.BadQty.selector);
         vault.buy(put170, 100e18 + 1, type(uint256).max, takerId);
+        vm.expectRevert(OptionVaultBase.BelowMinNewSeries.selector);
+        vault.buy(put170, 0.5e18, type(uint256).max, takerId);
+        // a put this far out is outside the offer band
+        uint32 put140 = _list(address(nvda), e, 140e18, false);
+        (int256 d,,,) = BlackScholes.greeks(180e18, 140e18, e - _now(), hub.markVol(address(nvda)), 0, false);
+        vm.expectRevert(abi.encodeWithSelector(OptionVaultBase.OutsideOfferBand.selector, uint256(-d)));
+        vault.buy(put140, 1e18, type(uint256).max, takerId);
         vm.stopPrank();
     }
 
@@ -324,9 +331,10 @@ contract PutWriteVaultTest is VaultFixture {
         vm.stopPrank();
 
         _setPrice(address(nvda), 180e18);
-        assertTrue(vault.isLive());
+        assertFalse(vault.isLive()); // until the new round reaches the vol state
         vm.prank(bob);
-        vault.deposit(100 * USDG, bob);
+        vault.deposit(100 * USDG, bob); // which the deposit syncs itself
+        assertTrue(vault.isLive());
     }
 
     // ================================================================ exits
