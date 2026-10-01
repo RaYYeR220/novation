@@ -102,6 +102,14 @@ Robinhood Chain testnet, chain id 46630. The machine-readable copy is [`contract
 
 The end-to-end run on this deployment (deposits, a vault buy and a vault deposit, an RFQ fill, an agent budget, a withdrawal blocked by margin and an opening blocked by a corporate action, with every transaction hash) is in [`tools/e2e/out/46630.json`](tools/e2e/out/46630.json).
 
+## Agents
+
+An owner can give an AI agent its own key with an on-chain risk budget. `grantAgent` sets a cap on the account's worst-case loss (its initial margin after any trade the agent opens), a premium cap and a value-drain cap per trade, the underlyings the agent may trade and an expiry. `TradeLogic` enforces the policy inside every trade, whatever software the agent runs. The agent can always reduce risk, and it can never withdraw.
+
+[`mcp/`](mcp/README.md) is an MCP server that lets any AI agent trade through that key. It reads markets, option chains, vault quotes, what-if margin, the portfolio with its scenario grid, and the budget. It buys and sells through the vaults and fills RFQ quotes. Every trade is simulated first, so an over-budget ticket comes back as a structured refusal, for example `AgentRiskBudgetExceeded` with the worst-case loss and the budget, and nothing is sent. The server holds only the agent key and refuses to start unless the chain has a live policy for it.
+
+On testnet, an agent driving the server got a budget of 1.54 USDG (1.5x the initial margin of one NVDA call). It bought one call inside the budget ([`0x0307e2d5…`](https://explorer.testnet.chain.robinhood.com/tx/0x0307e2d54fd130e1858ce85cc1dfd72e37bedc0434f9429abbe213f8388b36fc)). A ticket for three more was refused in simulation and not sent. Sent anyway to leave proof, that ticket reverted on-chain with `AgentRiskBudgetExceeded` (worst-case loss 4.02 USDG, budget 1.54 USDG): [`0x2aa5a4ce…`](https://explorer.testnet.chain.robinhood.com/tx/0x2aa5a4ceaf099d14136d921b29b5bc2bce8b52f618b25e4935b04494210f1064). The transcript and every hash are in [`mcp/out/46630.json`](mcp/out/46630.json).
+
 ## Security model
 
 The full trust model, invariants, threat table and review history are in [SECURITY.md](SECURITY.md). The short version:
@@ -185,6 +193,8 @@ The web app lives in `app/` and uses pnpm:
 pnpm install
 pnpm --filter @novation/app dev
 ```
+
+The MCP server for agents runs from the same install: `node mcp/bin/novation-mcp.mjs` (read-only without `NOVATION_AGENT_KEY`; setup in [mcp/README.md](mcp/README.md)).
 
 ## License
 
