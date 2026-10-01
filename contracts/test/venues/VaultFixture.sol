@@ -72,6 +72,7 @@ abstract contract VaultFixture is Fixture {
         c.spread = 0.02e18;
         c.sessionVolAdd = [uint64(0), 0.05e18, WEEKEND_ADD, 0.1e18, 0];
         c.maxTradeQty = 100e18;
+        c.maxOpenSeries = 24;
     }
 
     function _flatConfig() internal pure returns (VaultConfig memory c) {
@@ -87,6 +88,16 @@ abstract contract VaultFixture is Fixture {
     function _newPutWrite(VaultConfig memory c) internal returns (PutWriteVault v) {
         v = new PutWriteVault(IERC20Metadata(address(usdg)), address(nvda), ch, registry, hub, params, c);
         ch.addVenue(address(v));
+    }
+
+    /// @notice External deploy wrappers, so a constructor revert can be expected on an ordinary
+    /// call (vm.expectRevert directly on `new` ends the test at the first expected revert).
+    function deployCoveredCall(address token, VaultConfig memory c) external returns (address) {
+        return address(new CoveredCallVault(IERC20Metadata(token), ch, registry, hub, params, c));
+    }
+
+    function deployPutWrite(address asset_, address u, VaultConfig memory c) external returns (address) {
+        return address(new PutWriteVault(IERC20Metadata(asset_), u, ch, registry, hub, params, c));
     }
 
     // ---------------------------------------------------------------- actions
@@ -111,6 +122,37 @@ abstract contract VaultFixture is Fixture {
         uint256 byNotional = F.mulWadUp(0.0003e18, qty * spot / 1e18);
         uint256 byPremium = F.mulWadUp(0.125e18, premium);
         return byNotional < byPremium ? byNotional : byPremium;
+    }
+
+    /// @notice The real current time (block.timestamp read in test code may be a stale pre-warp
+    /// value under via-ir).
+    function _now() internal view returns (uint256) {
+        return vm.getBlockTimestamp();
+    }
+
+    /// @notice Lets the exit cooldown of every share received so far run out (one hour; the feed
+    /// and the vol state stay fresh across it).
+    function _cooldown() internal {
+        vm.warp(_now() + 1 hours);
+    }
+
+    /// @notice Fresh NVDA print at `priceWad` now, folded into the hub's vol state (so the mark vol
+    /// counts as fresh again).
+    function _refresh(uint256 priceWad) internal {
+        _setPrice(address(nvda), priceWad);
+        _pokeVol(address(nvda));
+    }
+
+    /// @notice Pokes the hub's vol with every feed round since its last one.
+    function _pokeVol(address u) internal {
+        (,, uint80 last,,,) = hub.volState(u);
+        (uint80 latest,,,,) = feedOf[u].latestRoundData();
+        if (latest <= last) return;
+        uint80[] memory ids = new uint80[](latest - last);
+        for (uint256 i = 0; i < ids.length; ++i) {
+            ids[i] = last + 1 + uint80(i);
+        }
+        hub.pokeVol(u, ids);
     }
 
     function _one(uint64 x) internal pure returns (uint64[] memory es) {

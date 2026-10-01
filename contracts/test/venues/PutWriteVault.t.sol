@@ -51,9 +51,9 @@ contract PutWriteVaultTest is VaultFixture {
 
         // the asset must be the clearinghouse's USDG, the underlying a listed one
         vm.expectRevert(OptionVaultBase.BadConfig.selector);
-        new PutWriteVault(IERC20Metadata(address(nvda)), address(nvda), ch, registry, hub, params, _config());
+        this.deployPutWrite(address(nvda), address(nvda), _config());
         vm.expectRevert(OptionVaultBase.BadConfig.selector);
-        new PutWriteVault(IERC20Metadata(address(usdg)), address(usdg), ch, registry, hub, params, _config());
+        this.deployPutWrite(address(usdg), address(usdg), _config());
     }
 
     // ================================================================ NAV
@@ -91,9 +91,17 @@ contract PutWriteVaultTest is VaultFixture {
         _buy(vault, put170, 5e18);
 
         uint256 shares = _vaultDeposit(vault, bob, amount);
+        assertLe(vault.previewRedeem(shares), amount); // straight back out at the same NAV: no gain
+        assertEq(vault.maxRedeem(bob), 0); // and not at once: the exit cooldown runs first
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(OptionVaultBase.ExitCooldown.selector, bob, _now() + 1 hours));
+        vault.redeem(shares, bob, bob);
+
+        _cooldown();
+        uint256 preview = vault.previewRedeem(shares);
         vm.prank(bob);
         uint256 out = vault.redeem(shares, bob, bob);
-        assertLe(out, amount);
+        assertEq(out, preview);
         assertEq(usdg.balanceOf(bob), out);
         assertEq(vault.balanceOf(bob), 0);
     }
@@ -189,15 +197,16 @@ contract PutWriteVaultTest is VaultFixture {
         uint256 cash = ch.cashOf(vid);
 
         // ask for 3 more: 1190 locked after the sale
-        uint256 tau = e - block.timestamp;
+        uint256 tau = e - _now();
         uint256 volQ = _volQ(_utilAfter(1190, cash));
         uint256 px = _kernelPx(tau, volQ);
         assertEq(px, BlackScholes.price(180e18, 170e18, tau, volQ, 0, false)); // bit-identical
         assertEq(vault.quote(put170, 3e18, true), F.mulWadUp(F.mulWadUp(3e18, px), 1.02e18));
 
-        // bid for 3 of the 4 short: 170 locked after the buyback
-        px = _kernelPx(e2 - block.timestamp, _volQ(_utilAfter(170, cash)));
-        assertEq(vault.quote(put170w2, 3e18, false), (3e18 * px / 1e18) * 0.98e18 / 1e18);
+        // bid for 3 of the 4 short: never above the mark NAV carries the short at
+        uint256 mark = _kernelPx(e2 - _now(), hub.markVol(address(nvda)));
+        assertGt(_kernelPx(e2 - _now(), _volQ(_utilAfter(170, cash))), mark); // formula alone pays more
+        assertEq(vault.quote(put170w2, 3e18, false), (3e18 * mark / 1e18) * 0.98e18 / 1e18);
     }
 
     /// @dev locked / (locked + free) in USDG units with `lockedUsd` whole dollars locked.
@@ -238,17 +247,22 @@ contract PutWriteVaultTest is VaultFixture {
 
     function test_quoteIncreasesWithUtilization() public {
         _vaultDeposit(vault, alice, 1700 * USDG);
+        _buy(vault, put170, 1e18); // something to bid for
         uint256 ask0 = vault.quote(put170, 1e18, true);
         uint256 bid0 = vault.quote(put170, 1e18, false);
         assertLt(bid0, ask0);
+        // the bid is the mark less the spread, whatever the utilization
+        uint256 mark = _kernelPx(e - _now(), hub.markVol(address(nvda)));
+        assertEq(bid0, (1e18 * mark / 1e18) * 0.98e18 / 1e18);
 
-        _buy(vault, put170w2, 5e18);
+        _buy(vault, put170w2, 4e18);
         uint256 ask1 = vault.quote(put170, 1e18, true);
         assertGt(ask1, ask0);
-        assertGt(vault.quote(put170, 1e18, false), bid0);
+        assertEq(vault.quote(put170, 1e18, false), bid0);
 
-        _buy(vault, put170w2, 5e18); // 1700 locked
+        _buy(vault, put170w2, 4e18); // 1530 of 1700 locked
         assertGt(vault.quote(put170, 1e18, true), ask1);
+        assertEq(vault.quote(put170, 1e18, false), bid0);
     }
 
     function test_weekendQuoteHigher() public {
@@ -258,12 +272,13 @@ contract PutWriteVaultTest is VaultFixture {
         assertEq(vault.quote(put170w2, 1e18, true), flat.quote(put170w2, 1e18, true));
 
         vm.warp(SATURDAY);
+        assertFalse(vault.isLive()); // the vol state is over two days old
+        _refresh(180e18);
         assertEq(uint8(hub.session(address(nvda))), uint8(Session.WEEKEND));
         assertTrue(vault.isLive());
         uint256 ask = vault.quote(put170w2, 1e18, true);
         uint256 askFlat = flat.quote(put170w2, 1e18, true);
         assertGt(ask, askFlat);
-        assertGt(vault.quote(put170w2, 1e18, false), flat.quote(put170w2, 1e18, false));
 
         uint256 volFlat = _volQ(0.1e18); // 170 of 1700 locked after the sale
         uint256 tau = e2 - SATURDAY; // not block.timestamp: via-ir may reuse a pre-warp read
@@ -276,12 +291,13 @@ contract PutWriteVaultTest is VaultFixture {
     function test_haltedVaultRejectsDeposit() public {
         _vaultDeposit(vault, alice, 2000 * USDG);
         _buy(vault, put170, 2e18);
+        _cooldown();
         assertGt(vault.maxWithdraw(alice), 0);
         usdg.mint(bob, 100 * USDG);
         vm.prank(bob);
         usdg.approve(address(vault), 100 * USDG);
 
-        vm.warp(block.timestamp + STALE);
+        vm.warp(_now() + STALE);
         assertFalse(vault.isLive());
         assertEq(vault.maxDeposit(bob), 0);
         assertEq(vault.maxMint(bob), 0);
@@ -318,6 +334,7 @@ contract PutWriteVaultTest is VaultFixture {
     function test_withdrawOnlyFreeAssets() public {
         _vaultDeposit(vault, alice, 2000 * USDG);
         _buy(vault, put170, 10e18); // 1700 locked
+        _cooldown();
         uint256 free = vault.freeAssets();
         assertEq(free, (ch.cashOf(vid) - 1700e18) / 1e12);
         assertEq(vault.maxWithdraw(alice), free);
@@ -374,11 +391,40 @@ contract PutWriteVaultTest is VaultFixture {
         assertLt(vault.previewRedeem(aShares), 1_000_000 * USDG);
     }
 
+    // ================================================================ fix round: queue, worthless vault
+
+    function test_queueReservedFromCashSecurity() public {
+        _vaultDeposit(vault, alice, 1700 * USDG);
+        _cooldown();
+        uint256 half = vault.balanceOf(alice) / 2;
+        vm.prank(alice);
+        vault.requestRedeem(half, alice); // owed 850
+        assertEq(vault.freeAssets(), 850 * USDG);
+        // 6 puts at 170 need 1020 of cash, and only 850 isn't owed to the queue
+        vm.prank(taker);
+        vm.expectRevert(abi.encodeWithSelector(OptionVaultBase.ExceedsCapacity.selector, 1870e18, 1700e18));
+        vault.buy(put170, 6e18, type(uint256).max, takerId);
+        _buy(vault, put170, 5e18);
+        vault.roll(new uint64[](0)); // the queue is paid from what it reserved
+        assertEq(vault.epoch(), 1);
+        assertGe(ch.cashOf(vid), 850e18); // the puts stay cash-secured
+    }
+
+    function test_noDepositIntoWorthlessVault() public {
+        _vaultDeposit(vault, alice, 1000 * USDG);
+        _cheatCashIndex(1); // every account's cash socialized away
+        assertEq(vault.totalAssets(), 0);
+        assertGt(vault.totalSupply(), 0);
+        assertEq(vault.maxDeposit(bob), 0);
+        assertEq(vault.maxMint(bob), 0);
+    }
+
     // ================================================================ async redemption
 
     function test_requestRedeemProcessedWhenFlat() public {
         uint256 aShares = _vaultDeposit(vault, alice, 1000 * USDG);
         _vaultDeposit(vault, bob, 3000 * USDG);
+        _cooldown();
         vm.prank(alice);
         vault.requestRedeem(aShares, carol);
         vm.prank(bob);
@@ -398,6 +444,7 @@ contract PutWriteVaultTest is VaultFixture {
     function test_rollWaitsUntilFreeAssetsCover() public {
         uint256 aShares = _vaultDeposit(vault, alice, 2000 * USDG);
         _buy(vault, put170, 10e18); // 1700 locked, about 340 free
+        _cooldown();
         vm.prank(alice);
         vault.requestRedeem(aShares / 4, alice); // about 500
         vault.roll(_one(e));
@@ -414,6 +461,7 @@ contract PutWriteVaultTest is VaultFixture {
     function test_rollPaysFromFreeWhileShortsOpen() public {
         uint256 aShares = _vaultDeposit(vault, alice, 2000 * USDG);
         _buy(vault, put170w2, 5e18); // 850 locked
+        _cooldown();
         vm.prank(alice);
         vault.requestRedeem(aShares / 4, alice);
         uint256 expected = vault.convertToAssets(aShares / 4);
@@ -433,6 +481,7 @@ contract PutWriteVaultTest is VaultFixture {
         uint256 aShares = _vaultDeposit(vault, alice, 2000 * USDG);
         _vaultDeposit(vault, bob, 2000 * USDG);
         _buy(vault, put170, 20e18); // 3400 locked, about 700 free
+        _cooldown();
         vm.prank(alice);
         vault.requestRedeem(aShares / 2, alice); // over 1000
 
@@ -441,6 +490,7 @@ contract PutWriteVaultTest is VaultFixture {
 
         vm.warp(e + 1);
         _settleExpiry(address(nvda), e, 180e18);
+        _pokeVol(address(nvda));
         uint256 expected = vault.convertToAssets(aShares / 2);
         vm.expectEmit(true, true, true, true, address(vault));
         emit OptionVaultBase.Rolled(0, expected);
@@ -459,12 +509,14 @@ contract PutWriteVaultTest is VaultFixture {
         _skipWithoutSettlement();
         _vaultDeposit(vault, alice, 1700 * USDG);
         _buy(vault, put170, 10e18);
+        _cooldown();
         uint256 half = vault.balanceOf(alice) / 2;
         vm.prank(alice);
         vault.requestRedeem(half, alice);
 
         vm.warp(e + 1);
         _settleExpiry(address(nvda), e, 150e18); // the 10 puts owe 200
+        _pokeVol(address(nvda));
         uint256 cash = ch.cashOf(vid);
         assertEq(vault.totalAssets(), (cash - 200e18) / 1e12); // the loss is in NAV already
 

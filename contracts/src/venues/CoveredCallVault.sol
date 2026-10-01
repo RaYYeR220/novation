@@ -7,7 +7,7 @@ import {ISeriesRegistry} from "../interfaces/ISeriesRegistry.sol";
 import {IMarketDataHub} from "../interfaces/IMarketDataHub.sol";
 import {IRiskParams} from "../interfaces/IRiskParams.sol";
 import {OptionVaultBase, VaultConfig} from "./OptionVaultBase.sol";
-import {Series, WAD} from "../types/Types.sol";
+import {Series, Session, WAD} from "../types/Types.sol";
 
 /// @notice Holds a stock token and sells out-of-the-money calls on it, never more calls than
 /// tokens held (fully covered, although portfolio margin would allow more). Premiums arrive as
@@ -50,9 +50,12 @@ contract CoveredCallVault is OptionVaultBase {
         return ch.collateralOf(vaultId, underlying);
     }
 
-    /// @dev equity / spot in tokens, then to raw token units.
+    /// @dev equity / spot in tokens, then to raw token units; 0 while spot can't be read.
     function _equityToAssets(uint256 equityWad) internal view override returns (uint256) {
-        (uint256 spot,,) = hub.spot(underlying);
-        return equityWad * WAD / spot / _assetScale;
+        try hub.spot(underlying) returns (uint256 spot, Session, bool) {
+            return equityWad * WAD / spot / _assetScale;
+        } catch {
+            return 0;
+        }
     }
 }

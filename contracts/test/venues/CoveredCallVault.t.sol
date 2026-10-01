@@ -62,22 +62,27 @@ contract CoveredCallVaultTest is VaultFixture {
         VaultConfig memory bad = _config();
         bad.minOtm = 1e18;
         vm.expectRevert(OptionVaultBase.BadConfig.selector);
-        new CoveredCallVault(IERC20Metadata(address(nvda)), ch, registry, hub, params, bad);
+        this.deployCoveredCall(address(nvda), bad);
         bad = _config();
         bad.spread = 1e18;
         vm.expectRevert(OptionVaultBase.BadConfig.selector);
-        new CoveredCallVault(IERC20Metadata(address(nvda)), ch, registry, hub, params, bad);
+        this.deployCoveredCall(address(nvda), bad);
         bad = _config();
         bad.maxTenorDays = 0;
         vm.expectRevert(OptionVaultBase.BadConfig.selector);
-        new CoveredCallVault(IERC20Metadata(address(nvda)), ch, registry, hub, params, bad);
+        this.deployCoveredCall(address(nvda), bad);
         bad = _config();
-        bad.maxTradeQty = 0;
+        bad.maxTradeQty = 0.01e18 - 1; // below the clearinghouse's minTradeQty
         vm.expectRevert(OptionVaultBase.BadConfig.selector);
-        new CoveredCallVault(IERC20Metadata(address(nvda)), ch, registry, hub, params, bad);
+        this.deployCoveredCall(address(nvda), bad);
+        bad = _config();
+        bad.maxOpenSeries = 0;
+        vm.expectRevert(OptionVaultBase.BadConfig.selector);
+        this.deployCoveredCall(address(nvda), bad);
+        assertEq(c.maxOpenSeries, 24);
         // the asset must be a listed underlying
         vm.expectRevert(OptionVaultBase.BadConfig.selector);
-        new CoveredCallVault(IERC20Metadata(address(usdg)), ch, registry, hub, params, _config());
+        this.deployCoveredCall(address(usdg), _config());
     }
 
     // ================================================================ NAV
@@ -115,9 +120,17 @@ contract CoveredCallVaultTest is VaultFixture {
         _buy(vault, call190, 5e18);
 
         uint256 shares = _vaultDeposit(vault, bob, amount);
+        assertLe(vault.previewRedeem(shares), amount); // straight back out at the same NAV: no gain
+        assertEq(vault.maxRedeem(bob), 0); // and not at once: the exit cooldown runs first
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(OptionVaultBase.ExitCooldown.selector, bob, _now() + 1 hours));
+        vault.redeem(shares, bob, bob);
+
+        _cooldown();
+        uint256 preview = vault.previewRedeem(shares);
         vm.prank(bob);
         uint256 out = vault.redeem(shares, bob, bob);
-        assertLe(out, amount);
+        assertEq(out, preview);
         assertEq(nvda.balanceOf(bob), out);
         assertEq(vault.balanceOf(bob), 0);
     }
@@ -190,10 +203,13 @@ contract CoveredCallVaultTest is VaultFixture {
         vault.buy(call190, 0, type(uint256).max, takerId);
         vm.expectRevert(OptionVaultBase.BadQty.selector);
         vault.buy(call190, 100e18 + 1, type(uint256).max, takerId);
+        // a sale below minTradeQty would leave the vault a dust position
+        vm.expectRevert(abi.encodeWithSelector(OptionVaultBase.DustPosition.selector, vid, int256(-0.005e18)));
+        vault.buy(call190, 0.005e18, type(uint256).max, takerId);
         vm.stopPrank();
 
         vm.warp(e);
-        _setPrice(address(nvda), 180e18); // keep the feed fresh so only the expiry fails
+        _refresh(180e18); // keep the feed and the vol fresh so only the expiry fails
         vm.prank(taker);
         vm.expectRevert(OptionVaultBase.SeriesExpired.selector);
         vault.buy(call190, 1e18, type(uint256).max, takerId);
@@ -228,14 +244,15 @@ contract CoveredCallVaultTest is VaultFixture {
         _buy(vault, call190w2, 4e18); // 4 of 10 tokens locked
 
         // ask for 3 more: utilization after the sale 7/10
-        uint256 tau = e - block.timestamp;
+        uint256 tau = e - _now();
         uint256 px = _kernelPx(tau, _volQ(0.7e18));
         assertEq(px, BlackScholes.price(180e18, 190e18, tau, _volQ(0.7e18), 0, true)); // bit-identical
         assertEq(vault.quote(call190, 3e18, true), F.mulWadUp(F.mulWadUp(3e18, px), 1.02e18));
 
-        // bid for 3 of the 4 short: utilization after the buyback 1/10
-        px = _kernelPx(e2 - block.timestamp, _volQ(0.1e18));
-        assertEq(vault.quote(call190w2, 3e18, false), (3e18 * px / 1e18) * 0.98e18 / 1e18);
+        // bid for 3 of the 4 short: never above the mark NAV carries the short at
+        uint256 mark = _kernelPx(e2 - _now(), hub.markVol(address(nvda)));
+        assertGt(_kernelPx(e2 - _now(), _volQ(0.1e18)), mark); // the formula alone would pay more
+        assertEq(vault.quote(call190w2, 3e18, false), (3e18 * mark / 1e18) * 0.98e18 / 1e18);
     }
 
     /// @dev Quoting vol for the 190 strike at spot 180 and utilization `util`, REGULAR session.
@@ -272,20 +289,24 @@ contract CoveredCallVaultTest is VaultFixture {
 
     function test_quoteIncreasesWithUtilization() public {
         _vaultDeposit(vault, alice, 10e18);
+        _buy(vault, call190, 1e18); // something to bid for
         uint256 ask0 = vault.quote(call190, 1e18, true);
         uint256 bid0 = vault.quote(call190, 1e18, false);
         assertLt(bid0, ask0);
+        // the bid is the mark less the spread, whatever the utilization
+        uint256 mark = _kernelPx(e - _now(), hub.markVol(address(nvda)));
+        assertEq(bid0, (1e18 * mark / 1e18) * 0.98e18 / 1e18);
 
-        _buy(vault, call190w2, 5e18); // half the tokens locked
+        _buy(vault, call190w2, 4e18); // half the tokens locked
         assertEq(vault.lockedAssets(), 5e18);
         assertEq(vault.freeAssets(), 5e18);
         uint256 ask1 = vault.quote(call190, 1e18, true);
-        uint256 bid1 = vault.quote(call190, 1e18, false);
         assertGt(ask1, ask0);
-        assertGt(bid1, bid0);
+        assertEq(vault.quote(call190, 1e18, false), bid0);
 
-        _buy(vault, call190w2, 5e18); // fully locked
+        _buy(vault, call190w2, 4e18); // 9 of 10 locked
         assertGt(vault.quote(call190, 1e18, true), ask1);
+        assertEq(vault.quote(call190, 1e18, false), bid0);
     }
 
     function test_weekendQuoteHigher() public {
@@ -296,12 +317,13 @@ contract CoveredCallVaultTest is VaultFixture {
         assertEq(vault.quote(call190w2, 1e18, true), flat.quote(call190w2, 1e18, true));
 
         vm.warp(SATURDAY);
+        assertFalse(vault.isLive()); // the vol state is over two days old
+        _refresh(180e18);
         assertEq(uint8(hub.session(address(nvda))), uint8(Session.WEEKEND));
         assertTrue(vault.isLive());
         uint256 ask = vault.quote(call190w2, 1e18, true);
         uint256 askFlat = flat.quote(call190w2, 1e18, true);
         assertGt(ask, askFlat);
-        assertGt(vault.quote(call190w2, 1e18, false), flat.quote(call190w2, 1e18, false));
 
         // exactly the WEEKEND vol add on top of the flat vault's vol (utilization after 1 of 10)
         uint256 volFlat = _volQ(0.1e18);
@@ -317,12 +339,13 @@ contract CoveredCallVaultTest is VaultFixture {
     function test_haltedVaultRejectsDeposit() public {
         uint256 shares = _vaultDeposit(vault, alice, 10e18);
         _buy(vault, call190, 2e18);
+        _cooldown();
         assertGt(vault.maxWithdraw(alice), 0);
         nvda.mint(bob, 1e18);
         vm.prank(bob);
         nvda.approve(address(vault), 1e18);
 
-        vm.warp(block.timestamp + STALE); // feed stale: the hub reports HALTED
+        vm.warp(_now() + STALE); // feed stale: the hub reports HALTED
         assertFalse(vault.isLive());
         assertEq(vault.maxDeposit(bob), 0);
         assertEq(vault.maxMint(bob), 0);
@@ -362,10 +385,17 @@ contract CoveredCallVaultTest is VaultFixture {
         vm.prank(bob);
         vault.deposit(1e18, bob);
 
-        // an implausible print (spot reverts) halts it as well
+        // an implausible print (spot reverts) halts it as well; the views still answer
         _setPrice(address(nvda), 2500e18);
         assertFalse(vault.isLive());
         assertEq(vault.maxDeposit(bob), 0);
+        assertEq(vault.totalAssets(), 0); // the short can't be marked without a price
+        assertEq(vault.previewRedeem(1e24), 0);
+        vault.previewDeposit(1e18);
+        vault.previewMint(1e24);
+        vault.previewWithdraw(1e18);
+        assertEq(vault.maxWithdraw(alice), 0);
+        assertEq(vault.maxRedeem(alice), 0);
     }
 
     // ================================================================ exits
@@ -373,6 +403,7 @@ contract CoveredCallVaultTest is VaultFixture {
     function test_withdrawOnlyFreeAssets() public {
         _vaultDeposit(vault, alice, 10e18);
         _buy(vault, call190, 6e18);
+        _cooldown();
         assertEq(vault.freeAssets(), 4e18);
         // alice owns every share and her NAV exceeds 10 tokens, but only the free 4 can leave now
         assertGt(vault.previewRedeem(vault.balanceOf(alice)), 10e18);
@@ -449,11 +480,150 @@ contract CoveredCallVaultTest is VaultFixture {
         assertLt(vault.previewRedeem(aShares), 100e18); // the attacker forfeits most of the donation
     }
 
+    // ================================================================ fix round: exits, liveness, queue, caps
+
+    function test_exitCooldown() public {
+        uint256 aShares = _vaultDeposit(vault, alice, 10e18);
+        uint256 until = _now() + 1 hours;
+        assertEq(vault.lastReceive(alice), _now());
+        assertEq(vault.maxWithdraw(alice), 0);
+        assertEq(vault.maxRedeem(alice), 0);
+        bytes memory cooling = abi.encodeWithSelector(OptionVaultBase.ExitCooldown.selector, alice, until);
+        vm.startPrank(alice);
+        vm.expectRevert(cooling);
+        vault.withdraw(1e18, alice, alice);
+        vm.expectRevert(cooling);
+        vault.redeem(1e24, alice, alice);
+        vm.expectRevert(cooling);
+        vault.requestRedeem(1e24, alice);
+        vm.stopPrank();
+
+        // one second short, then through
+        vm.warp(until - 1);
+        assertEq(vault.maxRedeem(alice), 0);
+        vm.warp(until);
+        assertEq(vault.maxRedeem(alice), aShares);
+
+        // shares moved to a fresh address start a fresh clock there
+        vm.prank(alice);
+        vault.transfer(bob, 1e24);
+        assertEq(vault.lastReceive(bob), until);
+        assertEq(vault.maxRedeem(bob), 0);
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(OptionVaultBase.ExitCooldown.selector, bob, until + 1 hours));
+        vault.redeem(1e24, bob, bob);
+
+        // a dust transfer or a tiny deposit made for alice can't keep her locked
+        address griefer = _user("griefer");
+        _vaultDeposit(vault, griefer, 1e18);
+        vm.prank(griefer);
+        vault.transfer(alice, 1);
+        nvda.mint(griefer, 1);
+        vm.startPrank(griefer);
+        nvda.approve(address(vault), 1);
+        vault.deposit(1, alice);
+        vm.stopPrank();
+        assertLt(vault.lastReceive(alice), until - 1 hours + 1);
+        assertGt(vault.maxRedeem(alice), 0);
+        vm.prank(alice);
+        vault.redeem(1e24, alice, alice);
+    }
+
+    function test_notLiveWhenVolStale() public {
+        _vaultDeposit(vault, alice, 10e18);
+        _buy(vault, call190, 1e18);
+        // two days and a second after the vol state was last updated, with a fresh print
+        vm.warp(T0 + 2 days + 1);
+        _setPrice(address(nvda), 180e18);
+        assertTrue(hub.session(address(nvda)) != Session.HALTED); // the price itself is fine
+        assertFalse(vault.isLive());
+        assertEq(vault.maxDeposit(bob), 0);
+        assertEq(vault.maxWithdraw(alice), 0);
+        vm.expectRevert(OptionVaultBase.VaultNotLive.selector);
+        vault.quote(call190, 1e18, true);
+        vm.startPrank(taker);
+        vm.expectRevert(OptionVaultBase.VaultNotLive.selector);
+        vault.buy(call190, 1e18, type(uint256).max, takerId);
+        vm.expectRevert(OptionVaultBase.VaultNotLive.selector);
+        vault.sellBack(call190, 1e18, 0, takerId);
+        vm.stopPrank();
+
+        _pokeVol(address(nvda));
+        assertTrue(vault.isLive());
+        vm.prank(taker);
+        vault.sellBack(call190, 1e18, 0, takerId);
+    }
+
+    function test_queueReservedFromCapacityAndFreeAssets() public {
+        _vaultDeposit(vault, alice, 10e18);
+        _cooldown();
+        vm.prank(alice);
+        vault.requestRedeem(6e24, alice); // owed 6 tokens
+        assertEq(vault.freeAssets(), 4e18);
+        assertEq(vault.maxWithdraw(alice), 4e18);
+
+        // a sale can't use the reserved tokens
+        vm.prank(taker);
+        vm.expectRevert(abi.encodeWithSelector(OptionVaultBase.ExceedsCapacity.selector, 10e18 + 1, 10e18));
+        vault.buy(call190, 4e18 + 1, type(uint256).max, takerId);
+        _buy(vault, call190, 3e18);
+        assertLt(vault.freeAssets(), 1e18);
+
+        // nor an instant withdrawal
+        uint256 free = vault.freeAssets();
+        assertEq(vault.maxWithdraw(alice), free);
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(ERC4626.ERC4626ExceededMaxWithdraw.selector, alice, free + 1, free));
+        vault.withdraw(free + 1, alice, alice);
+
+        // the roll pays the queue out of what it reserved
+        uint256 owed = vault.convertToAssets(6e24);
+        vault.roll(new uint64[](0));
+        assertEq(vault.redeemable(alice), owed);
+        assertEq(vault.freeAssets(), 10e18 - 3e18 - owed);
+    }
+
+    function test_maxOpenSeries() public {
+        VaultConfig memory c = _config();
+        c.maxOpenSeries = 2;
+        CoveredCallVault v = _newCoveredCall(c);
+        _vaultDeposit(v, alice, 10e18);
+        uint32 call195 = _list(address(nvda), e, 195e18, true);
+        _buy(v, call190, 1e18);
+        _buy(v, call190w2, 1e18);
+        vm.prank(taker);
+        vm.expectRevert(OptionVaultBase.TooManySeries.selector);
+        v.buy(call195, 1e18, type(uint256).max, takerId);
+        _buy(v, call190, 1e18); // more of an open series is fine
+
+        vm.prank(taker);
+        v.sellBack(call190w2, 1e18, 0, takerId); // closing one frees a slot
+        _buy(v, call195, 1e18);
+    }
+
+    function test_sellBackAndDepositBlockedInDeficit() public {
+        _vaultDeposit(vault, alice, 10e18);
+        _buy(vault, call190, 2e18);
+        _cheatDeficitTotal(vid, 1e18);
+        vm.prank(taker);
+        vm.expectRevert(OptionVaultBase.VaultInDeficit.selector);
+        vault.sellBack(call190, 1e18, 0, takerId);
+        assertEq(vault.maxDeposit(bob), 0);
+        assertEq(vault.maxMint(bob), 0);
+        nvda.mint(bob, 1e18);
+        vm.startPrank(bob);
+        nvda.approve(address(vault), 1e18);
+        vm.expectRevert(abi.encodeWithSelector(ERC4626.ERC4626ExceededMaxDeposit.selector, bob, 1e18, 0));
+        vault.deposit(1e18, bob);
+        vm.stopPrank();
+    }
+
     // ================================================================ async redemption
 
     function test_requestRedeemProcessedWhenFlat() public {
         _vaultDeposit(vault, alice, 10e18);
         _vaultDeposit(vault, bob, 10e18);
+        _cooldown();
 
         vm.expectEmit(true, true, true, true, address(vault));
         emit OptionVaultBase.RedeemRequested(0, 0, alice, carol, 4e24);
@@ -512,7 +682,13 @@ contract CoveredCallVaultTest is VaultFixture {
 
     function test_requestRedeemValidation() public {
         _vaultDeposit(vault, alice, 1e18);
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(OptionVaultBase.ExitCooldown.selector, alice, _now() + 1 hours));
+        vault.requestRedeem(1, alice);
+        _cooldown();
         vm.startPrank(alice);
+        vm.expectRevert(OptionVaultBase.BadReceiver.selector);
+        vault.requestRedeem(1, address(vault));
         vm.expectRevert(OptionVaultBase.ZeroShares.selector);
         vault.requestRedeem(0, alice);
         vm.expectRevert(OptionVaultBase.ZeroAddress.selector);
@@ -533,6 +709,7 @@ contract CoveredCallVaultTest is VaultFixture {
     function test_rollWaitsUntilFreeAssetsCover() public {
         _vaultDeposit(vault, alice, 10e18);
         _buy(vault, call190, 8e18); // 2 tokens free
+        _cooldown();
         vm.prank(alice);
         vault.requestRedeem(5e24, alice); // about 5 tokens
 
@@ -556,6 +733,7 @@ contract CoveredCallVaultTest is VaultFixture {
     function test_rollPaysFromFreeWhileShortsOpen() public {
         _vaultDeposit(vault, alice, 10e18);
         _buy(vault, call190w2, 5e18);
+        _cooldown();
         vm.prank(alice);
         vault.requestRedeem(2e24, alice);
 
@@ -574,9 +752,10 @@ contract CoveredCallVaultTest is VaultFixture {
 
     function test_rollWaitsWhileNotLive() public {
         _vaultDeposit(vault, alice, 10e18);
+        _cooldown();
         vm.prank(alice);
         vault.requestRedeem(2e24, alice);
-        vm.warp(block.timestamp + STALE);
+        vm.warp(_now() + STALE);
         vault.roll(new uint64[](0)); // no payout at a stale NAV
         assertEq(vault.epoch(), 0);
         _setPrice(address(nvda), 180e18);
@@ -587,6 +766,7 @@ contract CoveredCallVaultTest is VaultFixture {
 
     function test_deficitBlocksExitsAndRoll() public {
         _vaultDeposit(vault, alice, 10e18);
+        _cooldown();
         vm.prank(alice);
         vault.requestRedeem(2e24, alice);
         _cheatDeficitTotal(vid, 1e18); // as if an expiry had left 1 USDG unpaid
@@ -594,6 +774,7 @@ contract CoveredCallVaultTest is VaultFixture {
         assertEq(vault.totalAssets(), uint256(1799e18) * 1e18 / 180e18); // NAV nets the deficit
         assertEq(vault.maxWithdraw(alice), 0);
         assertEq(vault.maxRedeem(alice), 0);
+        assertEq(vault.maxDeposit(bob), 0); // no new money into an account that owes
         vault.roll(new uint64[](0));
         assertEq(vault.epoch(), 0);
 
@@ -606,11 +787,13 @@ contract CoveredCallVaultTest is VaultFixture {
     function test_rollAfterExpiryAttemptsSettlement() public {
         _vaultDeposit(vault, alice, 10e18);
         _buy(vault, call190, 5e18);
+        _cooldown();
         vm.prank(alice);
         vault.requestRedeem(8e24, alice); // more than the 5 free
 
         vm.warp(e + 1);
         _settleExpiry(address(nvda), e, 180e18);
+        _pokeVol(address(nvda));
         vm.expectCall(address(ch), abi.encodeCall(ch.settleAccount, (vid, e)));
         vault.roll(_one(e)); // never reverts on a clearinghouse that can't settle yet
         if (_settlementAvailable()) {
@@ -629,6 +812,7 @@ contract CoveredCallVaultTest is VaultFixture {
         uint256 aShares = _vaultDeposit(vault, alice, 10e18);
         _vaultDeposit(vault, bob, 10e18);
         _buy(vault, call190, 15e18); // 5 tokens free
+        _cooldown();
         vm.prank(alice);
         vault.requestRedeem(aShares, alice); // over 10 tokens
 
@@ -638,6 +822,7 @@ contract CoveredCallVaultTest is VaultFixture {
         // expires out of the money
         vm.warp(e + 1);
         _settleExpiry(address(nvda), e, 180e18);
+        _pokeVol(address(nvda));
         uint256 expected = vault.convertToAssets(aShares);
         vm.expectEmit(true, true, true, true, address(vault));
         emit OptionVaultBase.Rolled(0, expected);
@@ -659,12 +844,14 @@ contract CoveredCallVaultTest is VaultFixture {
 
         _vaultDeposit(vault, alice, 10e18);
         _buy(vault, call190, 5e18);
+        _cooldown();
         vm.prank(alice);
         vault.requestRedeem(2e24, alice);
 
         // settles at 220: the 5 calls owe 150, far more than the premium cash
         vm.warp(e + 1);
         _settleExpiry(address(nvda), e, 220e18);
+        _pokeVol(address(nvda));
         uint256 cash = ch.cashOf(vid);
         uint256 nav = vault.totalAssets();
         assertEq(nav, (cash + 10 * 220e18 - 150e18) * 1e18 / 220e18); // the loss is in NAV already
