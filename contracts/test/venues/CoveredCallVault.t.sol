@@ -1009,9 +1009,10 @@ contract CoveredCallVaultTest is VaultFixture {
         assertEq(vault.epoch(), 1);
         assertEq(vault.redeemable(alice), t);
         assertEq(vault.redeemableCash(alice), c);
+        assertEq(vault.claimRedeemed(alice), t);
         vm.expectEmit(true, true, true, true, address(vault));
         emit OptionVaultBase.CashLegPaid(alice, c);
-        vault.claimRedeemed(alice);
+        assertEq(vault.claimRedeemedCash(alice), c);
         // in kind: her 10 tokens and her half of the premium cash, each rounded down
         assertEq(nvda.balanceOf(alice), t);
         assertEq(usdg.balanceOf(alice), c);
@@ -1082,11 +1083,59 @@ contract CoveredCallVaultTest is VaultFixture {
         vault.roll(_one(e));
         assertEq(vault.epoch(), 1);
         vault.claimRedeemed(alice);
+        vault.claimRedeemedCash(alice);
         assertApproxEqAbs(nvda.balanceOf(alice), 10e18, 2);
         assertLe(nvda.balanceOf(alice), 10e18);
         assertApproxEqAbs(usdg.balanceOf(alice), premium / 1e12, 1);
         assertLt(ch.cashOf(vid), 2e12);
         assertEq(vault.reservedCash(), 0);
+    }
+
+    /// The two parts of a queued exit are claimed on their own: a USDG transfer that fails for the
+    /// receiver doesn't hold up its tokens, and the other way round.
+    function test_claimLegsAreIndependent() public {
+        uint256 aShares = _vaultDeposit(vault, alice, 10e18);
+        _buy(vault, call190w2, 2e18);
+        _cooldown();
+        vm.prank(alice);
+        vault.requestRedeem(aShares / 2, alice);
+        vault.roll(new uint64[](0));
+        uint256 t = vault.redeemable(alice);
+        uint256 c = vault.redeemableCash(alice);
+        assertGt(t, 0);
+        assertGt(c, 0);
+
+        // USDG refuses the receiver: the tokens still go out, the USDG stays claimable
+        vm.mockCallRevert(address(usdg), abi.encodeCall(usdg.transfer, (alice, c)), "blocked");
+        vm.expectRevert("blocked");
+        vault.claimRedeemedCash(alice);
+        assertEq(vault.claimRedeemed(alice), t);
+        assertEq(nvda.balanceOf(alice), t);
+        assertEq(vault.redeemable(alice), 0);
+        assertEq(vault.redeemableCash(alice), c);
+        assertEq(vault.reservedCash(), c);
+        vm.expectRevert(OptionVaultBase.NothingToClaim.selector);
+        vault.claimRedeemed(alice);
+        vm.clearMockedCalls();
+        assertEq(vault.claimRedeemedCash(alice), c);
+        assertEq(usdg.balanceOf(alice), c);
+        assertEq(vault.reservedAssets(), 0);
+        assertEq(vault.reservedCash(), 0);
+        vm.expectRevert(OptionVaultBase.NothingToClaim.selector);
+        vault.claimRedeemedCash(alice);
+
+        // the stock refuses: the USDG goes out on its own
+        vm.prank(alice);
+        vault.requestRedeem(aShares / 4, bob);
+        vault.roll(new uint64[](0));
+        uint256 tb = vault.redeemable(bob);
+        uint256 cb = vault.redeemableCash(bob);
+        vm.mockCallRevert(address(nvda), abi.encodeCall(nvda.transfer, (bob, tb)), "paused");
+        vm.expectRevert("paused");
+        vault.claimRedeemed(bob);
+        assertEq(vault.claimRedeemedCash(bob), cb);
+        assertEq(usdg.balanceOf(bob), cb);
+        assertEq(vault.redeemable(bob), tb);
     }
 
     /// @dev The token and USDG parts of an exit worth `assets` now, as the vault splits it.

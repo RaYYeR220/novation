@@ -493,23 +493,29 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         emit RedeemRequested(requestId, ep, msg.sender, receiver, shares);
     }
 
-    /// @notice Pushes everything `receiver` can claim to `receiver`, the asset and any USDG part.
-    /// Callable by anyone.
+    /// @notice Pushes the asset `receiver` can claim to `receiver`. Callable by anyone. The USDG
+    /// part of an in-kind exit is claimed on its own (claimRedeemedCash), so a token that can't
+    /// reach the receiver (paused, blocklisted) never holds up the other.
     function claimRedeemed(address receiver) external nonReentrant returns (uint256 assets) {
         _fold(receiver, _pending[receiver]);
         assets = _redeemable[receiver];
-        uint256 cash = _redeemableCash[receiver];
-        if (assets == 0 && cash == 0) revert NothingToClaim();
+        if (assets == 0) revert NothingToClaim();
         _redeemable[receiver] = 0;
-        _redeemableCash[receiver] = 0;
         reservedAssets -= assets;
-        reservedCash -= cash;
         emit RedeemClaimed(receiver, assets);
-        if (assets != 0) IERC20(asset()).safeTransfer(receiver, assets);
-        if (cash != 0) {
-            emit CashLegPaid(receiver, cash);
-            IERC20(_usdg).safeTransfer(receiver, cash);
-        }
+        IERC20(asset()).safeTransfer(receiver, assets);
+    }
+
+    /// @notice Pushes the USDG part `receiver` can claim (raw units) to `receiver`. Callable by
+    /// anyone.
+    function claimRedeemedCash(address receiver) external nonReentrant returns (uint256 cash) {
+        _fold(receiver, _pending[receiver]);
+        cash = _redeemableCash[receiver];
+        if (cash == 0) revert NothingToClaim();
+        _redeemableCash[receiver] = 0;
+        reservedCash -= cash;
+        emit CashLegPaid(receiver, cash);
+        IERC20(_usdg).safeTransfer(receiver, cash);
     }
 
     /// @notice Permissionless. For each expiry in `expiries`: settles the vault's positions once
