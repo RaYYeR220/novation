@@ -1075,6 +1075,60 @@ contract ClearinghouseSettlementTest is Fixture {
         _assertSolvent();
     }
 
+    /// Collateral whose feed dies holds a socialization only for a while: marked without a price
+    /// for 72 hours, its feed printing nothing new, it counts as 0, so the expiry's claims can't
+    /// stay frozen for good. A new round restarts the clock and a price clears the mark.
+    function test_deadFeedCollateralWrittenOffAfter72Hours() public {
+        (uint256 v, uint256 b) = _nakedShortSold();
+        _deposit(alice, v, address(spy), 0.001e18); // 0.60 USD of SPY, held before the default
+        _defaultAt300(v, b);
+        _setPrice(address(spy), 0); // the SPY feed dies
+        vm.expectRevert(MarketDataHub.NoPrice.selector);
+        ch.socializeRemainder(v, e);
+
+        uint256 t0 = vm.getBlockTimestamp();
+        (uint80 round,,,,) = feedOf[address(spy)].latestRoundData();
+        vm.expectEmit(true, true, true, true, address(ch));
+        emit SettlementLogic.PriceOutageMarked(address(spy), t0, round);
+        ch.markUnpriced(address(spy));
+        (uint256 since, uint80 r) = ch.priceOutageOf(address(spy));
+        assertEq(since, t0);
+        assertEq(r, round);
+        vm.recordLogs();
+        ch.markUnpriced(address(spy)); // already running: nothing changes
+        assertEq(vm.getRecordedLogs().length, 0);
+
+        // a new round (still without a price) restarts the clock
+        vm.warp(t0 + 70 hours);
+        _setPrice(address(spy), 0);
+        vm.warp(t0 + 72 hours);
+        vm.expectRevert(MarketDataHub.NoPrice.selector);
+        ch.socializeRemainder(v, e);
+        ch.markUnpriced(address(spy));
+        (since,) = ch.priceOutageOf(address(spy));
+        assertEq(since, t0 + 72 hours);
+
+        vm.warp(since + 72 hours - 1);
+        vm.expectRevert(MarketDataHub.NoPrice.selector);
+        ch.socializeRemainder(v, e);
+        uint256 snap = vm.snapshotState();
+
+        // 72 hours on, the dead collateral counts as 0 and the socialization goes through
+        vm.warp(since + 72 hours);
+        ch.socializeRemainder(v, e);
+        assertEq(_pending(e), 0);
+        assertEq(ch.collateralOf(v, address(spy)), 0.001e18); // it stays on the account
+        ch.claim(b, e);
+        _assertSolvent();
+
+        // had the price come back, the mark would have been cleared
+        vm.revertToState(snap);
+        _setPrice(address(spy), 600e18);
+        ch.markUnpriced(address(spy));
+        (since,) = ch.priceOutageOf(address(spy));
+        assertEq(since, 0);
+    }
+
     /// alice's naked short settles at 300 with an empty fund: 108 pending; NVDA then prints 250.
     function _defaultAt300(uint256 v, uint256 b) internal {
         _settleAt(address(nvda), 300e18);

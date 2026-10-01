@@ -3,7 +3,7 @@ pragma solidity 0.8.30;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {CHS, CHStorage, CHErrors, Deps} from "../ClearinghouseStorage.sol";
+import {CHS, CHStorage, CHErrors, Deps, PriceOutage} from "../ClearinghouseStorage.sol";
 import {MarginLogic} from "./MarginLogic.sol";
 import {Payoff} from "./Payoff.sol";
 import {IClearinghouse} from "../../interfaces/IClearinghouse.sol";
@@ -35,6 +35,10 @@ library SettlementLogic {
     /// @notice An impaired pool paid `paidWad` for a claim of `claimWad`: the difference is the
     /// claimant's realized loss.
     event ClaimHaircut(uint256 indexed id, uint64 indexed expiry, uint256 claimWad, uint256 paidWad);
+
+    /// @notice `token` was seen without a price at `since` with its feed at `round` (since 0: it
+    /// has a price again and the record is cleared).
+    event PriceOutageMarked(address indexed token, uint256 since, uint80 round);
 
     /// @notice Closes every position of `id` that expires at `expiry` and settles the net payoff
     /// through pool[expiry]. Permissionless; each (underlying, expiry) involved must be settled in
@@ -203,7 +207,9 @@ library SettlementLogic {
     /// than globals.dustEquity at spot (dust stays on the account). While any of its collateral
     /// can't be priced, the call reverts with the hub's error: a socialization can't be undone, so
     /// it waits for a price that may show the collateral covers the debt (the deficit sale sells
-    /// it then). Any cash that reached the account repays the deficit first.
+    /// it then). The wait is bounded: a token marked without a price for 72 hours, its feed
+    /// printing nothing new, counts as 0 (markUnpriced). Any cash that reached the account repays
+    /// the deficit first.
     ///
     /// The defaulter is not let off: the socialized amount and the fund's bridge (written off in
     /// the fund's books) become its socializedDebt, still part of its deficit, rounded up to a
@@ -262,6 +268,26 @@ library SettlementLogic {
 
         emit IClearinghouse.LossSocialized(expiry, toPool, newIndex);
         if (bridged != 0) d.insurance.notifyWrittenOff(bridged);
+    }
+
+    /// @notice Permissionless: records that `token` has no price now, with its feed's latest
+    /// round. Once that record is MarginLogic.OUTAGE_WRITE_OFF (72 hours) old and the feed still
+    /// shows the same round and no price, the socialization dust test counts the token as 0, so a
+    /// feed that never comes back can't freeze an expiry's claims for good. A new round restarts
+    /// the clock; a price clears the record. A call that changes nothing is a no-op.
+    function markUnpriced(Deps memory d, address token) external {
+        (bool priced, uint80 round) = MarginLogic.priceStatus(d, token);
+        PriceOutage storage o = CHS.s().outages[token];
+        if (priced) {
+            if (o.since == 0) return;
+            delete CHS.s().outages[token];
+            emit PriceOutageMarked(token, 0, round);
+            return;
+        }
+        if (o.since != 0 && o.round == round) return;
+        o.since = uint64(block.timestamp);
+        o.round = round;
+        emit PriceOutageMarked(token, block.timestamp, round);
     }
 
     // ---------------------------------------------------------------- private
