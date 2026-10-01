@@ -3,7 +3,7 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useClient } from './context';
 import { MockClient } from './mock';
-import type { Session } from './types';
+import type { Session, Venue } from './types';
 
 /** True when the app reads fixtures instead of the chain. */
 export function useIsDemo(): boolean {
@@ -67,6 +67,7 @@ export interface WhatIfArgs {
   qtyDelta: number;
   premium: number;
   agent?: string;
+  venue?: Venue;
 }
 
 /** The pre-sign what-if. Holds the last quote while a new one computes, so the ticket never blanks. */
@@ -76,7 +77,7 @@ export function useWhatIf(args: WhatIfArgs | null) {
     queryKey: ['whatIf', args],
     queryFn: () => {
       const a = args as WhatIfArgs;
-      return c.whatIf(a.id, a.seriesId, a.qtyDelta, a.premium, a.agent);
+      return c.whatIf(a.id, a.seriesId, a.qtyDelta, a.premium, { agent: a.agent, venue: a.venue });
     },
     enabled: args !== null,
     placeholderData: keepPreviousData,

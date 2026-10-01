@@ -4,6 +4,7 @@ import {
   fmtDays,
   fmtExpiry,
   fmtExpiryLong,
+  fmtFee,
   fmtNumber,
   fmtPct,
   fmtSeries,
@@ -34,6 +35,14 @@ describe('number formatting', () => {
     expect(fmtUsd(-1546.18)).toBe('−$1,546.18');
     expect(fmtPct(0.169, 1)).toBe('16.9%');
     expect(fmtPct(-0.05)).toBe('−5.0%');
+  });
+
+  it('shows a fee under a cent as <0.01', () => {
+    expect(fmtFee(0.0033)).toBe('<0.01');
+    expect(fmtFee(0.009999)).toBe('<0.01');
+    expect(fmtFee(0.01)).toBe('0.01');
+    expect(fmtFee(0)).toBe('0.00');
+    expect(fmtFee(0.767793)).toBe('0.77');
   });
 
   it('prints strikes bare when whole', () => {

@@ -1,5 +1,6 @@
 import type {
   AccountState, AgentGrant, GasRow, NovationClient, ProtocolStats, Quote, Refusal, ScenarioGrid, Series, Session, Underlying, Vault,
+  Venue, WhatIfOptions,
 } from './types';
 import underlyingsJson from '../../fixtures/underlyings.json';
 import chainsJson from '../../fixtures/chains.json';
@@ -19,6 +20,17 @@ type AccountData = Awaited<ReturnType<NovationClient['account']>>;
 /** tools/ref/gen_app_fixtures.py NOW: every fixture mark, grid and margin is priced at this second. */
 export const FIXTURE_AS_OF = 1790697600;
 const FEE_BPS = 5;
+/** How far a premium may sit from the canned ticket's and still be that ticket (USDG). */
+const PREMIUM_TOLERANCE = 0.01;
+type CannedTicket = {
+  id: number;
+  seriesId: number;
+  qtyDelta: number;
+  premium: number;
+  venue?: Venue;
+  agent?: string;
+  quote: Quote;
+};
 const MM_RATIO = RISK.mmRatio;
 const account7 = account7Json as unknown as {
   account: AccountData;
@@ -65,24 +77,49 @@ export class MockClient implements NovationClient {
   }
 
   /**
-   * Exact when the fixtures carry the ticket (computed by the integer kernel reference). Otherwise
-   * the float twin of the kernel (`lib/kernel.ts`) prices the book before and after, and the change
-   * is applied to the exact fixture state; such quotes are labelled `approx: true`. The after-trade
-   * grid is the exact fixture grid plus the twin's change, on both paths.
+   * Exact when the fixtures carry the ticket: same account, series, size and venue, and a premium
+   * within PREMIUM_TOLERANCE of the one the kernel reference priced. Margin, after-trade grid and
+   * refusal then come straight from tools/ref/gen_app_fixtures.py. The canned ticket is hedge-bot's;
+   * its agent refusal applies only when that agent signs.
    *
-   * The canned ticket is hedge-bot's: its budget refusal applies only when `agent` signs. For other
-   * tickets an agent is held to the generator's budget rule: used + growth of the correlated loss
-   * must stay within `maxWorstLoss`. The allowed-underlyings list is left to the caller.
+   * Any other ticket is an estimate (`approx: true`): the float twin of the kernel (`lib/kernel.ts`)
+   * prices the book before and after, and the change is applied to the exact fixture state and grid.
+   * Checks run in TradeLogic.trade order: allowed underlying, cash, margin (a pure reduction may stay
+   * under IM), then the agent's policy: post-trade lossIM within maxWorstLoss unless the side reduces
+   * risk, premium within maxPremiumPerTrade, and equity given up against the mark (fee aside) within
+   * the same cap.
    */
-  async whatIf(id: number, seriesId: number, qtyDelta: number, premium: number, agent?: string): Promise<Quote> {
+  async whatIf(id: number, seriesId: number, qtyDelta: number, premium: number, opts: WhatIfOptions = {}): Promise<Quote> {
     const series = seriesById.get(seriesId);
     if (!series) throw new Error(`unknown series ${seriesId}`);
     if (!Number.isFinite(qtyDelta) || qtyDelta === 0) throw new RangeError('qtyDelta must be a non-zero number');
+    const { agent, venue } = opts;
     const acct = await this.account(id);
     const grant = agent
       ? (await this.agents(id)).find((g) => g.agent.toLowerCase() === agent.toLowerCase())
       : undefined;
     if (agent && !grant) throw new Error(`${agent} holds no grant on account ${id}`);
+
+    const tickets = whatifsJson as unknown as CannedTicket[];
+    const hit = tickets.find(
+      (w) =>
+        w.id === id &&
+        w.seriesId === seriesId &&
+        w.qtyDelta === qtyDelta &&
+        (w.venue === undefined || w.venue === venue) &&
+        Math.abs(w.premium - premium) <= PREMIUM_TOLERANCE,
+    );
+    if (hit) {
+      const quote = clone(hit.quote);
+      const signedByIts = Boolean(agent && hit.agent && agent.toLowerCase() === hit.agent.toLowerCase());
+      if (quote.refusal?.code.startsWith('Agent') && !signedByIts) delete quote.refusal;
+      return { ...quote, approx: false };
+    }
+
+    const s = acct.state;
+    const held = acct.positions.find((p) => p.seriesId === seriesId)?.qty ?? 0;
+    const next = held + qtyDelta;
+    const opening = next !== 0 && (Math.abs(next) > Math.abs(held) || held > 0 !== next > 0);
 
     const us = await this.underlyings();
     const before = buildBook(acct.positions, acct.collateral, us);
@@ -93,15 +130,6 @@ export class MockClient implements NovationClient {
     const grid = (await this.scenarioGrid(id)).cells;
     const afterGrid = grid.map((c, i) => c + (ka.grid[i] as number) - (kb.grid[i] as number));
 
-    const tickets = whatifsJson as unknown as { id: number; seriesId: number; qtyDelta: number; premium: number; quote: Quote }[];
-    const hit = tickets.find((w) => w.id === id && w.seriesId === seriesId && w.qtyDelta === qtyDelta);
-    if (hit) {
-      const quote = clone(hit.quote);
-      if (!grant && quote.refusal?.code === 'AgentRiskBudgetExceeded') delete quote.refusal;
-      return { ...quote, afterGrid, approx: false };
-    }
-
-    const s = acct.state;
     // premium is a positive magnitude; qtyDelta sign gives direction (buy pays, sell receives).
     const sign = qtyDelta < 0 ? 1 : -1;
     const fee = premium * (FEE_BPS / 1e4);
@@ -121,25 +149,34 @@ export class MockClient implements NovationClient {
       healthy: equity >= im,
       liquidatable: equity < im * MM_RATIO,
     };
-    // Spec 5.3: a trade that lowers lossIM and grows no series clears even below initial margin.
-    const held = acct.positions.find((p) => p.seriesId === seriesId)?.qty ?? 0;
-    const reducing = ka.lossIM <= kb.lossIM && Math.abs(held + qtyDelta) <= Math.abs(held);
+
+    const pureReduction = !opening && im <= s.im && equity + fee >= s.equity;
     let refusal: Refusal | undefined;
-    if (cash < 0) refusal = { code: 'InsufficientCash', message: 'Cash does not cover the premium and fee.', numbers: { cash, premium, fee } };
-    else if (!afterState.healthy && !reducing)
+    if (grant && !grant.allowed.includes(series.underlying))
+      refusal = { code: 'AgentUnderlyingNotAllowed', message: `The agent may not trade ${series.underlying}.` };
+    else if (cash < 0)
+      refusal = { code: 'InsufficientCash', message: 'Cash does not cover the premium and fee.', numbers: { cash, premium, fee } };
+    else if (!afterState.healthy && !pureReduction)
       refusal = { code: 'InsufficientMargin', message: 'Initial margin after the trade exceeds equity.', numbers: { im, equity } };
     else if (grant) {
-      const projected = grant.used + Math.max(0, ka.lossCorr - kb.lossCorr);
-      if (projected > grant.maxWorstLoss) {
+      const loss = s.equity - (equity + fee);
+      if (im > grant.maxWorstLoss && (opening || im > s.im)) {
         refusal = {
           code: 'AgentRiskBudgetExceeded',
           message: "Worst-case loss after this trade exceeds the agent's risk budget.",
-          numbers: {
-            worstLoss: Math.round(projected * 100) / 100,
-            budget: grant.maxWorstLoss,
-            used: grant.used,
-            remaining: grant.maxWorstLoss - grant.used,
-          },
+          numbers: { worstLoss: im, budget: grant.maxWorstLoss, used: s.im, remaining: grant.maxWorstLoss - s.im },
+        };
+      } else if (premium > grant.maxPremiumPerTrade) {
+        refusal = {
+          code: 'AgentPremiumExceeded',
+          message: "Premium exceeds the agent's per-trade cap.",
+          numbers: { premium, cap: grant.maxPremiumPerTrade },
+        };
+      } else if (loss > grant.maxPremiumPerTrade) {
+        refusal = {
+          code: 'AgentValueDrainExceeded',
+          message: "The trade gives up more value than the agent's cap.",
+          numbers: { loss, cap: grant.maxPremiumPerTrade },
         };
       }
     }

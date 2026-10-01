@@ -37,18 +37,18 @@ test('the crown mounts, switches session and logs no errors', async ({ page }) =
   await expect(crown.locator('canvas')).toBeVisible();
   const stage = crown.getByRole('group', { name: /Scenario crown/ });
   await expect(stage).toHaveAttribute('data-frames', /\d+/);
-  await expect(crown.getByText('656.25', { exact: true })).toBeVisible();
+  await expect(crown.getByText('596.51', { exact: true })).toBeVisible();
 
   await crown.getByRole('button', { name: 'Weekend' }).click();
   await expect(crown.getByRole('button', { name: 'Weekend' })).toHaveAttribute('aria-pressed', 'true');
-  await expect(crown.getByRole('table')).toContainText('Weekend session. Initial margin 1,350.99 USDG');
+  await expect(crown.getByRole('table')).toContainText('Weekend session. Initial margin 1,373.29 USDG');
   // the readout follows the spring and lands on the weekend IM
-  await expect(crown.getByText('1,350.99', { exact: true })).toBeVisible({ timeout: 60_000 });
+  await expect(crown.getByText('1,373.29', { exact: true })).toBeVisible({ timeout: 60_000 });
 
   // keyboard: arrows step through scenarios and announce them
   await stage.focus();
   await page.keyboard.press('ArrowRight');
-  await expect(crown.getByText('price −5/6 R, vol ×1.4: −954.72 USDG')).toBeAttached();
+  await expect(crown.getByText('price −5/6 R, vol ×0.7: −896.95 USDG')).toBeAttached();
 
   expect(errors).toEqual([]);
 });
@@ -69,7 +69,7 @@ test.describe('reduced motion', () => {
 
     // a session switch re-seats instantly: at most a couple of frames, then still again
     await crown.getByRole('button', { name: 'Weekend' }).click();
-    await expect(crown.getByText('1,350.99', { exact: true })).toBeVisible();
+    await expect(crown.getByText('1,373.29', { exact: true })).toBeVisible();
     await page.waitForTimeout(400);
     const after = Number(await stage.getAttribute('data-frames'));
     expect(after - Number(frames)).toBeLessThanOrEqual(4);
@@ -101,6 +101,6 @@ test.describe('no WebGL', () => {
     await expect(crown).toHaveAttribute('data-crown-phase', 'static', { timeout: 15_000 });
     await expect(crown.locator('canvas')).toHaveCount(0);
     await expect(crown.locator('img')).toBeVisible();
-    await expect(crown.getByRole('table')).toContainText('−543.21');
+    await expect(crown.getByRole('table')).toContainText('−483.46');
   });
 });

@@ -11,6 +11,8 @@ export interface StripGrid {
   cells: readonly number[];
   /** The kernel's worst scenario index; defaults to the lowest cell. */
   worst?: number;
+  /** Cells re-priced by the float twin of the kernel rather than computed by it. */
+  estimate?: boolean;
 }
 
 export interface ScenarioStripProps {
@@ -95,8 +97,11 @@ export function ScenarioStrip({ grids, range, unit = 'USDG', className }: Scenar
         {grids.map((g, gi) => {
           const worst = g.worst ?? worstCell(g.cells).index;
           return (
-            <div key={g.name} className="grid grid-cols-[44px_minmax(0,1fr)] items-center gap-s3">
-              <span className="text-t12 text-navy-200">{g.name}</span>
+            <div key={g.name} className="grid grid-cols-[56px_minmax(0,1fr)] items-center gap-s3">
+              <span className="grid text-t12 leading-tight text-navy-200">
+                {g.name}
+                {g.estimate && <span className="text-navy-200/80">estimate</span>}
+              </span>
               <svg
                 viewBox={`-2 -2 ${W + 4} ${H + 4}`}
                 className="block h-auto w-full max-w-[300px]"
@@ -119,6 +124,7 @@ export function ScenarioStrip({ grids, range, unit = 'USDG', className }: Scenar
                       data-worst={i === worst || undefined}
                       stroke={i === worst ? 'var(--color-navy-50)' : on ? 'var(--color-cyan)' : 'none'}
                       strokeWidth={i === worst || on ? 1.5 : 0}
+                      strokeDasharray={i === worst && g.estimate ? '2.5 1.5' : undefined}
                       onPointerEnter={() => setActive({ g: gi, i })}
                     />
                   );
@@ -140,7 +146,7 @@ export function ScenarioStrip({ grids, range, unit = 'USDG', className }: Scenar
             </div>
           );
         })}
-        <div aria-hidden="true" className="grid grid-cols-[44px_minmax(0,1fr)] gap-s3">
+        <div aria-hidden="true" className="grid grid-cols-[56px_minmax(0,1fr)] gap-s3">
           <span />
           <div className="flex max-w-[300px] justify-between text-t12 leading-none tabular-nums text-navy-200">
             <span>{range ? fmtShock(-range.value) : '−R'}</span>
@@ -158,6 +164,7 @@ export function ScenarioStrip({ grids, range, unit = 'USDG', className }: Scenar
               {fmtNumber(focusValue)} {unit}
             </span>
             {focusIsWorst && <span> (worst of 39)</span>}
+            {focusGrid.estimate && <span> (estimate)</span>}
           </>
         ) : (
           <>
@@ -168,7 +175,8 @@ export function ScenarioStrip({ grids, range, unit = 'USDG', className }: Scenar
                 <span key={g.name}>
                   {gi > 0 && '; '}
                   {g.name.toLowerCase()}{' '}
-                  <span className="font-medium tabular-nums text-navy-50">{fmtNumber(g.cells[w] ?? 0)}</span> at {describe(w, range)}
+                  <span className="font-medium tabular-nums text-navy-50">{fmtNumber(g.cells[w] ?? 0)}</span>
+                  {g.estimate && ' (estimate)'} at {describe(w, range)}
                 </span>
               );
             })}

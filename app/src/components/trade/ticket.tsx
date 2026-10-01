@@ -14,13 +14,14 @@ import { Tooltip } from '@/components/ui/tooltip';
 import { useToast } from '@/components/ui/toast';
 import { useClient } from '@/lib/client/context';
 import type { WhatIfArgs } from '@/lib/client/hooks';
-import type { AccountState, AgentGrant, Quote, Underlying, Vault } from '@/lib/client/types';
+import type { AccountState, AgentGrant, Quote, Underlying, Vault, Venue } from '@/lib/client/types';
 import { cn } from '@/lib/cn';
-import { fmtDays, fmtExpiry, fmtNumber, fmtSeries, fmtSeriesShort, fmtSigned } from '@/lib/format';
+import { fmtDays, fmtFee, fmtNumber, fmtSeries, fmtSeriesShort, fmtSigned } from '@/lib/format';
+import { fmtCloseEt } from '@/lib/nyse';
 import { perContract } from '@/lib/margin';
 import type { ChainSeries, Side } from './options-chain';
 
-export type Venue = 'vault' | 'rfq';
+export type { Venue } from '@/lib/client/types';
 export const OWNER = 'owner';
 
 export interface TicketProps {
@@ -72,7 +73,7 @@ function useFit(args: WhatIfArgs | null, refused: boolean) {
       let hi = size;
       while (hi - lo > 1) {
         const mid = Math.floor((lo + hi) / 2);
-        const q = await client.whatIf(a.id, a.seriesId, sign * mid, per * mid, a.agent);
+        const q = await client.whatIf(a.id, a.seriesId, sign * mid, per * mid, { agent: a.agent, venue: a.venue });
         if (q.refusal) hi = mid;
         else lo = mid;
       }
@@ -145,7 +146,7 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
         : 'Best signed quote from the RFQ relay.';
   const noVault = !p.vault;
   const signerNote = grant
-    ? `${grant.label}'s budget: ${fmtNumber(grant.maxWorstLoss)} of worst-case loss, ${fmtNumber(grant.used)} used.`
+    ? `${grant.label} may leave at most ${fmtNumber(grant.maxWorstLoss)} of worst-case loss (now ${fmtNumber(now?.im ?? grant.used)}) and pay at most ${fmtNumber(grant.maxPremiumPerTrade)} premium per trade.`
     : p.grants.some((g) => !g.allowed.includes(series.underlying))
       ? `${p.grants.map((g) => `${g.label} may trade ${g.allowed.join(' and ')} only`).join('; ')}.`
       : '';
@@ -206,15 +207,15 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
           </div>
         </div>
         <p className="text-t13 tabular-nums text-navy-200">
-          {fmtExpiry(series.expiry)}
-          {p.asOf !== undefined && `, ${fmtDays(series.expiry, p.asOf)}`}. Delta {fmtNumber(Math.round(series.delta * 100) / 100 + 0)}.
+          Expires {fmtCloseEt(series.expiry)}
+          {p.asOf !== undefined && `, ${fmtDays(series.expiry, p.asOf)}`}. Delta {fmtNumber(Math.round(series.delta * 100) / 100 + 0)}.{' '}
           {showMult && (
             <Tooltip
               side="bottom"
               align="end"
               content={`Contracts are on the raw token. ERC-8056 multiplier ${mult.toFixed(6)}: one token is that many shares.`}
             >
-              <button type="button" className="ml-1 rounded-[2px] underline decoration-navy-400 decoration-dotted underline-offset-4">
+              <button type="button" className="rounded-[2px] underline decoration-navy-400 decoration-dotted underline-offset-4">
                 Share-equivalent strike {fmtNumber(series.strike / mult)}
               </button>
             </Tooltip>
@@ -282,7 +283,7 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
               v: premium !== undefined ? fmtNumber(premium) : '—',
               sub: per !== undefined && qtyOk ? `${fmtNumber(per)} each` : undefined,
             },
-            { k: 'Fee', v: quote ? fmtNumber(quote.fee) : '—', sub: undefined },
+            { k: 'Fee', v: quote ? fmtFee(quote.fee) : '—', sub: undefined },
             {
               k: 'Cash after',
               v: quote ? fmtNumber(quote.after.cash) : '—',
@@ -307,7 +308,7 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
             agentLabel={grant?.label}
             hint={
               fit.data !== undefined && fit.data > 0
-                ? `Up to ${fmtNumber(fit.data, 0)} contracts clear the same check. Cut the size, or sign from the owner wallet.`
+                ? `Up to ${fmtNumber(fit.data, 0)} contracts clear the same checks. Cut the size${refusal.code.startsWith('Agent') ? ', or sign from the owner wallet' : ', or deposit USDG'}.`
                 : undefined
             }
             action={
@@ -325,7 +326,7 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
           title="Margin"
           meta={<span className="text-t12 text-navy-200">now and after this ticket</span>}
         >
-          <MarginMeter now={now} after={quote?.after} pending={p.pending} />
+          <MarginMeter now={now} after={quote?.after} pending={p.pending} estimate={quote?.approx} />
         </Section>
       )}
 
@@ -334,7 +335,9 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
           <ScenarioStrip
             grids={[
               { name: 'Now', cells: p.nowGrid, worst: now?.worstScenario },
-              ...(quote?.afterGrid ? [{ name: 'After', cells: quote.afterGrid, worst: quote.after.worstScenario }] : []),
+              ...(quote?.afterGrid
+                ? [{ name: 'After', cells: quote.afterGrid, worst: quote.after.worstScenario, estimate: Boolean(quote.approx) }]
+                : []),
             ]}
             range={{ symbol: series.underlying, value: p.shock }}
           />
@@ -347,16 +350,18 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
             variant="primary"
             size="lg"
             lamp
-            disabled={!qtyOk || !quote || Boolean(refusal)}
+            disabled={!qtyOk || !quote || Boolean(refusal) || p.pending}
             onClick={sign}
             className="w-full"
           >
             {label}
           </Button>
           <p className="text-t12 text-navy-200">
-            {refusal
-              ? 'Refused before signing. Change the ticket and the check runs again.'
-              : p.demo
+            {p.pending
+              ? 'Checking the ticket again before it can be signed.'
+              : refusal
+                ? 'Refused before signing. Change the ticket and the check runs again.'
+                : p.demo
                 ? 'Demo mode: the ticket is checked, nothing is sent.'
                 : 'Your wallet signs; the Clearinghouse re-runs the same margin check on chain.'}
           </p>

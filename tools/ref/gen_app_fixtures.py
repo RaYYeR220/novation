@@ -25,13 +25,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import fpmath as F  # noqa: E402
 import kernel_ref as K  # noqa: E402
+import nyse  # noqa: E402
 
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 OUT = os.path.join(REPO, "app", "src", "fixtures")
 WAD = 10**18
 
 # ---- parameters ------------------------------------------------------------
-NOW = 1790697600  # 2026-09-30 16:00:00 UTC (Wed 12:00 ET)
+NOW = 1790697600  # 2026-09-29 16:00:00 UTC (Tue 12:00 ET, regular session)
 DAY = 86400
 MIN_SHOCK, SHOCK_K = 0.10, 3.0
 SESSION_MULT = {"REGULAR": 1.0, "EXTENDED": 1.2, "WEEKEND": 1.75}
@@ -44,7 +45,12 @@ UND = {
     "SPY": dict(name="SPDR S&P 500 ETF", spot=768.43, vol=0.16, ui=1.001717991187472003),
     "AAPL": dict(name="Apple", spot=336.31, vol=0.27, ui=1.000566080061092436),
 }
-EXPIRY_DAYS = [6, 13, 20, 27]
+# The next four NYSE weekly closes after NOW (NyseCalendar.nextWeeklyExpiry): Fri Oct 2, 9, 16, 23 at 16:00 ET.
+nyse.self_check()
+EXPIRIES = nyse.weekly_expiries(NOW, 4)
+# Agent policy for hedge-bot on account 7 (design/variants/_data/book.json).
+AGENT = "0x" + "b0" * 20
+AGENT_BUDGET, AGENT_PREMIUM_CAP = 1500.0, 500.0
 STEP = {"NVDA": 5, "TSLA": 10, "SPY": 10, "AAPL": 5}
 EXTRA_STRIKES = {"NVDA": [170, 200], "TSLA": [380], "SPY": [640], "AAPL": []}
 
@@ -77,9 +83,9 @@ def und_entry(sym, session, token_qty=0.0):
     }
 
 
-def mark(sym, strike, days, is_call):
+def mark(sym, strike, expiry, is_call):
     u = UND[sym]
-    return f(F.price(w(u["spot"]), w(strike), days * DAY, w(u["vol"]), 0, is_call))
+    return f(F.price(w(u["spot"]), w(strike), expiry - NOW, w(u["vol"]), 0, is_call))
 
 
 def w_round(x, n=6):
@@ -96,22 +102,22 @@ def build_chain():
         base = round(spot / step) * step
         strikes = sorted(set([base + step * k for k in range(-6, 7)] + EXTRA_STRIKES[sym]))
         rows = []
-        for d in EXPIRY_DAYS:
+        for e in EXPIRIES:
             for k in strikes:
                 for is_call in (True, False):
-                    tau = d * DAY
+                    tau = e - NOW
                     S, Kw = w(spot), w(k)
                     vol = u["vol"]
                     bid = f(F.price(S, Kw, tau, w(vol * 0.95), 0, is_call))
                     ask = f(F.price(S, Kw, tau, w(vol * 1.05), 0, is_call))
                     delta = f(F.greeks(S, Kw, tau, w(vol), 0, is_call)[0])
                     rows.append({
-                        "id": sid, "underlying": sym, "expiry": NOW + tau, "strike": k, "isCall": is_call,
+                        "id": sid, "underlying": sym, "expiry": e, "strike": k, "isCall": is_call,
                         "bid": w_round(bid), "ask": w_round(ask), "delta": w_round(delta), "iv": vol,
                     })
-                    ids[(sym, k, d, is_call)] = sid
+                    ids[(sym, k, e, is_call)] = sid
                     sid += 1
-        underlyings_out[sym] = {"expiries": [NOW + d * DAY for d in EXPIRY_DAYS], "series": rows}
+        underlyings_out[sym] = {"expiries": list(EXPIRIES), "series": rows}
     return underlyings_out, ids
 
 
@@ -130,7 +136,7 @@ def book7(sids, delta_call=0.0):
 
 def run_margin(order, tq, held, session):
     us = [und_entry(s, session, tq[s]) for s in order]
-    ps = [{"u": order.index(s), "isCall": c, "expiry": NOW + 6 * DAY, "strike": w(k), "qty": w(q)} for s, k, c, q in held]
+    ps = [{"u": order.index(s), "isCall": c, "expiry": EXPIRIES[0], "strike": w(k), "qty": w(q)} for s, k, c, q in held]
     out, _ = K.margin(kparams(), us, ps)
     grid = K.scenario_grid(kparams(), us, ps)
     return out, grid
@@ -162,9 +168,10 @@ def build_account7(ids):
     state = account_state(cash, res["REGULAR"]["out"])
     positions = []
     for sym, k, c, q in held:
+        e = EXPIRIES[0]
         positions.append({
-            "seriesId": ids[(sym, k, 6, c)], "qty": q, "mark": w_round(mark(sym, k, 6, c)),
-            "id": ids[(sym, k, 6, c)], "underlying": sym, "expiry": NOW + 6 * DAY, "strike": k, "isCall": c,
+            "seriesId": ids[(sym, k, e, c)], "qty": q, "mark": w_round(mark(sym, k, e, c)),
+            "id": ids[(sym, k, e, c)], "underlying": sym, "expiry": e, "strike": k, "isCall": c,
         })
     acct = {"id": 7, "owner": "0x4a1c00000000000000000000000000000000" + "9e2f", "state": state,
             "positions": positions, "collateral": {"NVDA": 40.0}}
@@ -180,33 +187,52 @@ def build_account7(ids):
 
 
 # ---- what-if: hedge-bot over budget ---------------------------------------
-def build_whatif(ids, acct, res):
-    sid = ids[("NVDA", 200, 6, True)]
+def build_whatif(ids, chains, acct, res):
+    """hedge-bot, acting for account 7, sells 60 NVDA 200 calls through RFQ at the demo maker's
+    quote: the mid of the chain's bid and ask, exactly as the app computes it. Margin, grid and
+    refusal follow TradeLogic.trade: margin first, then the agent's policy (_checkBudget):
+    post-trade lossIM within maxWorstLoss unless the side reduces risk, premium within
+    maxPremiumPerTrade, and the equity given up against the mark (fee aside) within the same cap."""
+    e = EXPIRIES[0]
+    sid = ids[("NVDA", 200, e, True)]
+    row = next(r for r in chains["NVDA"]["series"] if r["id"] == sid)
     qty_delta = -60.0
-    mk = mark("NVDA", 200, 6, True)
+    rfq_price = (row["bid"] + row["ask"]) / 2
     # Quote.premium is a positive magnitude; direction comes from the sign of qtyDelta.
-    premium = w_round(abs(qty_delta) * mk)
+    premium = w_round(abs(qty_delta) * rfq_price)
     fee = w_round(premium * FEE_BPS / 1e4)
     cash_change = (premium if qty_delta < 0 else -premium) - fee  # sell receives, buy pays
     order, tq, held = book7(ids, delta_call=qty_delta)
     out, grid = run_margin(order, tq, held, "REGULAR")
     after = account_state(2400.0 + cash_change, out)
-    before_loss = f(res["REGULAR"]["out"]["lossCorr"])
-    worst_loss = f(out["lossCorr"])
-    budget, used = 1500.0, 1180.0
+    pre = account_state(2400.0, res["REGULAR"]["out"])
+
+    old_qty, new_qty = -40.0, -40.0 + qty_delta
+    opening = new_qty != 0 and (abs(new_qty) > abs(old_qty) or (old_qty > 0) != (new_qty > 0))
+    pure_reduction = not opening and after["im"] <= pre["im"] and after["equity"] + fee >= pre["equity"]
     refusal = None
-    projected = used + max(0.0, worst_loss - before_loss)  # budget used after this trade
-    if projected > budget:
-        refusal = {
-            "code": "AgentRiskBudgetExceeded",
-            "message": "Worst-case loss after this trade exceeds the agent's risk budget.",
-            "numbers": {"worstLoss": w_round(projected, 2), "budget": budget, "used": used,
-                        "remaining": budget - used},
-        }
-    quote = {"premium": premium, "fee": fee, "after": after}
+    if not after["healthy"] and not pure_reduction:
+        refusal = {"code": "InsufficientMargin", "message": "Initial margin after the trade exceeds equity.",
+                   "numbers": {"im": after["im"], "equity": after["equity"]}}
+    elif after["im"] > AGENT_BUDGET and (opening or after["im"] > pre["im"]):
+        refusal = {"code": "AgentRiskBudgetExceeded",
+                   "message": "Worst-case loss after this trade exceeds the agent's risk budget.",
+                   "numbers": {"worstLoss": after["im"], "budget": AGENT_BUDGET, "used": pre["im"],
+                               "remaining": w_round(AGENT_BUDGET - pre["im"], 6)}}
+    elif premium > AGENT_PREMIUM_CAP:
+        refusal = {"code": "AgentPremiumExceeded", "message": "Premium exceeds the agent's per-trade cap.",
+                   "numbers": {"premium": premium, "cap": AGENT_PREMIUM_CAP}}
+    else:
+        loss = w_round(pre["equity"] - (after["equity"] + fee), 6)
+        if loss > AGENT_PREMIUM_CAP:
+            refusal = {"code": "AgentValueDrainExceeded",
+                       "message": "The trade gives up more value than the agent's cap.",
+                       "numbers": {"loss": loss, "cap": AGENT_PREMIUM_CAP}}
+    quote = {"premium": premium, "fee": fee, "after": after, "afterGrid": [w_round(f(x), 6) for x in grid]}
     if refusal:
         quote["refusal"] = refusal
-    return {"id": 7, "seriesId": sid, "qtyDelta": qty_delta, "premium": premium, "quote": quote}
+    return {"id": 7, "seriesId": sid, "qtyDelta": qty_delta, "premium": premium, "venue": "rfq", "agent": AGENT,
+            "quote": quote}
 
 
 # ---- market maker: 256 positions, grid only -------------------------------
@@ -218,24 +244,24 @@ def build_mm(ids):
     ps = []
     for _ in range(256):
         s = rnd.choice(syms)
-        d = rnd.choice(EXPIRY_DAYS)
+        e = rnd.choice(EXPIRIES)
         spot, step = UND[s]["spot"], STEP[s]
         k = round(spot / step) * step + step * rnd.randint(-6, 6)
-        ps.append({"u": order.index(s), "isCall": rnd.random() < 0.5, "expiry": NOW + d * DAY,
+        ps.append({"u": order.index(s), "isCall": rnd.random() < 0.5, "expiry": e,
                    "strike": w(k), "qty": w(rnd.choice([-1, 1]) * rnd.randint(1, 30))})
     out, _ = K.margin(kparams(), us, ps)
     grid = K.scenario_grid(kparams(), us, ps)
     agg = {}
     for p in ps:
         sym = order[p["u"]]
-        key = (sym, f(p["strike"]), (p["expiry"] - NOW) // DAY, p["isCall"])
+        key = (sym, f(p["strike"]), p["expiry"], p["isCall"])
         agg[key] = agg.get(key, 0) + f(p["qty"])
     positions = []
-    for (sym, k, d, c), q in agg.items():
+    for (sym, k, e, c), q in agg.items():
         k = int(k) if float(k).is_integer() else k
-        sid = ids[(sym, k, d, c)]
-        positions.append({"seriesId": sid, "qty": q, "mark": w_round(mark(sym, k, d, c)), "id": sid,
-                          "underlying": sym, "expiry": NOW + d * DAY, "strike": k, "isCall": c})
+        sid = ids[(sym, k, e, c)]
+        positions.append({"seriesId": sid, "qty": q, "mark": w_round(mark(sym, k, e, c)), "id": sid,
+                          "underlying": sym, "expiry": e, "strike": k, "isCall": c})
     state = account_state(250000.0, out)
     return {"id": 1, "owner": "0x" + "4d" * 20, "positionCount": 256, "state": state, "positions": positions,
             "collateral": {}, "grid": [w_round(f(x), 6) for x in grid],
@@ -260,14 +286,15 @@ def main():
     os.makedirs(OUT, exist_ok=True)
     chains, ids = build_chain()
     acct, res, summary = build_account7(ids)
-    whatif = build_whatif(ids, acct, res)
+    whatif = build_whatif(ids, chains, acct, res)
     mm = build_mm(ids)
 
     underlyings = []
     for i, (sym, u) in enumerate(UND.items()):
         addr = "0x" + ("%02x" % (i + 1)) * 20
         underlyings.append({"address": addr, "symbol": sym, "name": u["name"], "spot": u["spot"],
-                            "session": "REGULAR", "markVol": u["vol"], "uiMultiplier": u["ui"], "halted": False})
+                            "session": nyse.base_session(NOW), "markVol": u["vol"],
+                            "uiMultiplier": u["ui"], "halted": False})
 
     protocol = {"openInterestUsd": 1843200, "vaultTvlUsd": 612000 + 430000 + 288000, "insuranceFundUsd": 25000,
                 "premium7dUsd": 18450, "liquidations7d": 2, "socializedUsd": 0}
@@ -280,13 +307,16 @@ def main():
          "apy7d": 0.152, "utilization": 0.55, "epoch": 9, "live": True},
     ]
     wi = whatif["quote"]["refusal"]  # kernel-computed; shared by agents, feed and what-if
+    assert wi["code"] == "AgentRiskBudgetExceeded", wi
     last_ref = {"code": wi["code"],
                 "message": "Worst-case loss %.2f exceeds the risk budget of %.2f." % (
                     wi["numbers"]["worstLoss"], wi["numbers"]["budget"]),
                 "numbers": dict(wi["numbers"]),
                 "txHash": "0x" + "7c" * 32}
-    agents = {"7": [{"agent": "0x" + "b0" * 20, "label": "hedge-bot", "maxWorstLoss": 1500, "maxPremiumPerTrade": 500,
-                     "allowed": ["NVDA", "SPY"], "expiresAt": NOW + 30 * DAY, "used": 1180, "lastRefusal": last_ref}]}
+    # used: the account's current worst-case loss (lossIM), which the budget caps (spec 4.7).
+    agents = {"7": [{"agent": AGENT, "label": "hedge-bot", "maxWorstLoss": AGENT_BUDGET,
+                     "maxPremiumPerTrade": AGENT_PREMIUM_CAP, "allowed": ["NVDA", "SPY"], "expiresAt": NOW + 30 * DAY,
+                     "used": acct["state"]["im"], "lastRefusal": last_ref}]}
     refusals = [
         dict(last_ref, at=NOW - 3600, account=7),
         {"code": "InsufficientMargin", "message": "Initial margin after trade exceeds equity.",

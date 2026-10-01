@@ -59,7 +59,7 @@ describe('float kernel twin', () => {
     expect(out.mtm).toBeCloseTo(acct.state.mtm, 6);
   });
 
-  it('reproduces the canned what-if: IM, MTM and the agent budget figure', () => {
+  it('reproduces the canned what-if: IM, MTM, the after-grid and the agent budget figures', () => {
     const w = whatifs[0]!;
     const before = buildBook(acct.positions, acct.collateral, us('REGULAR'));
     const call = acct.positions.find((p) => p.seriesId === w.seriesId)!;
@@ -69,9 +69,11 @@ describe('float kernel twin', () => {
     expect(ka.lossIM).toBeCloseTo(w.quote.after.im, 6);
     expect(ka.mtm).toBeCloseTo(w.quote.after.mtm, 6);
     expect(ka.worstScenario).toBe(w.quote.after.worstScenario);
-    // generator: budget used after = used + growth of the correlated loss
-    const projected = 1180 + Math.max(0, ka.lossCorr - kb.lossCorr);
-    expect(projected).toBeCloseTo(w.quote.refusal.numbers.worstLoss, 2);
+    // the agent budget caps the post-trade lossIM, which is what the refusal reports
+    expect(ka.lossIM).toBeCloseTo(w.quote.refusal.numbers.worstLoss, 6);
+    expect(kb.lossIM).toBeCloseTo(w.quote.refusal.numbers.used, 6);
+    // and the twin's grid agrees with the kernel's after-trade grid
+    w.quote.afterGrid.forEach((x, i) => expect(ka.grid[i]).toBeCloseTo(x, 6));
   });
 
   it('adds a new underlying when the trade is on one the book lacks', () => {

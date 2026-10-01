@@ -148,6 +148,7 @@ export function TradeView() {
           seriesId: series.id,
           qtyDelta: side === 'buy' ? settledQty : -settledQty,
           premium: Math.round(price * settledQty * 1e6) / 1e6,
+          venue,
           ...(signer !== OWNER ? { agent: signer } : {}),
         }
       : null;
@@ -269,7 +270,7 @@ export function TradeView() {
                 <div className="flex flex-wrap items-end justify-between gap-s4">
                   <MarketStrip u={t} />
                   {demo && DEMO_TICKET.agent && (
-                    <Button size="sm" variant="ghost" onClick={loadDemo}>
+                    <Button size="sm" variant="secondary" onClick={loadDemo}>
                       Load the refused agent ticket
                     </Button>
                   )}

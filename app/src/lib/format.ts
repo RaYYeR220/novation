@@ -39,6 +39,11 @@ const dateLongFmt = new Intl.DateTimeFormat('en-US', {
   timeZone: 'UTC',
 });
 
+/** A fee to the cent; a positive fee under a cent reads "<0.01" rather than rounding to nothing. */
+export function fmtFee(v: number): string {
+  return v > 0 && v < 0.01 ? '<0.01' : fmtNumber(v);
+}
+
 /** Whole strikes print bare (200); fractional ones keep two decimals (202.50). */
 export function fmtStrike(k: number): string {
   return Number.isInteger(k) ? fmtNumber(k, 0) : fmtNumber(k, 2);

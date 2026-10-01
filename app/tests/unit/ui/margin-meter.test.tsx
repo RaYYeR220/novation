@@ -66,20 +66,33 @@ describe('ScenarioStrip', () => {
 });
 
 describe('refusal copy', () => {
-  it('states the agent budget breach with the exact numbers and how they add up', () => {
+  it('states the agent budget breach: post-trade lossIM against the budget, and what the ticket adds', () => {
     const r = {
       code: 'AgentRiskBudgetExceeded',
       message: 'x',
-      numbers: { worstLoss: 2130.01, budget: 1500, used: 1180, remaining: 320 },
+      numbers: { worstLoss: 1762.715506, budget: 1500, used: 596.506189, remaining: 903.493811 },
     };
     const c = refusalCopy(r, 'Account 7, signed by hedge-bot', 'hedge-bot');
     expect(c.reason).toBe("hedge-bot's risk budget can't carry this ticket.");
-    expect(c.breach).toEqual({ attempted: { label: 'Worst case after', value: 2130.01 }, limit: { label: 'Budget', value: 1500 } });
+    expect(c.breach).toEqual({ attempted: { label: 'Worst case after', value: 1762.715506 }, limit: { label: 'Budget', value: 1500 } });
     render(<RefusalNotice refusal={r} who="Account 7, signed by hedge-bot" agentLabel="hedge-bot" />);
     const card = screen.getByRole('alert');
-    expect(card).toHaveTextContent('Worst case after this trade: 2,130.01 USDG against a 1,500.00 USDG budget (1,180.00 already used; this ticket adds 950.01)');
-    expect(card).toHaveTextContent('630.01');
-    expect(card).toHaveTextContent('320.00 USDG left');
+    expect(card).toHaveTextContent(
+      'Worst case after this trade: 1,762.72 USDG against a 1,500.00 USDG budget (596.51 now; this ticket adds 1,166.21)',
+    );
+    expect(card).toHaveTextContent('262.72');
+    expect(card).toHaveTextContent('Cut the size until initial margin stays at or under 1,500.00 USDG');
+  });
+
+  it('names the premium cap and the value-drain cap with their numbers', () => {
+    const p = refusalCopy({ code: 'AgentPremiumExceeded', message: 'x', numbers: { premium: 1535.59, cap: 500 } }, 'Account 7', 'hedge-bot');
+    expect(p.reason).toBe("The premium is over hedge-bot's per-trade cap.");
+    expect(p.breach).toEqual({ attempted: { label: 'Premium', value: 1535.59 }, limit: { label: 'Per-trade cap', value: 500 } });
+    const d = refusalCopy({ code: 'AgentValueDrainExceeded', message: 'x', numbers: { loss: 567.75, cap: 500 } }, 'Account 7', 'hedge-bot');
+    expect(d.breach?.attempted).toEqual({ label: 'Value given up', value: 567.75 });
+    expect(refusalCopy({ code: 'AgentUnderlyingNotAllowed', message: 'x' }, 'Account 7', 'hedge-bot').reason).toBe(
+      'hedge-bot may not trade this underlying.',
+    );
   });
 
   it('turns a margin shortfall into the deposit that would clear it', () => {
