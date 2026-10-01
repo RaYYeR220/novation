@@ -1,0 +1,368 @@
+'use client';
+
+import { useQuery } from '@tanstack/react-query';
+import type { ReactNode, Ref } from 'react';
+import { MarginMeter } from '@/components/charts/margin-meter';
+import { ScenarioStrip } from '@/components/charts/scenario-strip';
+import { RefusalNotice } from '@/components/app/refusal-card';
+import { useNetworkStatus } from '@/components/app/network-guard';
+import { Button } from '@/components/ui/button';
+import { Chip } from '@/components/ui/chip';
+import { NumberField } from '@/components/ui/number-field';
+import { Segment, SegmentedControl } from '@/components/ui/segmented-control';
+import { Tooltip } from '@/components/ui/tooltip';
+import { useToast } from '@/components/ui/toast';
+import { useClient } from '@/lib/client/context';
+import type { WhatIfArgs } from '@/lib/client/hooks';
+import type { AccountState, AgentGrant, Quote, Underlying, Vault } from '@/lib/client/types';
+import { cn } from '@/lib/cn';
+import { fmtDays, fmtExpiry, fmtNumber, fmtSeries, fmtSeriesShort, fmtSigned } from '@/lib/format';
+import { perContract } from '@/lib/margin';
+import type { ChainSeries, Side } from './options-chain';
+
+export type Venue = 'vault' | 'rfq';
+export const OWNER = 'owner';
+
+export interface TicketProps {
+  demo: boolean;
+  accountId: number;
+  underlying: Underlying;
+  asOf?: number;
+  series?: ChainSeries;
+  side: Side;
+  qty: string;
+  qtyError?: string;
+  venue: Venue;
+  signer: string;
+  onSide: (s: Side) => void;
+  onQty: (q: string) => void;
+  onVenue: (v: Venue) => void;
+  onSigner: (s: string) => void;
+  onType: (isCall: boolean) => void;
+  onClear: () => void;
+  /** The live vault that writes this series' type, if any. */
+  vault?: Vault;
+  /** Agents with a grant on this account. */
+  grants: AgentGrant[];
+  /** Price per contract at the venue the ticket will use. */
+  price?: number;
+  now?: AccountState;
+  nowGrid?: number[];
+  quote?: Quote;
+  args: WhatIfArgs | null;
+  pending: boolean;
+  quoteError?: string;
+  shock: number;
+  onDemoTicket?: () => void;
+  headingRef?: Ref<HTMLHeadingElement>;
+}
+
+/** The largest whole size of a refused ticket that clears, searched with the same what-if. */
+function useFit(args: WhatIfArgs | null, refused: boolean) {
+  const client = useClient();
+  return useQuery({
+    queryKey: ['fit', args],
+    enabled: refused && args !== null && Math.abs(args.qtyDelta) >= 2,
+    queryFn: async () => {
+      const a = args as WhatIfArgs;
+      const size = Math.floor(Math.abs(a.qtyDelta));
+      const per = perContract(a.premium, a.qtyDelta);
+      const sign = Math.sign(a.qtyDelta);
+      let lo = 0;
+      let hi = size;
+      while (hi - lo > 1) {
+        const mid = Math.floor((lo + hi) / 2);
+        const q = await client.whatIf(a.id, a.seriesId, sign * mid, per * mid, a.agent);
+        if (q.refusal) hi = mid;
+        else lo = mid;
+      }
+      return lo;
+    },
+  });
+}
+
+function Section({ title, meta, children, className }: { title: string; meta?: ReactNode; children: ReactNode; className?: string }) {
+  return (
+    <section className={cn('grid gap-s3 border-t border-navy-700 px-s5 py-s4 max-sm:px-s4', className)}>
+      <div className="flex items-baseline justify-between gap-s3">
+        <h3 className="font-text text-t13 font-medium tracking-normal text-navy-50">{title}</h3>
+        {meta}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+export function Ticket({ headingRef, ...p }: TicketProps) {
+  const { toast } = useToast();
+  const net = useNetworkStatus();
+  const { series, quote, now } = p;
+  const refusal = quote?.refusal;
+  const fit = useFit(p.args, Boolean(refusal));
+  const grant = p.grants.find((g) => g.agent === p.signer);
+  const qtyNum = Number(p.qty);
+  const qtyOk = !p.qtyError && Number.isFinite(qtyNum) && qtyNum > 0;
+  const verb = p.side === 'buy' ? 'Buy' : 'Sell';
+  const label = series ? `${verb} ${p.qty || '0'} ${series.underlying} ${fmtSeriesShort(series)}` : 'Pick a strike';
+  const who = `Account ${p.accountId}, signed by ${grant ? grant.label : 'the owner wallet'}`;
+
+  if (!series) {
+    return (
+      <div className="grid">
+        <header className="grid gap-s2 px-s5 py-s4 max-sm:px-s4">
+          <h2 ref={headingRef} tabIndex={-1} className="text-[24px] leading-tight font-normal text-navy-50 outline-none">
+            No ticket open
+          </h2>
+          <p className="text-t13 text-pretty text-navy-200">
+            Pick a bid or an ask in the chain. Before anything is signed, the kernel re-prices account {p.accountId}’s whole book
+            across 39 scenarios and shows the margin after the trade.
+          </p>
+          {p.onDemoTicket && (
+            <div className="pt-s2">
+              <Button size="sm" variant="secondary" onClick={p.onDemoTicket}>
+                Load the refused agent ticket
+              </Button>
+            </div>
+          )}
+        </header>
+        {now && (
+          <Section title={`Account ${p.accountId} margin`}>
+            <MarginMeter now={now} />
+          </Section>
+        )}
+      </div>
+    );
+  }
+
+  const premium = quote?.premium;
+  const per = premium !== undefined && qtyNum > 0 ? premium / qtyNum : p.price;
+  const cashChange = quote ? quote.after.cash - (now?.cash ?? quote.after.cash) : undefined;
+  const venueNote =
+    p.venue === 'vault' && p.vault
+      ? `The ${p.vault.kind === 'coveredCall' ? 'covered-call' : 'put-write'} vault fills now at the ${p.side === 'buy' ? 'ask' : 'bid'}, ${fmtNumber(p.price ?? 0)}.`
+      : p.demo
+        ? `Best RFQ quote: the demo maker at mid, ${fmtNumber(p.price ?? 0)}.`
+        : 'Best signed quote from the RFQ relay.';
+  const noVault = !p.vault;
+  const signerNote = grant
+    ? `${grant.label}'s budget: ${fmtNumber(grant.maxWorstLoss)} of worst-case loss, ${fmtNumber(grant.used)} used.`
+    : p.grants.some((g) => !g.allowed.includes(series.underlying))
+      ? `${p.grants.map((g) => `${g.label} may trade ${g.allowed.join(' and ')} only`).join('; ')}.`
+      : '';
+  const mult = p.underlying.uiMultiplier;
+  const showMult = Math.abs(mult - 1) > 1e-9;
+
+  const sign = () => {
+    if (p.demo) {
+      toast({
+        tone: 'neutral',
+        title: 'Checked, not sent',
+        description: quote
+          ? `Demo mode. ${label} clears with ${fmtNumber(quote.after.im)} USDG initial margin. On chain your wallet would sign it next.`
+          : 'Demo mode. Nothing is sent.',
+      });
+      return;
+    }
+    if (net.status === 'wrong') {
+      net.switchToTarget();
+      return;
+    }
+    toast({
+      tone: 'neutral',
+      title: net.status === 'disconnected' ? 'Connect a wallet to sign' : 'Signing is not wired yet',
+      description:
+        net.status === 'disconnected' ? 'Use Connect wallet in the top bar.' : 'The chain client lands with the SDK; the what-if above is live.',
+    });
+  };
+
+  return (
+    <div className="grid">
+      <header className="grid gap-s1 px-s5 pb-s4 pt-s4 max-sm:px-s4">
+        <div className="flex items-start justify-between gap-s3">
+          <h2 ref={headingRef} tabIndex={-1} className="text-[26px] leading-tight font-normal text-navy-50 outline-none">
+            {fmtSeries(series)}
+          </h2>
+          <div className="flex items-center gap-s2 pt-1">
+            {quote && (
+              <Tooltip
+                side="bottom"
+                align="end"
+                content={
+                  quote.approx
+                    ? 'Estimated with a float twin of the kernel. The chain re-checks the exact figures when you sign.'
+                    : 'Exact: computed by the bit-exact kernel reference.'
+                }
+              >
+                <button type="button" className="rounded-control" aria-label={quote.approx ? 'Estimate: how it is computed' : 'Exact: how it is computed'}>
+                  <Chip size="sm" lamp={quote.approx ? 'navy-400' : 'navy-200'} lampState={quote.approx ? 'ring' : 'lit'}>
+                    {quote.approx ? 'Estimate' : 'Exact'}
+                  </Chip>
+                </button>
+              </Tooltip>
+            )}
+            <Button size="sm" variant="ghost" onClick={p.onClear} aria-label="Close ticket">
+              Close
+            </Button>
+          </div>
+        </div>
+        <p className="text-t13 tabular-nums text-navy-200">
+          {fmtExpiry(series.expiry)}
+          {p.asOf !== undefined && `, ${fmtDays(series.expiry, p.asOf)}`}. Delta {fmtNumber(Math.round(series.delta * 100) / 100 + 0)}.
+          {showMult && (
+            <Tooltip
+              side="bottom"
+              align="end"
+              content={`Contracts are on the raw token. ERC-8056 multiplier ${mult.toFixed(6)}: one token is that many shares.`}
+            >
+              <button type="button" className="ml-1 rounded-[2px] underline decoration-navy-400 decoration-dotted underline-offset-4">
+                Share-equivalent strike {fmtNumber(series.strike / mult)}
+              </button>
+            </Tooltip>
+          )}
+        </p>
+      </header>
+
+      <div className="grid gap-s4 border-t border-navy-700 px-s5 py-s4 max-sm:px-s4">
+        <div className="flex flex-wrap gap-x-s4 gap-y-s3">
+          <SegmentedControl legend="Option type" size="sm" value={series.isCall ? 'call' : 'put'} onValueChange={(v) => p.onType(v === 'call')}>
+            <Segment value="call">Call</Segment>
+            <Segment value="put">Put</Segment>
+          </SegmentedControl>
+          <SegmentedControl legend="Side" size="sm" value={p.side} onValueChange={(v) => p.onSide(v as Side)}>
+            <Segment value="buy">Buy</Segment>
+            <Segment value="sell">Sell</Segment>
+          </SegmentedControl>
+        </div>
+        <NumberField
+          label="Quantity"
+          unit="contracts"
+          value={p.qty}
+          onValueChange={p.onQty}
+          step={1}
+          min={1}
+          max={100000}
+          busy={p.pending}
+          error={p.qtyError}
+        />
+        <div className="grid gap-s2">
+          <div className="flex flex-wrap gap-x-s5 gap-y-s3">
+            <SegmentedControl legend="Venue" showLegend size="sm" value={p.venue} onValueChange={(v) => p.onVenue(v as Venue)}>
+              <Segment value="vault" disabled={noVault}>
+                Vault
+              </Segment>
+              <Segment value="rfq">RFQ</Segment>
+            </SegmentedControl>
+            {p.grants.length > 0 && (
+              <SegmentedControl legend="Sign as" showLegend size="sm" value={p.signer} onValueChange={p.onSigner}>
+                <Segment value={OWNER}>Owner</Segment>
+                {p.grants.map((g) => (
+                  <Segment key={g.agent} value={g.agent} disabled={!g.allowed.includes(series.underlying)}>
+                    {g.label}
+                  </Segment>
+                ))}
+              </SegmentedControl>
+            )}
+          </div>
+          <p className="text-t12 text-pretty text-navy-200">
+            {noVault ? `No vault writes ${series.underlying} ${series.isCall ? 'calls' : 'puts'}. ` : ''}
+            {venueNote} {signerNote}
+          </p>
+        </div>
+      </div>
+
+      <dl className={cn('grid grid-cols-3 border-t border-navy-700 px-s5 py-s3 max-sm:px-s4', p.pending && 'opacity-80')}>
+        {p.quoteError ? (
+          <p role="alert" className="col-span-3 text-t13 text-loss-1">
+            {p.quoteError}
+          </p>
+        ) : (
+          [
+            {
+              k: p.side === 'buy' ? 'You pay' : 'You receive',
+              v: premium !== undefined ? fmtNumber(premium) : '—',
+              sub: per !== undefined && qtyOk ? `${fmtNumber(per)} each` : undefined,
+            },
+            { k: 'Fee', v: quote ? fmtNumber(quote.fee) : '—', sub: undefined },
+            {
+              k: 'Cash after',
+              v: quote ? fmtNumber(quote.after.cash) : '—',
+              sub: cashChange !== undefined ? fmtSigned(cashChange) : undefined,
+            },
+          ].map((c, i) => (
+            <div key={c.k} className={cn('grid content-start gap-0.5', i > 0 && 'border-l border-navy-800 pl-s3', i < 2 && 'pr-s3')}>
+              <dt className="text-t12 text-navy-200">{c.k}</dt>
+              <dd className="text-t15 font-semibold tabular-nums text-navy-50">{c.v}</dd>
+              {c.sub && <dd className="text-t12 tabular-nums text-navy-200">{c.sub}</dd>}
+            </div>
+          ))
+        )}
+      </dl>
+
+      {refusal && (
+        <div className="border-t border-navy-700 p-s3">
+          <RefusalNotice
+            unit=""
+            refusal={refusal}
+            who={who}
+            agentLabel={grant?.label}
+            hint={
+              fit.data !== undefined && fit.data > 0
+                ? `Up to ${fmtNumber(fit.data, 0)} contracts clear the same check. Cut the size, or sign from the owner wallet.`
+                : undefined
+            }
+            action={
+              fit.data !== undefined && fit.data > 0 ? (
+                <Button size="sm" variant="secondary" onClick={() => p.onQty(String(fit.data))}>
+                  Cut to {fmtNumber(fit.data, 0)}
+                </Button>
+              ) : undefined
+            }
+          />
+        </div>
+      )}
+      {now && (
+        <Section
+          title="Margin"
+          meta={<span className="text-t12 text-navy-200">now and after this ticket</span>}
+        >
+          <MarginMeter now={now} after={quote?.after} pending={p.pending} />
+        </Section>
+      )}
+
+      {p.nowGrid && (
+        <Section title="Scenarios" meta={<span className="text-t12 text-navy-200">39 kernel shocks, whole book</span>}>
+          <ScenarioStrip
+            grids={[
+              { name: 'Now', cells: p.nowGrid, worst: now?.worstScenario },
+              ...(quote?.afterGrid ? [{ name: 'After', cells: quote.afterGrid, worst: quote.after.worstScenario }] : []),
+            ]}
+            range={{ symbol: series.underlying, value: p.shock }}
+          />
+        </Section>
+      )}
+
+      <div className="grid gap-s4 border-t border-navy-700 px-s5 py-s4 max-sm:px-s4">
+        <div className="grid gap-s2">
+          <Button
+            variant="primary"
+            size="lg"
+            lamp
+            disabled={!qtyOk || !quote || Boolean(refusal)}
+            onClick={sign}
+            className="w-full"
+          >
+            {label}
+          </Button>
+          <p className="text-t12 text-navy-200">
+            {refusal
+              ? 'Refused before signing. Change the ticket and the check runs again.'
+              : p.demo
+                ? 'Demo mode: the ticket is checked, nothing is sent.'
+                : 'Your wallet signs; the Clearinghouse re-runs the same margin check on chain.'}
+          </p>
+          <p className="text-t12 text-navy-200">Stock tokens are not available to US persons.</p>
+        </div>
+      </div>
+    </div>
+  );
+}
