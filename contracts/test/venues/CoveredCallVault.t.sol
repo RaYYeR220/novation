@@ -147,10 +147,14 @@ contract CoveredCallVaultTest is VaultFixture {
 
         _cooldown();
         uint256 preview = vault.previewRedeem(shares);
+        (uint256 t, uint256 c) = _split(preview);
         vm.prank(bob);
         uint256 out = vault.redeem(shares, bob, bob);
         assertEq(out, preview);
-        assertEq(nvda.balanceOf(bob), out);
+        // paid in kind: stock plus bob's share of the premium cash, never more than `out` at spot
+        assertEq(nvda.balanceOf(bob), t);
+        assertEq(usdg.balanceOf(bob), c);
+        assertLe(t * 180 + c * 1e12, out * 180);
         assertEq(vault.balanceOf(bob), 0);
     }
 
@@ -463,14 +467,17 @@ contract CoveredCallVaultTest is VaultFixture {
         vault.withdraw(4e18 + 1, alice, alice);
         vm.expectRevert(abi.encodeWithSelector(ERC4626.ERC4626ExceededMaxRedeem.selector, alice, maxR + 1, maxR));
         vault.redeem(maxR + 1, alice, alice);
+        (uint256 t, uint256 c) = _split(4e18);
         vault.withdraw(4e18, alice, alice);
         vm.stopPrank();
 
-        assertEq(nvda.balanceOf(alice), 4e18);
-        assertEq(ch.collateralOf(vid, address(nvda)), 6e18);
-        assertEq(vault.freeAssets(), 0);
-        assertEq(vault.maxWithdraw(alice), 0);
-        assertEq(vault.maxRedeem(alice), 0);
+        // 4 tokens' worth, in kind: her share of the cash in USDG and the rest in tokens
+        assertEq(nvda.balanceOf(alice), t);
+        assertEq(usdg.balanceOf(alice), c);
+        assertGt(c, 0);
+        assertEq(ch.collateralOf(vid, address(nvda)), 10e18 - t);
+        assertEq(vault.freeAssets(), 4e18 - t);
+        assertEq(vault.maxWithdraw(alice), vault.freeAssets());
     }
 
     function test_sellBackReducesShort() public {
@@ -693,11 +700,12 @@ contract CoveredCallVaultTest is VaultFixture {
         vm.expectRevert(abi.encodeWithSelector(ERC4626.ERC4626ExceededMaxWithdraw.selector, alice, free + 1, free));
         vault.withdraw(free + 1, alice, alice);
 
-        // the roll pays the queue out of what it reserved
-        uint256 owed = vault.convertToAssets(6e24);
+        // the roll pays the queue out of what it reserved, in kind
+        (uint256 t, uint256 c) = _split(vault.convertToAssets(6e24));
         vault.roll(new uint64[](0));
-        assertEq(vault.redeemable(alice), owed);
-        assertEq(vault.freeAssets(), 10e18 - 3e18 - owed);
+        assertEq(vault.redeemable(alice), t);
+        assertEq(vault.redeemableCash(alice), c);
+        assertEq(vault.freeAssets(), 10e18 - 3e18 - t);
     }
 
     function test_maxOpenSeries() public {
@@ -840,11 +848,12 @@ contract CoveredCallVaultTest is VaultFixture {
         // buying back the shorts releases the lock: the next roll pays out
         vm.prank(taker);
         vault.sellBack(call190, 8e18, 0, takerId);
-        uint256 expected = vault.convertToAssets(5e24);
+        (uint256 t, uint256 c) = _split(vault.convertToAssets(5e24));
         vm.expectEmit(true, true, true, true, address(vault));
-        emit OptionVaultBase.Rolled(0, expected);
+        emit OptionVaultBase.Rolled(0, t);
         vault.roll(new uint64[](0));
-        assertEq(vault.redeemable(alice), expected);
+        assertEq(vault.redeemable(alice), t);
+        assertEq(vault.redeemableCash(alice), c);
     }
 
     function test_rollPaysFromFreeWhileShortsOpen() public {
@@ -857,13 +866,17 @@ contract CoveredCallVaultTest is VaultFixture {
         // the open short doesn't hold the epoch back: 2 tokens fit in the 5 free, at live MTM NAV
         uint256 expected = vault.convertToAssets(2e24);
         assertGt(expected, 2e18); // the premium edge is in NAV
+        (uint256 t, uint256 c) = _split(expected);
         vm.expectEmit(true, true, true, true, address(vault));
-        emit OptionVaultBase.Rolled(0, expected);
+        emit OptionVaultBase.Rolled(0, t);
         vault.roll(new uint64[](0));
-        assertEq(vault.redeemable(alice), expected);
+        assertEq(vault.redeemable(alice), t);
+        assertEq(vault.redeemableCash(alice), c);
+        assertEq(vault.reservedCash(), c);
+        assertEq(usdg.balanceOf(address(vault)), c);
         _assertPos(vid, call190w2, -5e18);
         assertEq(vault.lockedAssets(), 5e18);
-        assertEq(ch.collateralOf(vid, address(nvda)), 10e18 - expected);
+        assertEq(ch.collateralOf(vid, address(nvda)), 10e18 - t);
         assertTrue(ch.accountState(vid).healthy);
     }
 
@@ -941,16 +954,104 @@ contract CoveredCallVaultTest is VaultFixture {
         _settleExpiry(address(nvda), e, 180e18);
         _pokeVol(address(nvda));
         uint256 expected = vault.convertToAssets(aShares);
+        assertGt(expected, 10e18); // her 10 tokens plus her half of the kept premium
+        uint256 premium = ch.cashOf(vid);
+        (uint256 t, uint256 c) = _split(expected);
         vm.expectEmit(true, true, true, true, address(vault));
-        emit OptionVaultBase.Rolled(0, expected);
+        emit OptionVaultBase.Rolled(0, t);
         vault.roll(_one(e));
 
         assertEq(ch.positionsOf(vid).length, 0);
         assertEq(vault.epoch(), 1);
-        assertEq(vault.redeemable(alice), expected);
+        assertEq(vault.redeemable(alice), t);
+        assertEq(vault.redeemableCash(alice), c);
+        vm.expectEmit(true, true, true, true, address(vault));
+        emit OptionVaultBase.CashLegPaid(alice, c);
         vault.claimRedeemed(alice);
-        assertEq(nvda.balanceOf(alice), expected);
-        assertGt(expected, 10e18); // her 10 tokens plus her half of the kept premium
+        // in kind: her 10 tokens and her half of the premium cash, each rounded down
+        assertEq(nvda.balanceOf(alice), t);
+        assertEq(usdg.balanceOf(alice), c);
+        assertApproxEqAbs(t, 10e18, 2);
+        assertLe(t, 10e18);
+        assertApproxEqAbs(c, premium / 2 / 1e12, 1);
+        assertEq(vault.reservedAssets(), 0);
+        assertEq(vault.reservedCash(), 0);
+    }
+
+    /// Exits are paid in kind: stock plus the holder's share of the premium cash, so the cash per
+    /// share stays put and the last holder takes the last of both (not a pile of USDG it could
+    /// never withdraw, as when exits paid stock only).
+    function test_exitsPaidInKindUntilTheLastHolder() public {
+        _skipWithoutSettlement();
+        uint256 aShares = _vaultDeposit(vault, alice, 10e18);
+        uint256 bShares = _vaultDeposit(vault, bob, 10e18);
+        _buy(vault, call190, 10e18);
+        uint256 premium = ch.cashOf(vid);
+        assertGt(premium, 0);
+        vm.warp(e + 1);
+        _settleExpiry(address(nvda), e, 180e18); // out of the money: the premium is kept
+        _pokeVol(address(nvda));
+        vault.roll(_one(e));
+        assertEq(ch.positionsOf(vid).length, 0);
+        uint256 supply = vault.totalSupply();
+        uint256 cashPerShare = ch.cashOf(vid) * 1e18 / supply;
+
+        // alice leaves first: half the stock, half the cash
+        vm.prank(alice);
+        uint256 aOut = vault.redeem(aShares, alice, alice);
+        assertLe(nvda.balanceOf(alice) * 180 + usdg.balanceOf(alice) * 1e12, aOut * 180);
+        assertApproxEqAbs(nvda.balanceOf(alice), 10e18, 2);
+        assertApproxEqAbs(usdg.balanceOf(alice), premium / 2 / 1e12, 1);
+        // cash per share stays put (a hair up: her legs are rounded down)
+        uint256 after_ = ch.cashOf(vid) * 1e18 / vault.totalSupply();
+        assertGe(after_, cashPerShare);
+        assertApproxEqRel(after_, cashPerShare, 1e12);
+
+        // bob, the last holder, gets the rest of the stock and the rest of the cash
+        vm.prank(bob);
+        vault.redeem(bShares, bob, bob);
+        assertApproxEqAbs(nvda.balanceOf(bob), 10e18, 2);
+        assertApproxEqAbs(usdg.balanceOf(bob), premium / 2 / 1e12, 1);
+        assertEq(vault.totalSupply(), 0);
+        assertLt(ch.collateralOf(vid, address(nvda)), 10); // a few wei of rounding stay behind
+        assertLt(ch.cashOf(vid), 2e12); // and less than two USDG units
+        assertEq(nvda.balanceOf(alice) + nvda.balanceOf(bob) + ch.collateralOf(vid, address(nvda)), 20e18);
+    }
+
+    /// The same for the last holder going through the redemption queue.
+    function test_lastHolderQueueGetsTheCash() public {
+        _skipWithoutSettlement();
+        uint256 aShares = _vaultDeposit(vault, alice, 10e18);
+        _buy(vault, call190, 10e18);
+        uint256 premium = ch.cashOf(vid);
+        _cooldown();
+        vm.prank(alice);
+        vault.requestRedeem(aShares, alice);
+        vault.roll(new uint64[](0)); // every token is locked behind the calls
+        assertEq(vault.epoch(), 0);
+
+        vm.warp(e + 1);
+        _settleExpiry(address(nvda), e, 180e18);
+        _pokeVol(address(nvda));
+        vault.roll(_one(e));
+        assertEq(vault.epoch(), 1);
+        vault.claimRedeemed(alice);
+        assertApproxEqAbs(nvda.balanceOf(alice), 10e18, 2);
+        assertLe(nvda.balanceOf(alice), 10e18);
+        assertApproxEqAbs(usdg.balanceOf(alice), premium / 1e12, 1);
+        assertLt(ch.cashOf(vid), 2e12);
+        assertEq(vault.reservedCash(), 0);
+    }
+
+    /// @dev The token and USDG parts of an exit worth `assets` now, as the vault splits it.
+    function _split(uint256 assets) internal view returns (uint256 tokens, uint256 cash) {
+        uint256 c = ch.cashOf(vid);
+        uint256 ta = vault.totalAssets();
+        if (c == 0) return (assets, 0);
+        (uint256 spot,,) = hub.spot(address(nvda));
+        uint256 cashA = Math.mulDiv(c, 1e18, spot, Math.Rounding.Ceil);
+        tokens = Math.mulDiv(assets, ta - cashA, ta);
+        cash = Math.mulDiv(c, assets, ta) / 1e12;
     }
 
     function test_itmExpiryDeficitPath() public {

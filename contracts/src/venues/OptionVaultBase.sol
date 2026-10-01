@@ -79,6 +79,8 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
     );
     event Rolled(uint256 indexed epoch, uint256 assets);
     event RedeemClaimed(address indexed receiver, uint256 assets);
+    /// @notice The USDG part of an in-kind exit (CoveredCallVault), in raw USDG units.
+    event CashLegPaid(address indexed receiver, uint256 amount);
 
     /// @dev A receiver's queued shares; paid out at the rate of `epoch` once that epoch is rolled.
     struct PendingRedeem {
@@ -86,10 +88,12 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         uint256 shares;
     }
 
-    /// @dev What an epoch's roll paid: `assets` for `shares`, split pro rata among its receivers.
+    /// @dev What an epoch's roll paid: `assets` (and `cash`, raw USDG units, for an in-kind exit)
+    /// for `shares`, split pro rata among its receivers.
     struct EpochResult {
         uint256 shares;
         uint256 assets;
+        uint256 cash;
     }
 
     /// @dev The vault's book as one trade sees it.
@@ -122,6 +126,9 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
     uint256 public immutable vaultId;
     /// @dev 10 ** (18 - asset decimals): WAD amounts in the clearinghouse per raw asset unit
     uint256 internal immutable _assetScale;
+    address internal immutable _usdg;
+    /// @dev 10 ** (18 - USDG decimals)
+    uint256 internal immutable _usdgScale;
 
     VaultConfig internal _cfg;
 
@@ -132,12 +139,15 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
     /// @notice assets withdrawn for rolled epochs and not yet claimed; held by this contract, not
     /// part of the clearinghouse account and so never part of totalAssets
     uint256 public reservedAssets;
+    /// @notice the USDG side of reservedAssets (raw units), for in-kind exits
+    uint256 public reservedCash;
     uint256 public nextRequestId;
     /// @notice when each holder's shares count as received (see _update)
     mapping(address holder => uint256) public lastReceive;
 
     mapping(address receiver => PendingRedeem) private _pending;
     mapping(address receiver => uint256) private _redeemable;
+    mapping(address receiver => uint256) private _redeemableCash;
     mapping(uint256 epoch => EpochResult) private _epochs;
 
     constructor(
@@ -171,6 +181,9 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         params = params_;
         underlying = underlying_;
         _assetScale = 10 ** (18 - dec);
+        address usdg_ = params_.usdg();
+        _usdg = usdg_;
+        _usdgScale = 10 ** (18 - IERC20Metadata(usdg_).decimals());
         _cfg = cfg;
 
         vaultId = ch_.createSubaccount();
@@ -191,6 +204,12 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
     /// @dev Positive WAD USD equity converted into raw asset units, rounded down; 0 if it can't be
     /// priced.
     function _equityToAssets(uint256 equityWad) internal view virtual returns (uint256);
+
+    /// @dev How an exit worth `assets` (asset units, at NAV) is paid: `tokens` of the asset and
+    /// `cash` raw USDG units. By default all in the asset.
+    function _split(uint256 assets) internal view virtual returns (uint256 tokens, uint256 cash) {
+        return (assets, 0);
+    }
 
     // ================================================================ views
 
@@ -237,6 +256,17 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         if (p.shares != 0 && p.epoch < epoch) {
             EpochResult storage r = _epochs[p.epoch];
             assets += Math.mulDiv(p.shares, r.assets, r.shares);
+        }
+    }
+
+    /// @notice The USDG (raw units) `receiver` can claim now alongside redeemable(), for in-kind
+    /// exits.
+    function redeemableCash(address receiver) external view returns (uint256 cash) {
+        cash = _redeemableCash[receiver];
+        PendingRedeem storage p = _pending[receiver];
+        if (p.shares != 0 && p.epoch < epoch) {
+            EpochResult storage r = _epochs[p.epoch];
+            cash += Math.mulDiv(p.shares, r.cash, r.shares);
         }
     }
 
@@ -287,21 +317,20 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         return _canEnter() ? type(uint256).max : 0;
     }
 
-    /// @notice The owner's shares at NAV, capped by the free assets. Zero while halted, while the
-    /// account owes a deficit (the clearinghouse blocks withdrawals then) and during the owner's
-    /// exit cooldown.
+    /// @notice The owner's shares at NAV, all of them if the asset part of that exit fits in the
+    /// free assets, else the free assets. Zero while halted, while the account owes a deficit (the
+    /// clearinghouse blocks withdrawals then) and during the owner's exit cooldown.
     function maxWithdraw(address owner) public view override returns (uint256) {
         if (!_canExit(owner)) return 0;
-        uint256 free = freeAssets();
-        uint256 own = previewRedeem(balanceOf(owner));
-        return own < free ? own : free;
+        return _exitCap(previewRedeem(balanceOf(owner)));
     }
 
     function maxRedeem(address owner) public view override returns (uint256) {
         if (!_canExit(owner)) return 0;
-        uint256 cap = _convertToShares(freeAssets(), Math.Rounding.Floor);
         uint256 own = balanceOf(owner);
-        return own < cap ? own : cap;
+        uint256 assets = previewRedeem(own);
+        uint256 cap = _exitCap(assets);
+        return cap == assets ? own : _convertToShares(cap, Math.Rounding.Floor);
     }
 
     // ================================================================ ERC-4626 entry points
@@ -414,15 +443,23 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         emit RedeemRequested(requestId, ep, msg.sender, receiver, shares);
     }
 
-    /// @notice Pushes everything `receiver` can claim to `receiver`. Callable by anyone.
+    /// @notice Pushes everything `receiver` can claim to `receiver`, the asset and any USDG part.
+    /// Callable by anyone.
     function claimRedeemed(address receiver) external nonReentrant returns (uint256 assets) {
         _fold(receiver, _pending[receiver]);
         assets = _redeemable[receiver];
-        if (assets == 0) revert NothingToClaim();
+        uint256 cash = _redeemableCash[receiver];
+        if (assets == 0 && cash == 0) revert NothingToClaim();
         _redeemable[receiver] = 0;
+        _redeemableCash[receiver] = 0;
         reservedAssets -= assets;
-        IERC20(asset()).safeTransfer(receiver, assets);
+        reservedCash -= cash;
         emit RedeemClaimed(receiver, assets);
+        if (assets != 0) IERC20(asset()).safeTransfer(receiver, assets);
+        if (cash != 0) {
+            emit CashLegPaid(receiver, cash);
+            IERC20(_usdg).safeTransfer(receiver, cash);
+        }
     }
 
     /// @notice Permissionless. For each expiry in `expiries`: settles the vault's positions once
@@ -489,14 +526,20 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         if (assets != 0) ch.deposit(vaultId, asset(), assets);
     }
 
-    /// @dev Only free assets leave instantly; the rest waits for a roll.
+    /// @dev An exit worth `assets` is paid as the strategy splits it (_split); only free assets
+    /// leave instantly, the rest waits for a roll. The Withdraw event reports the asset part.
     function _withdraw(address caller, address receiver, address owner, uint256 assets, uint256 shares)
         internal
         override
     {
+        (uint256 tokens, uint256 cash) = _split(assets);
         uint256 free = freeAssets();
-        if (assets > free) revert ExceedsFreeAssets(assets, free);
-        super._withdraw(caller, receiver, owner, assets, shares);
+        if (tokens > free) revert ExceedsFreeAssets(tokens, free);
+        super._withdraw(caller, receiver, owner, tokens, shares);
+        if (cash != 0) {
+            emit CashLegPaid(receiver, cash);
+            ch.withdraw(vaultId, _usdg, cash, receiver);
+        }
     }
 
     /// @dev Straight from the clearinghouse account to the receiver.
@@ -651,6 +694,14 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         if (escrowed != 0) b.queued = _convertToAssets(escrowed, Math.Rounding.Ceil);
     }
 
+    /// @dev The largest exit up to `assets` that can leave now: all of it if its asset part fits in
+    /// the free assets, else the free assets (a conservative bound, its asset part is smaller).
+    function _exitCap(uint256 assets) private view returns (uint256) {
+        uint256 free = freeAssets();
+        (uint256 tokens,) = _split(assets);
+        return tokens <= free ? assets : free;
+    }
+
     function _free(uint256 lockedWad, uint256 backingWad) private view returns (uint256) {
         return backingWad > lockedWad ? (backingWad - lockedWad) / _assetScale : 0;
     }
@@ -677,17 +728,20 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         if (!isLive()) return;
         uint256 assets = _convertToAssets(shares, Math.Rounding.Floor);
         if (assets == 0) return;
+        (uint256 tokens, uint256 cash) = _split(assets);
         Book memory b = _book(0);
-        if (assets > _free(b.lockedWad, b.backingWad)) return;
+        if (tokens > _free(b.lockedWad, b.backingWad)) return;
 
         uint256 ep = epoch;
-        _epochs[ep] = EpochResult({shares: shares, assets: assets});
+        _epochs[ep] = EpochResult({shares: shares, assets: tokens, cash: cash});
         escrowedShares = 0;
         epoch = ep + 1;
-        reservedAssets += assets;
+        reservedAssets += tokens;
+        reservedCash += cash;
         _burn(address(this), shares);
-        ch.withdraw(id, asset(), assets, address(this));
-        emit Rolled(ep, assets);
+        emit Rolled(ep, tokens);
+        if (tokens != 0) ch.withdraw(id, asset(), tokens, address(this));
+        if (cash != 0) ch.withdraw(id, _usdg, cash, address(this));
     }
 
     /// @dev Folds a rolled epoch's payout into the receiver's claimable balance.
@@ -696,6 +750,7 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         if (sh == 0 || p.epoch >= epoch) return;
         EpochResult storage r = _epochs[p.epoch];
         _redeemable[receiver] += Math.mulDiv(sh, r.assets, r.shares);
+        _redeemableCash[receiver] += Math.mulDiv(sh, r.cash, r.shares);
         p.shares = 0;
     }
 
