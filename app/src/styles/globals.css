@@ -72,3 +72,39 @@
     transition-duration: 0ms !important;
   }
 }
+
+/*
+ * Landing reveals: tied to scroll position, opacity and translate only. Browsers without scroll
+ * timelines, and anyone who prefers reduced motion, get the content in place.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  @supports (animation-timeline: view()) {
+    .reveal {
+      animation: reveal linear both;
+      animation-timeline: view();
+      animation-range: entry 0% entry 220px;
+    }
+  }
+}
+
+@keyframes reveal {
+  from {
+    opacity: 0;
+    transform: translateY(28px);
+  }
+}
+
+/*
+ * Landing hero: the crown takes its whole four columns, and its session switch and IM readout move
+ * to the foot of the two text columns beside it, where the weekend crown can never sink onto them.
+ */
+@media (min-width: 1024px) {
+  .hero-crown > figure[data-variant='hero'] > figcaption {
+    position: absolute;
+    /* the figure spans four of the six columns; two columns to the left is half its width */
+    left: -50%;
+    bottom: 0;
+    z-index: 2;
+    padding: 0;
+  }
+}

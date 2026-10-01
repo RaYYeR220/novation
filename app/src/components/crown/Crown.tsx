@@ -76,6 +76,12 @@ export interface CrownProps {
   quality?: 'auto' | 'low';
   /** Lab only: render continuously and record frame timings. */
   measure?: boolean;
+  /**
+   * When the 3D view loads. 'idle' (default) loads it once the page is idle. 'intent' keeps the poster,
+   * which shows the same pose, until the visitor first moves the pointer, scrolls, touches or presses a
+   * key, so the 3D bundle never competes with the first paint of a landing page.
+   */
+  load?: 'idle' | 'intent';
 }
 
 type Phase = 'poster' | 'offer' | 'static' | 'loading' | 'live';
@@ -105,6 +111,19 @@ function whenIdle(fn: () => void): () => void {
   return () => window.clearTimeout(id);
 }
 
+const INTENT_EVENTS = ['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart', 'scroll'] as const;
+
+/** Calls `fn` once, on the first sign of a person at the page. Returns a canceller. */
+function onIntent(fn: () => void): () => void {
+  const off = () => INTENT_EVENTS.forEach((t) => window.removeEventListener(t, go, true));
+  function go() {
+    off();
+    fn();
+  }
+  INTENT_EVENTS.forEach((t) => window.addEventListener(t, go, { capture: true, passive: true }));
+  return off;
+}
+
 /** Contained rect of the poster inside the stage (object-fit: contain). */
 function posterRect(w: number, h: number) {
   const a = POSTER.width / POSTER.height;
@@ -124,6 +143,7 @@ export function Crown({
   className,
   quality = 'auto',
   measure = false,
+  load = 'idle',
 }: CrownProps) {
   const labels = { ...DEFAULT_LABELS, ...labelsIn };
   const cells = grid.cells;
@@ -272,15 +292,28 @@ export function Crown({
   }, [projectStatic, paint]);
 
   // decide how to show it once the page is idle: 3D, a load button, or the poster alone
-  useEffect(
-    () =>
-      whenIdle(() => {
-        if (!hasWebGL()) setPhase('static');
-        else if (saveData() || window.innerWidth < 480) setPhase('offer');
-        else setPhase('loading');
-      }),
-    [],
-  );
+  useEffect(() => {
+    // listen from mount, so a pointer that moves before the page is idle still counts
+    let intent = load === 'idle';
+    let waiting = false;
+    const cancelIntent = intent
+      ? () => {}
+      : onIntent(() => {
+          intent = true;
+          if (waiting) setPhase((p) => (p === 'poster' ? 'loading' : p));
+        });
+    const cancelIdle = whenIdle(() => {
+      if (!hasWebGL()) setPhase('static');
+      else if (saveData() || window.innerWidth < 480) setPhase('offer');
+      else if (intent) setPhase('loading');
+      else waiting = true;
+      if (!waiting) cancelIntent();
+    });
+    return () => {
+      cancelIdle();
+      cancelIntent();
+    };
+  }, [load]);
 
   const onReady = useCallback(() => {
     liveRef.current = true;
@@ -502,31 +535,34 @@ export function Crown({
       <p className="sr-only" aria-live="polite">
         {announce}
       </p>
-      <table className="sr-only">
-        <caption>
-          {`Scenario PnL in ${labels.unit}, ${SESSION_LABEL[session]} session. Initial margin ${fmtNumber(im)} ${labels.unit}.`}
-        </caption>
-        <thead>
-          <tr>
-            <th scope="col">Volatility</th>
-            {Array.from({ length: PRICE_POINTS }, (_, j) => (
-              <th key={j} scope="col">
-                {priceLabel(j)}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {Array.from({ length: VOL_POINTS }, (_, v) => (
-            <tr key={v}>
-              <th scope="row">{volLabel(v)}</th>
+      {/* a table never shrinks to the 1px box, so the clip lives on a wrapper */}
+      <div className="sr-only">
+        <table>
+          <caption>
+            {`Scenario PnL in ${labels.unit}, ${SESSION_LABEL[session]} session. Initial margin ${fmtNumber(im)} ${labels.unit}.`}
+          </caption>
+          <thead>
+            <tr>
+              <th scope="col">Volatility</th>
               {Array.from({ length: PRICE_POINTS }, (_, j) => (
-                <td key={j}>{fmtSigned(cells[v * PRICE_POINTS + j] ?? 0)}</td>
+                <th key={j} scope="col">
+                  {priceLabel(j)}
+                </th>
               ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {Array.from({ length: VOL_POINTS }, (_, v) => (
+              <tr key={v}>
+                <th scope="row">{volLabel(v)}</th>
+                {Array.from({ length: PRICE_POINTS }, (_, j) => (
+                  <td key={j}>{fmtSigned(cells[v * PRICE_POINTS + j] ?? 0)}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </figure>
   );
 }

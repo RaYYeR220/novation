@@ -1,6 +1,5 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import localFont from 'next/font/local';
-import { ClientProvider } from '@/lib/client/context';
 import '@/styles/globals.css';
 
 const zodiak = localFont({
@@ -24,17 +23,35 @@ const switzer = localFont({
   variable: '--font-switzer',
 });
 
+const TITLE = 'Novation: options clearing for Robinhood Chain stock tokens';
+const DESCRIPTION =
+  'The other side of every trade, stress-tested first. Novation clears options on Robinhood Chain stock tokens, re-pricing both books across 39 scenarios on-chain before a trade settles in USDG.';
+
 export const metadata: Metadata = {
-  title: 'Novation',
-  description: 'Portfolio margin for Robinhood Chain stock-token options, computed on-chain.',
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'),
+  title: { default: TITLE, template: '%s | Novation' },
+  description: DESCRIPTION,
+  applicationName: 'Novation',
+  icons: { icon: [{ url: '/favicon.svg', type: 'image/svg+xml' }] },
+  openGraph: {
+    type: 'website',
+    siteName: 'Novation',
+    title: TITLE,
+    description: DESCRIPTION,
+    images: [{ url: '/og.png', width: 1200, height: 630, alt: 'The Novation scenario crown beside the line: the other side of every trade, stress-tested first.' }],
+  },
+  twitter: { card: 'summary_large_image', title: TITLE, description: DESCRIPTION, images: ['/og.png'], creator: '@rayyer_220' },
+};
+
+export const viewport: Viewport = {
+  themeColor: '#05163d',
+  colorScheme: 'dark',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${zodiak.variable} ${switzer.variable}`}>
-      <body>
-        <ClientProvider>{children}</ClientProvider>
-      </body>
+      <body>{children}</body>
     </html>
   );
 }

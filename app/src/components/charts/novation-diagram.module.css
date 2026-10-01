@@ -1,0 +1,426 @@
+/*
+ * The novation diagram. Without a data-state (server render, reduced motion) every element sits in its
+ * final pose. 'ready' holds the first frame until the figure scrolls into view; 'play' runs the
+ * clearing once on a single 7.2 s timeline.
+ */
+
+.stage {
+  --T: 7.2s;
+  --seg: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.svg {
+  width: 100%;
+  height: auto;
+  overflow: visible;
+  font-family: var(--font-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.label {
+  font-size: 14px;
+  fill: var(--color-navy-50);
+}
+
+.small {
+  font-size: 13px;
+  fill: var(--color-navy-200);
+}
+
+.strong {
+  font-weight: 600;
+  fill: var(--color-navy-50);
+}
+
+.muted {
+  fill: var(--color-navy-200);
+}
+
+.hubName {
+  font-family: var(--font-display);
+  font-size: 22px;
+  letter-spacing: -0.01em;
+  fill: var(--color-navy-50);
+}
+
+/* ---------- final pose ---------- */
+
+.arcDraw {
+  fill: none;
+  stroke: var(--color-navy-200);
+  stroke-width: 1.5;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  opacity: 0;
+}
+
+.arcTrace {
+  fill: none;
+  stroke: var(--color-navy-400);
+  stroke-width: 1.25;
+  stroke-dasharray: 3 6;
+  opacity: 0.85;
+}
+
+.leg {
+  stroke: var(--color-navy-50);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+}
+
+.legLabel {
+  font-weight: 500;
+}
+
+.coin {
+  fill: var(--color-gain-2);
+  stroke: var(--color-navy-900);
+  stroke-width: 2;
+  opacity: 0;
+}
+
+.node {
+  fill: var(--color-navy-800);
+  stroke: var(--color-navy-200);
+  stroke-width: 1.5;
+}
+
+.nodeCore {
+  fill: var(--color-navy-50);
+}
+
+.hubHalo {
+  fill: none;
+  stroke: var(--color-navy-600);
+  stroke-width: 1;
+}
+
+.hub {
+  fill: var(--color-navy-50);
+}
+
+.hubCore {
+  fill: var(--color-navy-900);
+}
+
+.cell {
+  fill: var(--c);
+}
+
+.worst {
+  fill: none;
+  stroke: var(--color-navy-50);
+  stroke-width: 1.5;
+}
+
+.readout {
+  font-weight: 500;
+}
+
+.wireBase {
+  fill: none;
+  stroke: var(--color-navy-700);
+  stroke-width: 1.5;
+}
+
+.wire {
+  fill: none;
+  stroke: var(--color-navy-50);
+  stroke-width: 1.5;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+}
+
+.signalHead {
+  fill: var(--color-navy-950);
+  stroke: var(--color-navy-600);
+  stroke-width: 1;
+}
+
+.hold {
+  fill: var(--color-navy-700);
+}
+
+.clear {
+  fill: var(--color-navy-50);
+}
+
+.step {
+  --on: calc(2.6s + var(--n) * 1.9s);
+}
+
+.stepLamp {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border-radius: 50%;
+  border: 1.5px solid var(--color-navy-50);
+  background: var(--color-navy-50);
+}
+
+/* ---------- timeline ---------- */
+
+.stage:is([data-state='ready'], [data-state='play']) .arcDraw {
+  animation: arcDraw var(--T) linear both;
+}
+
+.stage:is([data-state='ready'], [data-state='play']) .arcTrace {
+  animation: traceIn var(--T) linear both;
+}
+
+.stage:is([data-state='ready'], [data-state='play']) .arcLabel {
+  animation: arcLabelIn var(--T) linear both;
+}
+
+.stage:is([data-state='ready'], [data-state='play']) .leg {
+  animation: legDraw var(--T) linear both;
+}
+
+.stage:is([data-state='ready'], [data-state='play']) .legLabel {
+  animation: legLabelIn var(--T) linear both;
+}
+
+.stage:is([data-state='ready'], [data-state='play']) .cell {
+  animation: cellOn 0.32s var(--ease-out) both;
+  animation-delay: calc(2.7s + var(--k) * 32ms);
+}
+
+.stage:is([data-state='ready'], [data-state='play']) .worst,
+.stage:is([data-state='ready'], [data-state='play']) .readout,
+.stage:is([data-state='ready'], [data-state='play']) .wireLabel {
+  animation: checkIn var(--T) linear both;
+}
+
+.stage:is([data-state='ready'], [data-state='play']) .wire {
+  animation: wireDraw var(--T) linear both;
+}
+
+.stage:is([data-state='ready'], [data-state='play']) .hold {
+  animation: holdOff var(--T) linear both;
+}
+
+.stage:is([data-state='ready'], [data-state='play']) .clear {
+  animation: clearOn var(--T) linear both;
+}
+
+.stage:is([data-state='ready'], [data-state='play']) .coin {
+  animation: coinTravel var(--T) linear both;
+}
+
+.stage:is([data-state='ready'], [data-state='play']) .payLabel {
+  animation: payIn var(--T) linear both;
+}
+
+.stage:is([data-state='ready'], [data-state='play']) .settled {
+  animation: settledIn var(--T) linear both;
+}
+
+.stage:is([data-state='ready'], [data-state='play']) .step {
+  animation: stepText 0.4s var(--ease-out) both;
+  animation-delay: var(--on);
+}
+
+.stage:is([data-state='ready'], [data-state='play']) .stepLamp {
+  animation: stepLamp 0.4s var(--ease-out) both;
+  animation-delay: var(--on);
+}
+
+.stage[data-state='ready'] :is(.arcDraw, .arcTrace, .arcLabel, .leg, .legLabel, .cell, .worst, .readout, .wireLabel, .wire, .hold, .clear, .coin, .payLabel, .settled, .step, .stepLamp) {
+  animation-play-state: paused;
+}
+
+@keyframes arcDraw {
+  0% {
+    opacity: 1;
+    stroke-dashoffset: 1;
+    animation-timing-function: var(--seg);
+  }
+  11%,
+  24% {
+    opacity: 1;
+    stroke-dashoffset: 0;
+  }
+  30%,
+  100% {
+    opacity: 0;
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes traceIn {
+  0%,
+  24% {
+    opacity: 0;
+  }
+  30%,
+  100% {
+    opacity: 0.85;
+  }
+}
+
+@keyframes arcLabelIn {
+  0%,
+  5% {
+    opacity: 0;
+  }
+  11%,
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes legDraw {
+  0%,
+  26% {
+    stroke-dashoffset: 1;
+    stroke: var(--color-navy-400);
+    animation-timing-function: var(--seg);
+  }
+  37%,
+  66% {
+    stroke-dashoffset: 0;
+    stroke: var(--color-navy-400);
+  }
+  70%,
+  100% {
+    stroke-dashoffset: 0;
+    stroke: var(--color-navy-50);
+  }
+}
+
+@keyframes legLabelIn {
+  0%,
+  31% {
+    opacity: 0;
+  }
+  38%,
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes cellOn {
+  from {
+    fill: var(--color-navy-800);
+  }
+  to {
+    fill: var(--c);
+  }
+}
+
+@keyframes checkIn {
+  0%,
+  61% {
+    opacity: 0;
+  }
+  65%,
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes wireDraw {
+  0%,
+  62% {
+    stroke-dashoffset: 1;
+    animation-timing-function: var(--seg);
+  }
+  67%,
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes holdOff {
+  0%,
+  67% {
+    fill: var(--color-loss-2);
+  }
+  69%,
+  100% {
+    fill: var(--color-navy-700);
+  }
+}
+
+@keyframes clearOn {
+  0%,
+  67% {
+    fill: var(--color-navy-700);
+  }
+  69%,
+  100% {
+    fill: var(--color-navy-50);
+  }
+}
+
+@keyframes coinTravel {
+  0%,
+  72% {
+    opacity: 0;
+    transform: translate(0, 0);
+  }
+  74% {
+    opacity: 1;
+    transform: translate(0, 0);
+    animation-timing-function: var(--seg);
+  }
+  83% {
+    opacity: 1;
+    transform: translate(var(--mx), var(--my));
+    animation-timing-function: var(--seg);
+  }
+  92% {
+    opacity: 1;
+    transform: translate(var(--ex), var(--ey));
+  }
+  95%,
+  100% {
+    opacity: 0;
+    transform: translate(var(--ex), var(--ey));
+  }
+}
+
+@keyframes payIn {
+  0%,
+  74% {
+    opacity: 0;
+  }
+  80%,
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes settledIn {
+  0%,
+  89% {
+    opacity: 0;
+  }
+  95%,
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes stepText {
+  from {
+    opacity: 0.45;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes stepLamp {
+  from {
+    background: transparent;
+    border-color: var(--color-navy-400);
+  }
+  to {
+    background: var(--color-navy-50);
+    border-color: var(--color-navy-50);
+  }
+}
