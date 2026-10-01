@@ -76,7 +76,8 @@ The script checks that the two return byte-identical results and prints `eth_est
 | MarketDataHub, SeriesRegistry, RiskParams, InsuranceFund | Implemented and tested, deployed on RH testnet |
 | RfqVenue, CoveredCallVault, PutWriteVault | Implemented and tested, deployed on RH testnet |
 | AuctionHouse (liquidations, deficit sales) | Implemented and tested, deployed on RH testnet |
-| Keeper, TypeScript SDK, MCP server for agents, indexer, web app | In development |
+| MCP server for agents (`mcp/`) | Implemented and tested, run live on RH testnet |
+| Keeper, TypeScript SDK, indexer, web app | In development |
 | Robinhood Chain mainnet deployment | Planned |
 
 ## Contracts and addresses
@@ -187,14 +188,14 @@ cd kernel && cargo build --release --target wasm32-unknown-unknown
 python ../tools/stylus-deploy/deploy.py --check-size target/wasm32-unknown-unknown/release/novation_kernel.wasm
 ```
 
+The MCP server for agents needs a `pnpm install` at the root, then runs with `node mcp/bin/novation-mcp.mjs` (read-only without `NOVATION_AGENT_KEY`; setup in [mcp/README.md](mcp/README.md)).
+
 The web app lives in `app/` and uses pnpm:
 
 ```bash
 pnpm install
 pnpm --filter @novation/app dev
 ```
-
-The MCP server for agents runs from the same install: `node mcp/bin/novation-mcp.mjs` (read-only without `NOVATION_AGENT_KEY`; setup in [mcp/README.md](mcp/README.md)).
 
 ## License
 
