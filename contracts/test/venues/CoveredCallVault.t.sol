@@ -704,6 +704,24 @@ contract CoveredCallVaultTest is VaultFixture {
         vault.sellBack(call190w2, 1e18, 0, takerId);
     }
 
+    /// Feed data the hub tolerates but that wouldn't decode as typed (a round id beyond uint80)
+    /// reads as "not live" in the vault's views instead of reverting them.
+    function test_undecodableRoundIdReadsNotLive() public {
+        _vaultDeposit(vault, alice, 10e18);
+        uint256 big = uint256(1) << 81;
+        vm.mockCall(
+            address(feedOf[address(nvda)]),
+            abi.encodeWithSelector(feedOf[address(nvda)].latestRoundData.selector),
+            abi.encode(big, int256(180e8), _now(), _now(), big)
+        );
+        (uint256 spot,, bool ok) = hub.spot(address(nvda));
+        assertEq(spot, 180e18);
+        assertTrue(ok);
+        assertFalse(vault.isLive());
+        assertEq(vault.maxDeposit(bob), 0);
+        assertEq(vault.maxWithdraw(alice), 0);
+    }
+
     /// A feed round the vol can't fold in (here a zero answer) stops every priced vault operation,
     /// but holders can still queue their exit.
     function test_requestRedeemNotBlockedByBadRound() public {

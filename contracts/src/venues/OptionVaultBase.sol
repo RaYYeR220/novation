@@ -653,10 +653,11 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         if (_latestRound(params.underlying(underlying).feed) != lastId) revert VolNotCurrent();
     }
 
+    /// @dev The feed's latest round id, read raw like the hub reads it: a failed call or return data
+    /// that wouldn't decode gives 0 (not current) instead of reverting the view.
     function _latestRound(address feed) private view returns (uint80 id) {
-        try IAggregatorV3(feed).latestRoundData() returns (uint80 r, int256, uint256, uint256, uint80) {
-            id = r;
-        } catch {}
+        (bool ok, bytes memory r) = feed.staticcall(abi.encodeWithSelector(IAggregatorV3.latestRoundData.selector));
+        if (ok && r.length >= 160 && uint256(bytes32(r)) <= type(uint80).max) id = uint80(uint256(bytes32(r)));
     }
 
     /// @dev The vault only sells options whose |delta| at the mark vol lies in the offer band: no
