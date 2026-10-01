@@ -186,6 +186,8 @@ pnpm install
 pnpm --filter @novation/app dev
 ```
 
+The keeper syncs vol, lists the weekly grid, settles expiries and accounts, pays claims, rolls the vaults and runs liquidations: `pnpm --filter @novation/keeper loop` (see [keeper/README.md](keeper/README.md)).
+
 ## License
 
 [MIT](LICENSE)
