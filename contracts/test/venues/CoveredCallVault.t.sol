@@ -671,11 +671,14 @@ contract CoveredCallVaultTest is VaultFixture {
 
         vault.roll(_one(e)); // settles; the shortfall is bridged by insurance -> deficit
         (uint256 deficit,,) = ch.deficitOf(vid, e);
-        assertEq(deficit, 150e18 - cash);
+        // the fund bridges whole USDG units: the shortfall rounded up to one
+        assertEq(deficit, (150e18 - cash + 1e12 - 1) / 1e12 * 1e12);
         assertEq(ah.calls(), 1);
         assertEq(ch.positionsOf(vid).length, 0);
         assertEq(vault.epoch(), 0); // waits for the deficit
-        assertApproxEqAbs(vault.totalAssets(), nav, 1);
+        // NAV unchanged by settling, less that sub-unit rounding (< 1e12 wei USD at 220)
+        assertLe(vault.totalAssets(), nav);
+        assertApproxEqAbs(vault.totalAssets(), nav, 1e10);
         assertEq(vault.maxWithdraw(alice), 0);
 
         // auction proceeds repay the bridge (a bidder's payment credited to the vault account)

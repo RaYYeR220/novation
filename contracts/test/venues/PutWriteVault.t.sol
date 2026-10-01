@@ -459,8 +459,9 @@ contract PutWriteVaultTest is VaultFixture {
         _skipWithoutSettlement();
         _vaultDeposit(vault, alice, 1700 * USDG);
         _buy(vault, put170, 10e18);
+        uint256 half = vault.balanceOf(alice) / 2;
         vm.prank(alice);
-        vault.requestRedeem(vault.balanceOf(alice) / 2, alice);
+        vault.requestRedeem(half, alice);
 
         vm.warp(e + 1);
         _settleExpiry(address(nvda), e, 150e18); // the 10 puts owe 200
