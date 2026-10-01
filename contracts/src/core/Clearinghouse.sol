@@ -133,9 +133,11 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
 
     /// @notice USDG: anyone may fund any existing account (it becomes cash). Stock: the owner only
     /// (nobody else can park collateral in an account, e.g. dust that holds up a socialization or
-    /// a liquidation); an enabled underlying becomes collateral, but only while the hub can price
-    /// it (hub.spot reverts NoPrice / ImplausiblePrice otherwise; a HALTED session is fine). The
-    /// amount credited is what actually arrived (balance delta).
+    /// a liquidation), and not while the account owes a deficit (the owner can't keep adding
+    /// stock that holds up the socialization of its own default; cash repays the debt directly);
+    /// an enabled underlying becomes collateral, but only while the hub can price it (hub.spot
+    /// reverts NoPrice / ImplausiblePrice otherwise; a HALTED session is fine). The amount
+    /// credited is what actually arrived (balance delta).
     function deposit(uint256 id, address token, uint256 amount) external nonReentrant {
         CHStorage storage $ = CHS.s();
         address owner = $.accounts[id].owner;
@@ -143,7 +145,7 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
         if (amount == 0) revert CHErrors.ZeroAmount();
         bool isCash = token == usdg;
         if (!isCash) {
-            if (msg.sender != owner) revert CHErrors.DepositNotAllowed();
+            if (msg.sender != owner || $.accounts[id].deficitTotal != 0) revert CHErrors.DepositNotAllowed();
             if (!params.underlying(token).enabled) revert CHErrors.TokenNotAllowed(token);
             hub.spot(token);
         }

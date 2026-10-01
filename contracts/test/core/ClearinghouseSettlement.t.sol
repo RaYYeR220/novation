@@ -993,21 +993,11 @@ contract ClearinghouseSettlementTest is Fixture {
     /// price.
     function test_dustCollateralCannotBlockSocialize() public {
         (uint256 v, uint256 b) = _nakedShortSold();
-        _settleAt(address(nvda), 300e18);
-        ch.settleAccount(v, e);
-        ch.settleAccount(b, e);
-        _setPrice(address(nvda), 250e18);
 
-        nvda.mint(bidder, 1);
-        vm.startPrank(bidder);
-        nvda.approve(address(ch), 1);
-        vm.expectRevert(CHErrors.DepositNotAllowed.selector);
-        ch.deposit(v, address(nvda), 1);
-        vm.stopPrank();
-
-        // the owner can deposit, but 0.02 NVDA at 250 is worth exactly 5: dust, ignored
+        // stock the owner held before the default: 0.02 NVDA at 250 is worth exactly 5, dust
         uint256 snap = vm.snapshotState();
         _deposit(alice, v, address(nvda), 0.02e18);
+        _defaultAt300(v, b);
         ch.socializeRemainder(v, e);
         assertEq(_pending(e), 0);
         assertEq(ch.collateralOf(v, address(nvda)), 0.02e18); // the dust stays with the account
@@ -1017,8 +1007,23 @@ contract ClearinghouseSettlementTest is Fixture {
 
         // one wei more is not dust
         _deposit(alice, v, address(nvda), 0.02e18 + 1);
+        _defaultAt300(v, b);
         vm.expectRevert(abi.encodeWithSelector(CHErrors.AccountNotEmpty.selector, v));
         ch.socializeRemainder(v, e);
+
+        // and nobody, the owner included, can add stock to the account while it owes the deficit
+        nvda.mint(bidder, 1);
+        vm.startPrank(bidder);
+        nvda.approve(address(ch), 1);
+        vm.expectRevert(CHErrors.DepositNotAllowed.selector);
+        ch.deposit(v, address(nvda), 1);
+        vm.stopPrank();
+        nvda.mint(alice, 1e18);
+        vm.startPrank(alice);
+        nvda.approve(address(ch), 1e18);
+        vm.expectRevert(CHErrors.DepositNotAllowed.selector);
+        ch.deposit(v, address(nvda), 1e18);
+        vm.stopPrank();
 
         // collateral the hub can't price counts as 0
         _setPrice(address(nvda), 5000e18); // outside the plausibility band
@@ -1030,7 +1035,17 @@ contract ClearinghouseSettlementTest is Fixture {
         _assertSolvent();
     }
 
-    /// Stock comes from the account's owner only, in deficit or not; USDG from anyone.
+    /// alice's naked short settles at 300 with an empty fund: 108 pending; NVDA then prints 250.
+    function _defaultAt300(uint256 v, uint256 b) internal {
+        _settleAt(address(nvda), 300e18);
+        ch.settleAccount(v, e);
+        ch.settleAccount(b, e);
+        _setPrice(address(nvda), 250e18);
+        assertEq(_pending(e), 108e18);
+    }
+
+    /// Stock comes from the account's owner only, and not while it owes a deficit; USDG from
+    /// anyone, always.
     function test_stockDepositOwnerOnly() public {
         (uint256 v,) = _coveredCallSold(30e18); // carol owns v
         nvda.mint(bidder, 1e18);
@@ -1051,9 +1066,15 @@ contract ClearinghouseSettlementTest is Fixture {
         ch.deposit(v, address(nvda), 1e18);
         vm.stopPrank();
 
+        nvda.mint(carol, 1e18);
+        vm.startPrank(carol);
+        nvda.approve(address(ch), 1e18);
+        vm.expectRevert(CHErrors.DepositNotAllowed.selector); // nor the owner, in deficit
+        ch.deposit(v, address(nvda), 1e18);
+        vm.stopPrank();
+
         _deposit(bidder, v, address(usdg), 10 * USDG); // cash from anyone can only help repay
-        _deposit(carol, v, address(nvda), 1e18); // the owner may still add stock
-        assertEq(ch.collateralOf(v, address(nvda)), 12e18);
+        assertEq(ch.collateralOf(v, address(nvda)), 11e18);
         assertEq(ch.cashOf(v), 10e18);
     }
 
