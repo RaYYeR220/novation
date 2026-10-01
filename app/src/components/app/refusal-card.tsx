@@ -19,6 +19,8 @@ export interface RefusalNoticeProps {
   level?: 2 | 3 | 4;
   /** Unit after each readout figure. Narrow columns pass '' and let the context sentence carry it. */
   unit?: string;
+  /** Link to the refused transaction. */
+  proof?: { href: string; label: string };
   className?: string;
 }
 
@@ -143,7 +145,7 @@ export function refusalCopy(r: Refusal, who: string, agentLabel = 'the agent'): 
   }
 }
 
-export function RefusalNotice({ refusal, who, agentLabel, action, hint, announce = true, level = 3, unit = 'USDG', className }: RefusalNoticeProps) {
+export function RefusalNotice({ refusal, who, agentLabel, action, hint, announce = true, level = 3, unit = 'USDG', proof, className }: RefusalNoticeProps) {
   const c = refusalCopy(refusal, who, agentLabel);
   return (
     <RefusalCard
@@ -156,6 +158,7 @@ export function RefusalNotice({ refusal, who, agentLabel, action, hint, announce
       announce={announce}
       level={level}
       unit={unit}
+      proof={proof}
       className={className}
     />
   );
