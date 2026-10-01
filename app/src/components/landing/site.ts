@@ -18,7 +18,7 @@ export const CHECK_LINKS = {
   selfReview: process.env.NEXT_PUBLIC_DOC_REVIEW_URL ?? '',
 } as const;
 
-/** Mainnet transactions that show each refusal firing. */
+/** On-chain transactions that show each refusal firing. */
 export const PROOF_TX = {
   weekend: process.env.NEXT_PUBLIC_PROOF_WEEKEND_TX ?? '',
   corporateAction: process.env.NEXT_PUBLIC_PROOF_CORPORATE_TX ?? '',

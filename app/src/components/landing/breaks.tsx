@@ -80,7 +80,7 @@ export function Breaks({ ims, agent }: BreaksProps) {
                 <p className="mt-s2 max-w-[52ch] text-t15 text-navy-200">{r.body}</p>
                 {r.proof ? (
                   <a href={txUrl(r.proof)} className={cn(TEXT_LINK, 'mt-s3 inline-block text-t13 font-medium')}>
-                    Proof transaction
+                    The same refusal on-chain, on testnet
                   </a>
                 ) : null}
               </li>
