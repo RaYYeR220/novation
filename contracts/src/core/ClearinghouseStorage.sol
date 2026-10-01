@@ -46,6 +46,11 @@ struct CHStorage {
     mapping(uint256 => mapping(address => uint256)) positionsOn; // open positions per underlying
     mapping(uint256 => uint256) underlyingCount; // size of the union
     mapping(uint256 => uint256) claimableTotal; // sum over expiries of claimable[id][E], at face
+    // What an account still owes after its deficit was socialized (the pool's part spread over
+    // all cash, plus the fund's written-off bridge); repaid to the InsuranceFund. Part of
+    // deficitTotal.
+    mapping(uint256 => uint256) socializedDebt;
+    mapping(uint256 => uint64[]) deficitExpiries; // expiries where defPending or defBridged > 0
 }
 
 /// @notice Dependencies handed to the logic libraries, built by the Clearinghouse from its
@@ -105,6 +110,7 @@ library CHErrors {
     error NotAuctionHouse(address caller);
     error NothingToSocialize();
     error AccountNotEmpty(uint256 id);
+    error DepositNotAllowed();
     // setup
     error NotSetupAdmin();
     error SetupAlreadyFinalized();

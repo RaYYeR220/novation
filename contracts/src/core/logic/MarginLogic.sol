@@ -4,6 +4,7 @@ pragma solidity 0.8.30;
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {CHS, CHStorage, CHErrors, Deps} from "../ClearinghouseStorage.sol";
 import {MarketDataHub} from "../MarketDataHub.sol";
+import {Payoff} from "./Payoff.sol";
 import {AccountState} from "../../interfaces/IClearinghouse.sol";
 import {UnderlyingParams, GlobalParams} from "../../interfaces/IRiskParams.sol";
 import {FixedPointMath as F} from "../../libraries/FixedPointMath.sol";
@@ -76,6 +77,12 @@ library MarginLogic {
         returns (AccountState memory)
     {
         return _state(d, id, seriesId, qtyDelta, cashDelta);
+    }
+
+    /// @notice The account's collateral at spot, valued as on the fast path: a token the hub can't
+    /// price (NoPrice / ImplausiblePrice) counts as 0; any other failure reverts.
+    function collateralValue(Deps memory d, uint256 id) external view returns (int256) {
+        return _collateralValue(d, id);
     }
 
     /// @notice Correlated portfolio PnL per scenario (39 values) of the account's live risk.
@@ -196,7 +203,7 @@ library MarginLogic {
             if (s.expiry <= block.timestamp) {
                 (uint256 price, bool settled) = d.registry.settlementPriceOf(s.underlying, s.expiry);
                 if (settled) {
-                    inp.settledValue += _settledPayoff(s, price, qty);
+                    inp.settledValue += Payoff.settled(s, price, qty);
                     continue;
                 }
             }
@@ -295,14 +302,6 @@ library MarginLogic {
                 revert(add(reason, 0x20), mload(reason))
             }
         }
-    }
-
-    /// @dev Long: +floor(qty * payoff); short: -ceil(|qty| * payoff).
-    function _settledPayoff(Series memory s, uint256 price, int256 qty) private pure returns (int256) {
-        uint256 k = s.strike;
-        uint256 payoff = s.isCall ? (price > k ? price - k : 0) : (k > price ? k - price : 0);
-        if (qty > 0) return (uint256(qty) * payoff / WAD).toInt256();
-        return -F.mulWadUp(uint256(-qty), payoff).toInt256();
     }
 
     function _mulWad(uint256 a, uint256 b) private pure returns (uint256) {

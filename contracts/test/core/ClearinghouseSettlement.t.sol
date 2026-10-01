@@ -6,6 +6,7 @@ import {MockAuctionHouse} from "../utils/MockAuctionHouse.sol";
 import {CHErrors} from "../../src/core/ClearinghouseStorage.sol";
 import {IClearinghouse, TradeParams, AccountState} from "../../src/interfaces/IClearinghouse.sol";
 import {SettlementLogic} from "../../src/core/logic/SettlementLogic.sol";
+import {MarketDataHub} from "../../src/core/MarketDataHub.sol";
 import {IInsuranceFund} from "../../src/interfaces/IInsuranceFund.sol";
 import {GlobalParams} from "../../src/interfaces/IRiskParams.sol";
 import {NyseCalendar} from "../../src/libraries/NyseCalendar.sol";
@@ -453,6 +454,7 @@ contract ClearinghouseSettlementTest is Fixture {
         ah.applyDeficitProceeds(v, e);
         (total, bridged, pend) = ch.deficitOf(v, e);
         assertEq(total, 0);
+        assertEq(ch.deficitExpiriesOf(v).length, 0);
         assertEq(_pending(e), 0);
         assertEq(ch.cashOf(v), 15e18);
 
@@ -545,7 +547,8 @@ contract ClearinghouseSettlementTest is Fixture {
         uint256 price,
         uint256 insUnits,
         uint256 bidUnits,
-        uint256 bidDust
+        uint256 bidDust,
+        uint256 repayUnits
     ) public {
         index = bound(index, 1e9, 1e18);
         price = bound(price, 181e18, 600e18);
@@ -609,6 +612,22 @@ contract ClearinghouseSettlementTest is Fixture {
         assertGe(ch.accountState(b).equity, eqClaim - 1);
         assertEq(ch.claimableTotalOf(b), 0);
         _assertSolvent();
+
+        // whatever v still owes (the fund's bridge or the residual debt), its own later cash
+        // repays to the fund, equity-neutral up to a wei of debit rounding per bucket
+        repayUnits = bound(repayUnits, 0, 3000 * USDG);
+        if (repayUnits != 0) _deposit(bidder, v, address(usdg), repayUnits);
+        int256 eqRepay = ch.accountState(v).equity;
+        (uint256 owed0,,) = ch.deficitOf(v, e);
+        uint256 fund0 = usdg.balanceOf(address(insurance));
+        ch.repayDeficit(v);
+        (uint256 owed1, uint256 br1, uint256 pe1) = ch.deficitOf(v, e);
+        assertEq(pe1, 0);
+        assertEq((usdg.balanceOf(address(insurance)) - fund0) * 1e12, owed0 - owed1);
+        assertEq(insurance.outstandingWad(), br1);
+        assertLe(ch.accountState(v).equity, eqRepay);
+        assertGe(ch.accountState(v).equity, eqRepay - 2);
+        _assertSolvent();
     }
 
     // ================================================================ socialization
@@ -644,9 +663,11 @@ contract ClearinghouseSettlementTest is Fixture {
         uint256 left = ch.cashOf(b) + ch.cashOf(c) + ch.cashOf(d);
         assertLe(left, totalCash - 108e18);
         assertApproxEqAbs(left, totalCash - 108e18, 5958 + 3);
+        // the expiry's books are clear, but v still owes the 108 as residual debt
         (total,, pend) = ch.deficitOf(v, e);
-        assertEq(total, 0);
+        assertEq(total, 108e18);
         assertEq(pend, 0);
+        assertEq(ch.socializedDebtOf(v), 108e18);
         (uint256 p, uint256 pending,) = ch.pool(e);
         assertEq(p, 600e18);
         assertEq(pending, 0);
@@ -660,7 +681,7 @@ contract ClearinghouseSettlementTest is Fixture {
         assertEq(_pool(e), 0);
         _assertSolvent();
 
-        // the defaulted account is clear again
+        // nothing of this expiry is left to socialize
         vm.expectRevert(CHErrors.NothingToSocialize.selector);
         ch.socializeRemainder(v, e);
     }
@@ -680,9 +701,10 @@ contract ClearinghouseSettlementTest is Fixture {
         ch.settleAccount(b, e); // claim 360
         ch.settleAccount(b2, e); // claim 240
 
-        // only dave's 10 USDG of cash exist: everything goes, and the index stops at 1 (not 0)
+        // only dave's 10 USDG of cash exist: everything goes, and the index stops at 1 (not 0);
+        // the event reports what actually reached the pool
         vm.expectEmit(true, false, false, true, address(ch));
-        emit IClearinghouse.LossSocialized(e, 108e18, 1);
+        emit IClearinghouse.LossSocialized(e, 10e18 - 10, 1);
         ch.socializeRemainder(v, e);
         assertEq(ch.cashIndex(), 1);
         assertEq(ch.cashOf(d), 10); // 10e18 of norm at index 1
@@ -691,7 +713,7 @@ contract ClearinghouseSettlementTest is Fixture {
         assertEq(p, pool0);
         assertEq(pending, 0);
         (uint256 total,,) = ch.deficitOf(v, e);
-        assertEq(total, 0);
+        assertEq(total, 108e18); // residual debt
         _assertSolvent();
 
         // claims are paid pro rata from what the pool holds
@@ -754,7 +776,7 @@ contract ClearinghouseSettlementTest is Fixture {
         ch.settleAccount(b, e);
         assertEq(insurance.outstandingWad(), 50e18);
 
-        // only the pending 58 is socialized; the fund's 50 can no longer be recovered
+        // only the pending 58 is socialized; the fund writes its 50 off, and v keeps owing both
         uint256 totalCash = 958e18 + 2000e18;
         uint256 newIndex = 1e18 * (totalCash - 58e18) / totalCash;
         vm.expectEmit(true, false, false, true, address(ch));
@@ -765,9 +787,10 @@ contract ClearinghouseSettlementTest is Fixture {
 
         assertEq(insurance.outstandingWad(), 0);
         (uint256 total, uint256 bridged, uint256 pend) = ch.deficitOf(v, e);
-        assertEq(total, 0);
+        assertEq(total, 108e18);
         assertEq(bridged, 0);
         assertEq(pend, 0);
+        assertEq(ch.socializedDebtOf(v), 58e18 + 50e18);
         assertEq(ch.cashOf(c), 2000e18 * newIndex / 1e18);
         assertEq(_pool(e), 600e18);
         _assertSolvent();
@@ -811,6 +834,8 @@ contract ClearinghouseSettlementTest is Fixture {
         vm.recordLogs();
         ch.socializeRemainder(v, e);
         assertEq(vm.getRecordedLogs().length, 1); // DeficitReduced only, no LossSocialized
+        assertEq(ch.deficitExpiriesOf(v).length, 0);
+        assertEq(ch.socializedDebtOf(v), 0);
         assertEq(ch.cashIndex(), 1e18);
         assertEq(ch.cashOf(v), 2e18);
         (uint256 total,,) = ch.deficitOf(v, e);
@@ -848,6 +873,341 @@ contract ClearinghouseSettlementTest is Fixture {
         ch.socializeRemainder(v, e);
         vm.expectRevert(abi.encodeWithSelector(CHErrors.AccountNotEmpty.selector, w));
         ch.socializeRemainder(w, e);
+    }
+
+    // ================================================================ residual debt and repayment
+
+    /// Review PoC: a defaulter whose value sits in an unclaimed claim can't socialize its debt and
+    /// walk away with the claim. The socialized amount stays owed, blocks the withdrawal and is
+    /// repaid (to the InsuranceFund) out of the account's own cash.
+    function test_claimCannotEscapeSocializedDebt() public {
+        uint32 far = _list(address(nvda), e2, 200e18, true);
+        uint256 a = _newAccount(alice);
+        uint256 c = _fund(carol, 5000 * USDG, 0);
+        uint256 bb = _fund(bob, 1000 * USDG, 0);
+        _fund(dave, 10_000 * USDG, 0);
+        _cheatMovePosition(a, call180, 10e18);
+        _cheatMovePosition(c, call180, -10e18);
+        _settleAt(address(nvda), 280e18);
+        ch.settleAccount(c, e);
+        ch.settleAccount(a, e); // a: claim 1000, left unclaimed
+        _setPrice(address(nvda), 280e18);
+        _trade(bb, a, far, 4e18, 340e18); // margined by nothing but the claim
+        vm.warp(e2 + 1 hours);
+        _settleExpiry(address(nvda), e2, 400e18); // a owes 800 on e2 and has 340
+
+        ch.settleAccount(a, e2);
+        int256 eq0 = ch.accountState(a).equity;
+        ch.socializeRemainder(a, e2);
+        // the 460 left the expiry's books, not a's
+        (uint256 total,, uint256 pend) = ch.deficitOf(a, e2);
+        assertEq(pend, 0);
+        assertEq(total, 460e18);
+        assertEq(ch.socializedDebtOf(a), 460e18);
+        assertEq(ch.accountState(a).equity, eq0);
+        _assertSolvent();
+
+        ch.claim(a, e);
+        assertApproxEqAbs(ch.cashOf(a), 1000e18, 1);
+        vm.expectRevert(CHErrors.InDeficit.selector);
+        vm.prank(alice);
+        ch.withdraw(a, address(usdg), 999 * USDG, alice);
+
+        // anyone can make the account repay out of its own cash: the fund gets the 460
+        uint256 fund0 = insurance.balanceWad();
+        int256 eq1 = ch.accountState(a).equity;
+        vm.expectEmit(true, true, false, true, address(ch));
+        emit IClearinghouse.DeficitReduced(a, 0, 0, 460e18);
+        vm.expectCall(address(insurance), abi.encodeWithSelector(IInsuranceFund.notifyRecovered.selector), 0);
+        vm.prank(dave);
+        ch.repayDeficit(a);
+        assertEq(ch.socializedDebtOf(a), 0);
+        (total,,) = ch.deficitOf(a, e2);
+        assertEq(total, 0);
+        assertEq(insurance.balanceWad(), fund0 + 460e18);
+        assertLe(ch.accountState(a).equity, eq1);
+        assertApproxEqAbs(ch.accountState(a).equity, eq1, 1);
+        _assertSolvent();
+
+        vm.prank(alice);
+        ch.withdraw(a, address(usdg), 539 * USDG, alice);
+        ch.settleAccount(bb, e2);
+        ch.claim(bb, e2);
+        _assertSolvent();
+    }
+
+    /// Review PoC: a fully bridged deficit and cash that arrives later (a claim). The cash repays
+    /// the fund instead of sitting frozen next to a debt nobody can collect.
+    function test_repayDeficitRepaysFundFromLaterCash() public {
+        uint32 far = _list(address(nvda), e2, 200e18, true);
+        uint256 a = _newAccount(alice);
+        uint256 c = _fund(carol, 5000 * USDG, 0);
+        uint256 bb = _fund(bob, 1000 * USDG, 0);
+        _cheatMovePosition(a, call180, 10e18);
+        _cheatMovePosition(c, call180, -10e18);
+        _settleAt(address(nvda), 280e18);
+        ch.settleAccount(c, e);
+        ch.settleAccount(a, e);
+        _setPrice(address(nvda), 280e18);
+        _trade(bb, a, far, 4e18, 340e18);
+        usdg.mint(address(insurance), 10_000 * USDG);
+        vm.warp(e2 + 1 hours);
+        _settleExpiry(address(nvda), e2, 400e18);
+
+        ch.settleAccount(a, e2); // bridged 460, nothing pending
+        ch.claim(a, e); // 1000 of cash
+        (uint256 total, uint256 bridged, uint256 pend) = ch.deficitOf(a, e2);
+        assertEq(total, 460e18);
+        assertEq(bridged, 460e18);
+        assertEq(pend, 0);
+        assertEq(ch.cashOf(a), 1000e18);
+        vm.expectRevert(CHErrors.NothingToSocialize.selector);
+        ch.socializeRemainder(a, e2);
+        vm.expectRevert(CHErrors.InDeficit.selector);
+        vm.prank(alice);
+        ch.withdraw(a, address(usdg), 1 * USDG, alice);
+
+        int256 eq = ch.accountState(a).equity;
+        vm.expectEmit(true, true, false, true, address(ch));
+        emit IClearinghouse.DeficitReduced(a, e2, 0, 460e18);
+        vm.expectCall(address(insurance), abi.encodeCall(IInsuranceFund.notifyRecovered, (460e18)));
+        vm.prank(dave);
+        ch.repayDeficit(a);
+        (total, bridged, pend) = ch.deficitOf(a, e2);
+        assertEq(total, 0);
+        assertEq(bridged, 0);
+        assertEq(insurance.outstandingWad(), 0);
+        assertEq(insurance.balanceWad(), 10_000e18);
+        assertEq(ch.cashOf(a), 540e18);
+        assertEq(ch.accountState(a).equity, eq);
+        assertEq(ch.deficitExpiriesOf(a).length, 0);
+        _assertSolvent();
+
+        vm.prank(alice);
+        ch.withdraw(a, address(usdg), 540 * USDG, alice);
+    }
+
+    /// Review PoC: stock parked in an emptied defaulter can't hold socialization (and so every
+    /// claim of the expiry) hostage. Third parties can't deposit stock into an account in deficit,
+    /// collateral worth at most dustEquity (5 USD) is ignored, and so is collateral the hub can't
+    /// price.
+    function test_dustCollateralCannotBlockSocialize() public {
+        (uint256 v, uint256 b) = _nakedShortSold();
+        _settleAt(address(nvda), 300e18);
+        ch.settleAccount(v, e);
+        ch.settleAccount(b, e);
+        _setPrice(address(nvda), 250e18);
+
+        nvda.mint(bidder, 1);
+        vm.startPrank(bidder);
+        nvda.approve(address(ch), 1);
+        vm.expectRevert(CHErrors.DepositNotAllowed.selector);
+        ch.deposit(v, address(nvda), 1);
+        vm.stopPrank();
+
+        // the owner can deposit, but 0.02 NVDA at 250 is worth exactly 5: dust, ignored
+        uint256 snap = vm.snapshotState();
+        _deposit(alice, v, address(nvda), 0.02e18);
+        ch.socializeRemainder(v, e);
+        assertEq(_pending(e), 0);
+        assertEq(ch.collateralOf(v, address(nvda)), 0.02e18); // the dust stays with the account
+        ch.claim(b, e);
+        _assertSolvent();
+        vm.revertToState(snap);
+
+        // one wei more is not dust
+        _deposit(alice, v, address(nvda), 0.02e18 + 1);
+        vm.expectRevert(abi.encodeWithSelector(CHErrors.AccountNotEmpty.selector, v));
+        ch.socializeRemainder(v, e);
+
+        // collateral the hub can't price counts as 0
+        _setPrice(address(nvda), 5000e18); // outside the plausibility band
+        vm.expectRevert(MarketDataHub.ImplausiblePrice.selector);
+        hub.spot(address(nvda));
+        ch.socializeRemainder(v, e);
+        assertEq(_pending(e), 0);
+        ch.claim(b, e);
+        _assertSolvent();
+    }
+
+    /// Stock comes from the account's owner only, in deficit or not; USDG from anyone.
+    function test_stockDepositOwnerOnly() public {
+        (uint256 v,) = _coveredCallSold(30e18); // carol owns v
+        nvda.mint(bidder, 1e18);
+        vm.startPrank(bidder);
+        nvda.approve(address(ch), 1e18);
+        vm.expectRevert(CHErrors.DepositNotAllowed.selector);
+        ch.deposit(v, address(nvda), 1e18);
+        vm.stopPrank();
+        _deposit(carol, v, address(nvda), 1e18);
+        _settleAt(address(nvda), 210e18);
+        ch.settleAccount(v, e); // in deficit now
+        _setPrice(address(nvda), 210e18);
+
+        nvda.mint(bidder, 1e18);
+        vm.startPrank(bidder);
+        nvda.approve(address(ch), 1e18);
+        vm.expectRevert(CHErrors.DepositNotAllowed.selector);
+        ch.deposit(v, address(nvda), 1e18);
+        vm.stopPrank();
+
+        _deposit(bidder, v, address(usdg), 10 * USDG); // cash from anyone can only help repay
+        _deposit(carol, v, address(nvda), 1e18); // the owner may still add stock
+        assertEq(ch.collateralOf(v, address(nvda)), 12e18);
+        assertEq(ch.cashOf(v), 10e18);
+    }
+
+    /// repayDeficit spends the account's own cash on the pools' pending parts first (every
+    /// expiry), then the fund's bridges, then the residual socialized debt; the fund is paid in
+    /// whole USDG units. Each step is equity-neutral.
+    function test_repayDeficitBucketsInOrder() public {
+        uint32 far = _list(address(nvda), e2, 180e18, true);
+        uint256 a = _fund(alice, 100 * USDG, 0);
+        uint256 b = _newAccount(bob);
+        uint256 c = _newAccount(carol);
+        _cheatMovePosition(a, call180, -5e18);
+        _cheatMovePosition(b, call180, 5e18);
+        _cheatMovePosition(a, far, -2e18);
+        _cheatMovePosition(c, far, 2e18);
+        usdg.mint(address(insurance), 200 * USDG);
+
+        // e: a owes 600, pays its 100, the fund bridges 200, 300 pending
+        _settleAt(address(nvda), 300e18);
+        ch.settleAccount(a, e);
+        ch.settleAccount(b, e);
+        _assertBuckets(a, e, 300e18, 200e18, 0);
+        // e2: a owes 200 with nothing left, all pending, and a is empty: socialized. No cash
+        // exists anywhere, so the index drops to 1 and only e2's own pool is impaired.
+        vm.warp(e2 + 1 hours);
+        _settleExpiry(address(nvda), e2, 280e18);
+        ch.settleAccount(a, e2);
+        ch.settleAccount(c, e2);
+        vm.expectEmit(true, false, false, true, address(ch));
+        emit IClearinghouse.LossSocialized(e2, 0, 1);
+        ch.socializeRemainder(a, e2);
+        assertEq(ch.cashIndex(), 1);
+        _assertBuckets(a, e, 300e18, 200e18, 200e18);
+        uint64[] memory xs = ch.deficitExpiriesOf(a);
+        assertEq(xs.length, 1);
+        assertEq(xs[0], e);
+        _assertSolvent();
+
+        // 250 in: all of it to e's pending
+        _deposit(bidder, a, address(usdg), 250 * USDG);
+        int256 eq = ch.accountState(a).equity;
+        vm.expectEmit(true, true, false, true, address(ch));
+        emit IClearinghouse.DeficitReduced(a, e, 250e18, 0);
+        ch.repayDeficit(a);
+        assertEq(ch.accountState(a).equity, eq);
+        _assertBuckets(a, e, 50e18, 200e18, 200e18);
+        assertEq(_pending(e), 50e18);
+        vm.expectRevert(CHErrors.PoolNotReady.selector);
+        ch.claim(b, e);
+        _assertSolvent();
+
+        // 150 in: e's last 50 of pending, then 100 to the fund's bridge
+        _deposit(bidder, a, address(usdg), 150 * USDG);
+        eq = ch.accountState(a).equity;
+        vm.expectEmit(true, true, false, true, address(ch));
+        emit IClearinghouse.DeficitReduced(a, e, 50e18, 100e18);
+        vm.expectCall(address(insurance), abi.encodeCall(IInsuranceFund.notifyRecovered, (100e18)));
+        ch.repayDeficit(a);
+        assertEq(ch.accountState(a).equity, eq);
+        _assertBuckets(a, e, 0, 100e18, 200e18);
+        assertEq(insurance.outstandingWad(), 100e18);
+        assertEq(insurance.balanceWad(), 100e18);
+        ch.claim(b, e); // e's pool is complete again
+        assertEq(ch.cashOf(b), 600e18);
+        _assertSolvent();
+
+        // 250 in: the bridge's last 100, then 150 of the socialized debt
+        _deposit(bidder, a, address(usdg), 250 * USDG);
+        eq = ch.accountState(a).equity;
+        vm.expectEmit(true, true, false, true, address(ch));
+        emit IClearinghouse.DeficitReduced(a, e, 0, 100e18);
+        vm.expectEmit(true, true, false, true, address(ch));
+        emit IClearinghouse.DeficitReduced(a, 0, 0, 150e18);
+        vm.expectCall(address(insurance), abi.encodeCall(IInsuranceFund.notifyRecovered, (250e18)), 0); // residual is not a bridge
+        ch.repayDeficit(a);
+        assertEq(ch.accountState(a).equity, eq);
+        _assertBuckets(a, e, 0, 0, 50e18);
+        assertEq(insurance.outstandingWad(), 0);
+        assertEq(insurance.balanceWad(), 350e18);
+        assertEq(ch.deficitExpiriesOf(a).length, 0);
+        _assertSolvent();
+
+        // 60.5 in: the last 50; the rest is a's again
+        _deposit(bidder, a, address(usdg), 60.5e6);
+        ch.repayDeficit(a);
+        _assertBuckets(a, e, 0, 0, 0);
+        assertEq(insurance.balanceWad(), 400e18);
+        assertEq(ch.cashOf(a), 10.5e18);
+        vm.prank(alice);
+        ch.withdraw(a, address(usdg), 10.5e6, alice);
+        _assertSolvent();
+    }
+
+    function test_repayDeficitNoop() public {
+        uint256 a = _fund(alice, 100 * USDG, 0);
+        vm.recordLogs();
+        ch.repayDeficit(a); // no debt
+        assertEq(vm.getRecordedLogs().length, 0);
+        assertEq(ch.cashOf(a), 100e18);
+
+        uint256 v = _fund(carol, 450 * USDG, 0);
+        uint256 b = _fund(bob, 1000 * USDG, 0);
+        _trade(b, v, call180, 5e18, 42e18);
+        _settleAt(address(nvda), 300e18);
+        ch.settleAccount(v, e);
+        assertEq(ch.cashOf(v), 0);
+        vm.recordLogs();
+        ch.repayDeficit(v); // debt but no cash
+        assertEq(vm.getRecordedLogs().length, 0);
+        (uint256 total,,) = ch.deficitOf(v, e);
+        assertEq(total, 108e18);
+    }
+
+    /// settleAccount on a full book: 256 positions of one expiry over two underlyings.
+    function test_settle256PositionsGas() public {
+        uint256 x = _fund(alice, 1_000_000 * USDG, 0);
+        uint256 y = _fund(bob, 1_000_000 * USDG, 0);
+        uint256 n;
+        for (uint128 k = 90e18; k <= 270e18 && n < 256; k += 5e18) {
+            uint32 sc = _list(address(nvda), e, k, true);
+            uint32 sp = _list(address(nvda), e, k, false);
+            int256 sgn = n % 2 == 0 ? int256(1) : int256(-1);
+            _cheatMovePosition(x, sc, sgn * 1e18);
+            _cheatMovePosition(y, sc, -sgn * 1e18);
+            _cheatMovePosition(x, sp, -sgn * 1e18);
+            _cheatMovePosition(y, sp, sgn * 1e18);
+            n += 2;
+        }
+        for (uint128 k = 300e18; k <= 900e18 && n < 256; k += 5e18) {
+            uint32 sc = _list(address(spy), e, k, true);
+            int256 sgn = n % 2 == 0 ? int256(1) : int256(-1);
+            _cheatMovePosition(x, sc, sgn * 1e18);
+            _cheatMovePosition(y, sc, -sgn * 1e18);
+            ++n;
+            if (n == 256) break;
+            uint32 sp = _list(address(spy), e, k, false);
+            _cheatMovePosition(x, sp, -sgn * 1e18);
+            _cheatMovePosition(y, sp, sgn * 1e18);
+            ++n;
+        }
+        assertEq(ch.positionsOf(x).length, 256);
+        vm.warp(e + 1 hours);
+        _settleExpiry(address(nvda), e, 200e18);
+        _settleExpiry(address(spy), e, 610e18);
+        vm.cool(address(ch));
+        vm.cool(address(registry));
+        uint256 g0 = gasleft();
+        ch.settleAccount(x, e);
+        uint256 used = g0 - gasleft();
+        emit log_named_uint("settleAccount gas, 256 positions", used);
+        assertEq(ch.positionsOf(x).length, 0);
+        assertLt(used, 16_000_000); // half of Arbitrum's 32M per-transaction cap
+        ch.settleAccount(y, e);
+        _assertSolvent();
     }
 
     // ================================================================ claims in margin equity
@@ -1009,6 +1369,16 @@ contract ClearinghouseSettlementTest is Fixture {
     }
 
     // ================================================================ helpers
+
+    /// @dev The per-expiry parts of `id`'s deficit on `ex`, its residual socialized debt, and a
+    /// total that is exactly their sum (only `ex` may carry a per-expiry deficit here).
+    function _assertBuckets(uint256 id, uint64 ex, uint256 pend, uint256 bridged, uint256 social) internal view {
+        (uint256 total, uint256 br, uint256 pe) = ch.deficitOf(id, ex);
+        assertEq(pe, pend, "pending part");
+        assertEq(br, bridged, "bridged part");
+        assertEq(ch.socializedDebtOf(id), social, "socialized debt");
+        assertEq(total, pend + bridged + social, "deficit total");
+    }
 
     function _assertSameEquity(AccountState memory x, AccountState memory y) internal pure {
         assertEq(y.equity, x.equity, "equity");

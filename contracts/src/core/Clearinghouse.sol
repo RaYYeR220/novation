@@ -130,16 +130,19 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
 
     // ================================================================ funds
 
-    /// @notice Anyone may fund any existing account. USDG becomes cash; an enabled underlying
-    /// becomes collateral, but only while the hub can price it (hub.spot reverts NoPrice /
-    /// ImplausiblePrice otherwise; a HALTED session is fine). The amount credited is what
-    /// actually arrived (balance delta).
+    /// @notice USDG: anyone may fund any existing account (it becomes cash). Stock: the owner only
+    /// (nobody else can park collateral in an account, e.g. dust that holds up a socialization or
+    /// a liquidation); an enabled underlying becomes collateral, but only while the hub can price
+    /// it (hub.spot reverts NoPrice / ImplausiblePrice otherwise; a HALTED session is fine). The
+    /// amount credited is what actually arrived (balance delta).
     function deposit(uint256 id, address token, uint256 amount) external nonReentrant {
         CHStorage storage $ = CHS.s();
-        if ($.accounts[id].owner == address(0)) revert CHErrors.UnknownAccount(id);
+        address owner = $.accounts[id].owner;
+        if (owner == address(0)) revert CHErrors.UnknownAccount(id);
         if (amount == 0) revert CHErrors.ZeroAmount();
         bool isCash = token == usdg;
         if (!isCash) {
+            if (msg.sender != owner) revert CHErrors.DepositNotAllowed();
             if (!params.underlying(token).enabled) revert CHErrors.TokenNotAllowed(token);
             hub.spot(token);
         }
@@ -232,13 +235,20 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
     /// @notice Permissionless: pays the claim of `id` on the `expiry` pool into its cash once no
     /// short of that expiry is unsettled and nothing is pending. No claim is a no-op.
     function claim(uint256 id, uint64 expiry) external nonReentrant {
-        SettlementLogic.claim(_deps(), id, expiry);
+        SettlementLogic.claim(id, expiry);
     }
 
     /// @notice Permissionless: socializes the pending deficit of an emptied account through the
-    /// cash index (see SettlementLogic).
+    /// cash index; the account keeps owing it as residual debt (see SettlementLogic).
     function socializeRemainder(uint256 id, uint64 expiry) external nonReentrant {
         SettlementLogic.socializeRemainder(_deps(), id, expiry);
+    }
+
+    /// @notice Permissionless and equity-neutral: spends the account's own cash on what it owes,
+    /// pools' pending parts first, then the InsuranceFund's bridges, then its residual socialized
+    /// debt (see SettlementLogic).
+    function repayDeficit(uint256 id) external nonReentrant {
+        SettlementLogic.repayDeficit(_deps(), id);
     }
 
     function transferFraction(uint256, uint256, uint256) external pure {
@@ -317,6 +327,16 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
     /// @notice The account's unpaid claims over all expiries, at face. Counted in its equity.
     function claimableTotalOf(uint256 id) external view returns (uint256) {
         return CHS.s().claimableTotal[id];
+    }
+
+    /// @notice What the account still owes after a socialization (part of deficitOf's total).
+    function socializedDebtOf(uint256 id) external view returns (uint256) {
+        return CHS.s().socializedDebt[id];
+    }
+
+    /// @notice The expiries on which the account still owes its pool or the InsuranceFund.
+    function deficitExpiriesOf(uint256 id) external view returns (uint64[] memory) {
+        return CHS.s().deficitExpiries[id];
     }
 
     /// @return total the account's deficit over all expiries

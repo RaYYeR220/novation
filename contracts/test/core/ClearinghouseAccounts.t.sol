@@ -116,8 +116,16 @@ contract ClearinghouseAccountsTest is Fixture {
 
     function test_depositStockCollateral() public {
         uint256 id = _newAccount(alice);
+        // stock comes from the owner only
         nvda.mint(bob, 5e18);
         vm.startPrank(bob);
+        nvda.approve(address(ch), 5e18);
+        vm.expectRevert(CHErrors.DepositNotAllowed.selector);
+        ch.deposit(id, address(nvda), 5e18);
+        vm.stopPrank();
+
+        nvda.mint(alice, 5e18);
+        vm.startPrank(alice);
         nvda.approve(address(ch), 5e18);
         vm.expectEmit(true, true, false, true, address(ch));
         emit IClearinghouse.Deposited(id, address(nvda), 5e18);
@@ -664,18 +672,18 @@ contract ClearinghouseAccountsTest is Fixture {
 
     function test_depositRejectsUnpriceableCollateral() public {
         uint256 id = _fund(alice, 100 * USDG, 0);
-        spy.mint(bob, 3);
-        vm.prank(bob);
+        spy.mint(alice, 3);
+        vm.prank(alice);
         spy.approve(address(ch), 3);
 
         _setPrice(address(spy), 7000e18); // above maxPrice 6000
         vm.expectRevert(MarketDataHub.ImplausiblePrice.selector);
-        vm.prank(bob);
+        vm.prank(alice);
         ch.deposit(id, address(spy), 1);
 
         _setPrice(address(spy), 0); // no usable answer
         vm.expectRevert(MarketDataHub.NoPrice.selector);
-        vm.prank(bob);
+        vm.prank(alice);
         ch.deposit(id, address(spy), 1);
         assertEq(ch.collateralTokensOf(id).length, 0);
 
@@ -684,7 +692,7 @@ contract ClearinghouseAccountsTest is Fixture {
         spy.setPaused(true);
         (,, bool ok) = hub.spot(address(spy));
         assertFalse(ok);
-        vm.prank(bob);
+        vm.prank(alice);
         ch.deposit(id, address(spy), 1);
         assertEq(ch.collateralOf(id, address(spy)), 1);
     }
@@ -695,7 +703,7 @@ contract ClearinghouseAccountsTest is Fixture {
         uint64 e = _expiry();
         uint32 call180 = _list(address(nvda), e, 180e18, true);
         uint256 id = _fund(alice, 1000 * USDG, 0);
-        _deposit(bob, id, address(spy), 1); // third-party dust, accepted while SPY is priced
+        _deposit(alice, id, address(spy), 1); // dust, accepted while SPY is priced
         _deposit(alice, id, address(spy), 2e18);
         _cheatMovePosition(id, call180, 1e18);
         uint256 idle = _fund(bob, 5 * USDG, 0);
