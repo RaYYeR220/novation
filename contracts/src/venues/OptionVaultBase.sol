@@ -68,6 +68,7 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
     error ExceedsFreeAssets(uint256 assets, uint256 free);
     error PremiumAboveMax(uint256 premium, uint256 maxPremium);
     error PremiumBelowMin(uint256 premium, uint256 minPremium);
+    error BelowMinOut(uint256 tokens, uint256 cash);
     error NothingToClaim();
 
     event Bought(address indexed taker, uint256 indexed takerId, uint32 indexed seriesId, uint256 qty, uint256 premium);
@@ -211,6 +212,12 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         return (assets, 0);
     }
 
+    /// @dev The exit value (asset units, at NAV) whose asset part is at least `tokens` (inverse of
+    /// _split, rounded up). By default `tokens` itself.
+    function _grossUp(uint256 tokens) internal view virtual returns (uint256) {
+        return tokens;
+    }
+
     // ================================================================ views
 
     function config() external view returns (VaultConfig memory) {
@@ -317,20 +324,44 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         return _canEnter() ? type(uint256).max : 0;
     }
 
-    /// @notice The owner's shares at NAV, all of them if the asset part of that exit fits in the
-    /// free assets, else the free assets. Zero while halted, while the account owes a deficit (the
-    /// clearinghouse blocks withdrawals then) and during the owner's exit cooldown.
+    /// @notice The asset the owner's shares redeem for, capped by the free assets. Zero while
+    /// halted, while the account owes a deficit (the clearinghouse blocks withdrawals then) and
+    /// during the owner's exit cooldown.
     function maxWithdraw(address owner) public view override returns (uint256) {
         if (!_canExit(owner)) return 0;
-        return _exitCap(previewRedeem(balanceOf(owner)));
+        uint256 own = previewRedeem(balanceOf(owner));
+        uint256 free = freeAssets();
+        return own < free ? own : free;
     }
 
     function maxRedeem(address owner) public view override returns (uint256) {
         if (!_canExit(owner)) return 0;
         uint256 own = balanceOf(owner);
-        uint256 assets = previewRedeem(own);
-        uint256 cap = _exitCap(assets);
-        return cap == assets ? own : _convertToShares(cap, Math.Rounding.Floor);
+        uint256 free = freeAssets();
+        if (previewRedeem(own) <= free) return own;
+        uint256 cap = _convertToShares(_grossUp(free), Math.Rounding.Floor);
+        return cap < own ? cap : own;
+    }
+
+    // ================================================================ ERC-4626 previews
+
+    /// @notice The asset `shares` redeem for now: their value at NAV less the USDG part of an
+    /// in-kind exit (see previewRedeemInKind). redeem returns, and the Withdraw event logs, exactly
+    /// the asset that moves; any USDG part comes on top (CashLegPaid).
+    function previewRedeem(uint256 shares) public view override returns (uint256 tokens) {
+        (tokens,) = _split(_convertToAssets(shares, Math.Rounding.Floor));
+    }
+
+    /// @notice The shares withdraw(assets) burns: enough that the asset part of their value is
+    /// `assets`. The receiver gets exactly `assets` plus any USDG part on top.
+    function previewWithdraw(uint256 assets) public view override returns (uint256) {
+        return _convertToShares(_grossUp(assets), Math.Rounding.Ceil);
+    }
+
+    /// @notice Both parts of redeeming `shares` now: `tokens` of the asset and `cash` raw USDG
+    /// units (cash is 0 for a vault whose asset is USDG).
+    function previewRedeemInKind(uint256 shares) external view returns (uint256 tokens, uint256 cash) {
+        return _split(_convertToAssets(shares, Math.Rounding.Floor));
     }
 
     // ================================================================ ERC-4626 entry points
@@ -354,11 +385,30 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         return super.withdraw(assets, receiver, owner);
     }
 
+    /// @notice ERC-4626 redeem. Returns the asset sent (previewRedeem); an in-kind exit also sends
+    /// USDG, which redeemInKind returns and bounds explicitly.
     function redeem(uint256 shares, address receiver, address owner) public override nonReentrant returns (uint256) {
         _syncVol();
         _requireLive();
         _requireCooledDown(owner);
         return super.redeem(shares, receiver, owner);
+    }
+
+    /// @notice Redeems `shares` and returns both parts of the exit, `tokens` of the asset and
+    /// `cash` raw USDG units, reverting unless each meets its minimum (slippage on both legs).
+    function redeemInKind(uint256 shares, address receiver, address owner, uint256 minTokens, uint256 minCash)
+        external
+        nonReentrant
+        returns (uint256 tokens, uint256 cash)
+    {
+        _syncVol();
+        _requireLive();
+        _requireCooledDown(owner);
+        uint256 maxShares = maxRedeem(owner);
+        if (shares > maxShares) revert ERC4626ExceededMaxRedeem(owner, shares, maxShares);
+        (tokens, cash) = _split(_convertToAssets(shares, Math.Rounding.Floor));
+        if (tokens < minTokens || cash < minCash) revert BelowMinOut(tokens, cash);
+        _withdraw(_msgSender(), receiver, owner, tokens, shares);
     }
 
     // ================================================================ trading
@@ -526,16 +576,17 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         if (assets != 0) ch.deposit(vaultId, asset(), assets);
     }
 
-    /// @dev An exit worth `assets` is paid as the strategy splits it (_split); only free assets
-    /// leave instantly, the rest waits for a roll. The Withdraw event reports the asset part.
+    /// @dev `assets` is the asset part (previewRedeem of `shares`, or what withdraw asked for, at
+    /// most that); the USDG part of the burned shares' value goes along (_split). Only free assets
+    /// leave instantly, the rest waits for a roll.
     function _withdraw(address caller, address receiver, address owner, uint256 assets, uint256 shares)
         internal
         override
     {
-        (uint256 tokens, uint256 cash) = _split(assets);
+        (, uint256 cash) = _split(_convertToAssets(shares, Math.Rounding.Floor));
         uint256 free = freeAssets();
-        if (tokens > free) revert ExceedsFreeAssets(tokens, free);
-        super._withdraw(caller, receiver, owner, tokens, shares);
+        if (assets > free) revert ExceedsFreeAssets(assets, free);
+        super._withdraw(caller, receiver, owner, assets, shares);
         if (cash != 0) {
             emit CashLegPaid(receiver, cash);
             ch.withdraw(vaultId, _usdg, cash, receiver);
@@ -693,14 +744,6 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         b.backingWad = _backingWad();
         uint256 escrowed = escrowedShares;
         if (escrowed != 0) b.queued = _convertToAssets(escrowed, Math.Rounding.Ceil);
-    }
-
-    /// @dev The largest exit up to `assets` that can leave now: all of it if its asset part fits in
-    /// the free assets, else the free assets (a conservative bound, its asset part is smaller).
-    function _exitCap(uint256 assets) private view returns (uint256) {
-        uint256 free = freeAssets();
-        (uint256 tokens,) = _split(assets);
-        return tokens <= free ? assets : free;
     }
 
     function _free(uint256 lockedWad, uint256 backingWad) private view returns (uint256) {

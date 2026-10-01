@@ -123,8 +123,8 @@ contract CoveredCallVaultTest is VaultFixture {
         uint256 bShares = _vaultDeposit(vault, bob, 10e18);
         assertEq(bShares, expected);
         assertLt(bShares, aShares);
-        assertLe(vault.previewRedeem(bShares), 10e18);
-        assertGt(vault.previewRedeem(aShares), 10e18);
+        assertLe(vault.convertToAssets(bShares), 10e18);
+        assertGt(vault.convertToAssets(aShares), 10e18); // in value; previewRedeem is the token part
 
         // a new price reprices NAV at once (no stale NAV to trade against)
         _setPrice(address(nvda), 170e18);
@@ -139,7 +139,7 @@ contract CoveredCallVaultTest is VaultFixture {
         _buy(vault, call190, 5e18);
 
         uint256 shares = _vaultDeposit(vault, bob, amount);
-        assertLe(vault.previewRedeem(shares), amount); // straight back out at the same NAV: no gain
+        assertLe(vault.convertToAssets(shares), amount); // straight back out at the same NAV: no gain
         assertEq(vault.maxRedeem(bob), 0); // and not at once: the exit cooldown runs first
         vm.prank(bob);
         vm.expectRevert(abi.encodeWithSelector(OptionVaultBase.ExitCooldown.selector, bob, _now() + 1 hours));
@@ -147,14 +147,16 @@ contract CoveredCallVaultTest is VaultFixture {
 
         _cooldown();
         uint256 preview = vault.previewRedeem(shares);
-        (uint256 t, uint256 c) = _split(preview);
+        uint256 value = vault.convertToAssets(shares);
+        (uint256 t, uint256 c) = vault.previewRedeemInKind(shares);
         vm.prank(bob);
         uint256 out = vault.redeem(shares, bob, bob);
         assertEq(out, preview);
-        // paid in kind: stock plus bob's share of the premium cash, never more than `out` at spot
+        assertEq(out, t);
+        // paid in kind: stock plus bob's share of the premium cash, never more than the value
         assertEq(nvda.balanceOf(bob), t);
         assertEq(usdg.balanceOf(bob), c);
-        assertLe(t * 180 + c * 1e12, out * 180);
+        assertLe(t * 180 + c * 1e12, value * 180);
         assertEq(vault.balanceOf(bob), 0);
     }
 
@@ -456,7 +458,7 @@ contract CoveredCallVaultTest is VaultFixture {
         _cooldown();
         assertEq(vault.freeAssets(), 4e18);
         // alice owns every share and her NAV exceeds 10 tokens, but only the free 4 can leave now
-        assertGt(vault.previewRedeem(vault.balanceOf(alice)), 10e18);
+        assertGt(vault.convertToAssets(vault.balanceOf(alice)), 10e18);
         assertEq(vault.maxWithdraw(alice), 4e18);
         uint256 maxR = vault.maxRedeem(alice);
         assertLt(maxR, vault.balanceOf(alice));
@@ -467,17 +469,59 @@ contract CoveredCallVaultTest is VaultFixture {
         vault.withdraw(4e18 + 1, alice, alice);
         vm.expectRevert(abi.encodeWithSelector(ERC4626.ERC4626ExceededMaxRedeem.selector, alice, maxR + 1, maxR));
         vault.redeem(maxR + 1, alice, alice);
-        (uint256 t, uint256 c) = _split(4e18);
+        uint256 burn = vault.previewWithdraw(4e18);
+        (uint256 t, uint256 c) = vault.previewRedeemInKind(burn);
+        assertGe(t, 4e18);
         vault.withdraw(4e18, alice, alice);
         vm.stopPrank();
 
-        // 4 tokens' worth, in kind: her share of the cash in USDG and the rest in tokens
-        assertEq(nvda.balanceOf(alice), t);
+        // exactly 4 tokens, as ERC-4626 withdraw promises, and the USDG part of the shares burned
+        assertEq(nvda.balanceOf(alice), 4e18);
         assertEq(usdg.balanceOf(alice), c);
         assertGt(c, 0);
-        assertEq(ch.collateralOf(vid, address(nvda)), 10e18 - t);
-        assertEq(vault.freeAssets(), 4e18 - t);
-        assertEq(vault.maxWithdraw(alice), vault.freeAssets());
+        assertEq(ch.collateralOf(vid, address(nvda)), 6e18);
+        assertEq(vault.freeAssets(), 0);
+        assertEq(vault.maxWithdraw(alice), 0);
+        assertEq(vault.maxRedeem(alice), 0);
+    }
+
+    /// Redeeming returns the tokens that actually move, never the exit's value: a router that
+    /// forwards the return value can't overpay from someone else's tokens. redeemInKind returns and
+    /// bounds both parts.
+    function test_inKindExitReturnValues() public {
+        uint256 aShares = _vaultDeposit(vault, alice, 10e18);
+        _buy(vault, call190w2, 2e18);
+        _cooldown();
+        assertGt(ch.cashOf(vid), 0);
+        uint256 half = aShares / 2;
+
+        // redeem returns the tokens sent; the value is higher by the USDG part
+        (uint256 t, uint256 c) = vault.previewRedeemInKind(half);
+        assertEq(vault.previewRedeem(half), t);
+        assertGt(c, 0);
+        uint256 value = vault.convertToAssets(half);
+        assertLe(t * 180 + c * 1e12, value * 180);
+        assertGt(value, t);
+        vm.expectEmit(true, true, true, true, address(vault));
+        emit OptionVaultBase.CashLegPaid(alice, c);
+        vm.prank(alice);
+        assertEq(vault.redeem(half, alice, alice), t);
+        assertEq(nvda.balanceOf(alice), t);
+        assertEq(usdg.balanceOf(alice), c);
+
+        // both parts, with a minimum on each
+        (t, c) = vault.previewRedeemInKind(half / 2);
+        vm.startPrank(alice);
+        vm.expectRevert(abi.encodeWithSelector(OptionVaultBase.BelowMinOut.selector, t, c));
+        vault.redeemInKind(half / 2, bob, alice, t + 1, 0);
+        vm.expectRevert(abi.encodeWithSelector(OptionVaultBase.BelowMinOut.selector, t, c));
+        vault.redeemInKind(half / 2, bob, alice, 0, c + 1);
+        (uint256 t2, uint256 c2) = vault.redeemInKind(half / 2, bob, alice, t, c);
+        vm.stopPrank();
+        assertEq(t2, t);
+        assertEq(c2, c);
+        assertEq(nvda.balanceOf(bob), t);
+        assertEq(usdg.balanceOf(bob), c);
     }
 
     function test_sellBackReducesShort() public {
@@ -997,9 +1041,11 @@ contract CoveredCallVaultTest is VaultFixture {
         uint256 cashPerShare = ch.cashOf(vid) * 1e18 / supply;
 
         // alice leaves first: half the stock, half the cash
+        uint256 aValue = vault.convertToAssets(aShares);
         vm.prank(alice);
         uint256 aOut = vault.redeem(aShares, alice, alice);
-        assertLe(nvda.balanceOf(alice) * 180 + usdg.balanceOf(alice) * 1e12, aOut * 180);
+        assertEq(aOut, nvda.balanceOf(alice));
+        assertLe(nvda.balanceOf(alice) * 180 + usdg.balanceOf(alice) * 1e12, aValue * 180);
         assertApproxEqAbs(nvda.balanceOf(alice), 10e18, 2);
         assertApproxEqAbs(usdg.balanceOf(alice), premium / 2 / 1e12, 1);
         // cash per share stays put (a hair up: her legs are rounded down)
