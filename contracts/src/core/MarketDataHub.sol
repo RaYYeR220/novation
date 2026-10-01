@@ -95,20 +95,14 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
 
         uint256 updatedAt;
         {
-            int256 answer;
-            try IAggregatorV3(p.feed).latestRoundData() returns (uint80, int256 a, uint256, uint256 ut, uint80) {
-                answer = a;
-                updatedAt = ut;
-            } catch {
-                return e;
-            }
-            uint8 dec;
-            try IAggregatorV3(p.feed).decimals() returns (uint8 d) {
-                dec = d;
-            } catch {
-                return e;
-            }
-            if (answer <= 0 || dec > 18) return e;
+            // raw reads: a feed that reverts, has no code or returns data that wouldn't decode
+            // (short, or a word out of its type's range) reads as no price, never as a revert
+            (bool ok, int256 answer,, uint256 ut) = _readRound(p.feed);
+            if (!ok) return e;
+            updatedAt = ut;
+            uint256 dec;
+            (ok, dec) = _readUint(p.feed, IAggregatorV3.decimals.selector);
+            if (!ok || answer <= 0 || dec > 18 || uint256(answer) > type(uint128).max) return e;
             e.hasPrice = true;
             e.wadPrice = uint256(answer) * (10 ** (18 - dec));
             e.inBand = e.wadPrice >= p.minPrice && e.wadPrice <= p.maxPrice;
@@ -150,12 +144,9 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
     function _sequencerBad() private view returns (bool) {
         address seq = params.sequencerUptimeFeed();
         if (seq == address(0)) return false;
-        try IAggregatorV3(seq).latestRoundData() returns (uint80, int256 a, uint256 startedAt, uint256, uint80) {
-            if (a != 0 || startedAt == 0) return true;
-            return block.timestamp < startedAt + SEQ_GRACE;
-        } catch {
-            return true;
-        }
+        (bool ok, int256 a, uint256 startedAt,) = _readRound(seq);
+        if (!ok || a != 0 || startedAt == 0 || startedAt > block.timestamp) return true;
+        return block.timestamp - startedAt < SEQ_GRACE;
     }
 
     /// @dev staticcall that reads one 32-byte word; ok is false on revert or short return data.
@@ -167,6 +158,27 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
             ok := staticcall(gas(), target, add(cd, 0x20), mload(cd), ptr, 0x20)
             if lt(returndatasize(), 0x20) { ok := 0 }
             v := mload(ptr)
+        }
+    }
+
+    /// @dev latestRoundData() as raw words; ok is false on revert or when the call returns fewer
+    /// than its five words. The round id words aren't used, so they aren't checked.
+    function _readRound(address feed)
+        private
+        view
+        returns (bool ok, int256 answer, uint256 startedAt, uint256 updatedAt)
+    {
+        bytes4 sel = IAggregatorV3.latestRoundData.selector;
+        assembly ("memory-safe") {
+            let ptr := mload(0x40)
+            mstore(ptr, sel)
+            ok := staticcall(gas(), feed, ptr, 4, ptr, 0xa0)
+            if lt(returndatasize(), 0xa0) { ok := 0 }
+            if ok {
+                answer := mload(add(ptr, 0x20))
+                startedAt := mload(add(ptr, 0x40))
+                updatedAt := mload(add(ptr, 0x60))
+            }
         }
     }
 
