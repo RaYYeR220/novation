@@ -35,6 +35,14 @@ import {
 ///    needs a price, but a feed can break while positions are open.
 /// Any other failure of the price call (including empty revert data, e.g. out of gas) always
 /// reverts, so a caller can't starve the call to make collateral disappear.
+///
+/// Settled value. Expired positions whose (underlying, expiry) the registry has settled are worth
+/// their payoff, rounded against the account. Once settleAccount turns a net payoff into a claim
+/// on the expiry pool, the unpaid claim (claimableTotal, at face) takes its place, so settling an
+/// account (anyone may) never moves its equity; claim then moves the value into cash. A claim on
+/// an impaired pool is still carried at face: impairment needs every unit of cash in the system
+/// to be wiped out first, the pro-rata payout is only known per expiry, and the claim (also
+/// permissionless) realizes the haircut.
 library MarginLogic {
     using SafeCast for uint256;
 
@@ -94,11 +102,13 @@ library MarginLogic {
         Book memory book = _book(id, seriesId, qtyDelta);
         st.cash = cash;
         st.deficit = CHS.s().accounts[id].deficitTotal;
+        int256 claims = CHS.s().claimableTotal[id].toInt256();
 
-        // Fast path: nothing but cash and collateral, nothing owed.
+        // Fast path: nothing but cash, collateral and claims, nothing owed.
         if (book.seriesIds.length == 0 && st.deficit == 0) {
             st.mtm = _collateralValue(d, id);
-            st.equity = cash.toInt256() + st.mtm;
+            st.settledValue = claims;
+            st.equity = cash.toInt256() + st.mtm + claims;
             st.healthy = true;
             return st;
         }
@@ -106,8 +116,8 @@ library MarginLogic {
         Input memory inp = _input(d, id, book);
         (KMarginOut memory out,) = d.kernel.margin(inp.p, inp.us, inp.ps);
         st.mtm = out.mtm;
-        st.settledValue = inp.settledValue;
-        st.equity = cash.toInt256() + out.mtm + inp.settledValue - st.deficit.toInt256();
+        st.settledValue = inp.settledValue + claims;
+        st.equity = cash.toInt256() + out.mtm + st.settledValue - st.deficit.toInt256();
         st.im = out.lossIM;
         st.mm = F.mulWadUp(out.lossIM, inp.mmRatio);
         st.worstScenario = out.worstScenario;

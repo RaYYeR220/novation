@@ -1,0 +1,1042 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.30;
+
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Fixture} from "../utils/Fixture.sol";
+import {AuctionHouse} from "../../src/core/AuctionHouse.sol";
+import {CHS, CHStorage, CHErrors} from "../../src/core/ClearinghouseStorage.sol";
+import {MarketDataHub} from "../../src/core/MarketDataHub.sol";
+import {IClearinghouse, TradeParams, AccountState} from "../../src/interfaces/IClearinghouse.sol";
+import {IAuctionHouse} from "../../src/interfaces/IAuctionHouse.sol";
+import {IInsuranceFund} from "../../src/interfaces/IInsuranceFund.sol";
+import {IRiskParams} from "../../src/interfaces/IRiskParams.sol";
+import {IMarketDataHub} from "../../src/interfaces/IMarketDataHub.sol";
+import {FixedPointMath as F} from "../../src/libraries/FixedPointMath.sol";
+import {NyseCalendar} from "../../src/libraries/NyseCalendar.sol";
+import {Position, Session} from "../../src/types/Types.sol";
+
+/// @notice Test-only. Etched over the clearinghouse for one call to seed settlement state:
+/// an expiry deficit the way settleAccount leaves it (the pending part owed to pool[expiry], the
+/// bridged part, already paid into the pool by the InsuranceFund, owed to the fund), or an
+/// account's total of unpaid claims.
+contract SettlementSeeder {
+    function seed(uint256 id, uint64 expiry, uint256 pendingWad, uint256 bridgedWad) external {
+        CHStorage storage $ = CHS.s();
+        $.defPending[id][expiry] += pendingWad;
+        $.defBridged[id][expiry] += bridgedWad;
+        $.pending[expiry] += pendingWad;
+        $.pool[expiry] += bridgedWad;
+        $.accounts[id].deficitTotal += pendingWad + bridgedWad;
+    }
+
+    function setClaimableTotal(uint256 id, uint256 wad) external {
+        CHS.s().claimableTotal[id] = wad;
+    }
+}
+
+/// @notice Test-only stand-in for the clearinghouse's applyDeficitProceeds, run in the
+/// clearinghouse's context through vm.mockFunction. Same rules: the account's cash goes to the
+/// pool's pending part first, then to the InsuranceFund's bridge in whole USDG units.
+/// The deficit-sale tests use it until applyDeficitProceeds is wired into this clearinghouse;
+/// they then drop the stub and seed the deficit through settleAccount instead.
+contract DeficitProceedsStub {
+    using SafeERC20 for IERC20;
+
+    address private immutable _auctionHouse;
+    IERC20 private immutable _usdg;
+    IInsuranceFund private immutable _fund;
+    uint256 private immutable _scale;
+
+    constructor(address auctionHouse_, IERC20 usdg_, IInsuranceFund fund_, uint256 scale_) {
+        _auctionHouse = auctionHouse_;
+        _usdg = usdg_;
+        _fund = fund_;
+        _scale = scale_;
+    }
+
+    function applyDeficitProceeds(uint256 id, uint64 expiry) external {
+        if (msg.sender != _auctionHouse) revert CHErrors.NotAuctionHouse(msg.sender);
+        CHStorage storage $ = CHS.s();
+        uint256 cash = CHS.cashOf(id);
+        uint256 owedPool = $.defPending[id][expiry];
+        uint256 toPending = cash < owedPool ? cash : owedPool;
+        if (toPending != 0) {
+            CHS.debit(id, toPending);
+            $.pool[expiry] += toPending;
+            $.pending[expiry] -= toPending;
+            $.defPending[id][expiry] = owedPool - toPending;
+            cash = CHS.cashOf(id);
+        }
+        uint256 owedIns = $.defBridged[id][expiry];
+        uint256 toIns = cash < owedIns ? cash : owedIns;
+        toIns -= toIns % _scale;
+        if (toIns != 0) {
+            CHS.debit(id, toIns);
+            $.defBridged[id][expiry] = owedIns - toIns;
+        }
+        if (toPending + toIns == 0) return;
+        $.accounts[id].deficitTotal -= toPending + toIns;
+        emit IClearinghouse.DeficitReduced(id, expiry, toPending, toIns);
+        if (toIns != 0) {
+            _usdg.safeTransfer(address(_fund), toIns / _scale);
+            _fund.notifyRecovered(toIns);
+        }
+    }
+}
+
+contract AuctionHouseTest is Fixture {
+    uint256 constant FRI_1940_EDT = 1_790_379_600; // 2026-09-25 19:40 EDT: after the close, EXTENDED
+    uint256 constant SAT_NOON = 1_790_424_000; // 2026-09-26 12:00 UTC: WEEKEND
+    uint256 constant MON_0430_EDT = 1_790_584_200; // 2026-09-28 04:30 EDT: pre-market, EXTENDED
+
+    AuctionHouse ah;
+    SettlementSeeder seeder;
+    address alice;
+    address bob;
+    address carol;
+    address dave;
+    uint64 e1; // this week's expiry (deficit sales)
+    uint64 e2; // next week's expiry (option positions)
+    uint32 put170;
+    uint32 put160;
+    uint32 put150;
+
+    function setUp() public override {
+        super.setUp();
+        ah = new AuctionHouse(ch, params, hub);
+        ch.bindAuctionHouse(address(ah));
+        seeder = new SettlementSeeder();
+        alice = _user("alice");
+        bob = _user("bob");
+        carol = _user("carol");
+        dave = _user("dave");
+        e1 = _expiry();
+        e2 = uint64(NyseCalendar.nextWeeklyExpiry(e1 + 1));
+        put170 = _list(address(nvda), e2, 170e18, false);
+        put160 = _list(address(nvda), e2, 160e18, false);
+        put150 = _list(address(nvda), e2, 150e18, false);
+    }
+
+    // ================================================================ liquidation
+
+    function test_liquidationAfterPriceDrop() public {
+        (uint256 a, uint256 b) = _shortPuts(520 * USDG);
+        assertFalse(ch.accountState(a).liquidatable);
+        _setPrice(address(nvda), 150e18);
+        assertTrue(ch.accountState(a).liquidatable);
+        assertGt(ch.accountState(a).equity, 0);
+        uint256 c = _fund(carol, 10_000 * USDG, 0);
+
+        vm.expectEmit(true, true, true, true, address(ah));
+        emit IAuctionHouse.LiquidationStarted(a, uint64(vm.getBlockTimestamp()));
+        ah.startLiquidation(a);
+        vm.warp(vm.getBlockTimestamp() + 900); // halfway through: 2% + 10% / 2
+        (uint256 d, bool active) = ah.liquidationDiscount(a);
+        assertEq(d, 0.07e18);
+        assertTrue(active);
+
+        AccountState memory st = ch.accountState(a);
+        AccountState memory cb = ch.accountState(c);
+        uint256 f = 0.5e18;
+        uint256 pay = F.mulWadUp(F.mulWadUp(f, uint256(st.equity)), 1e18 - d);
+        uint256 penalty = _mw(0.01e18, _mw(f, uint256(st.equity)));
+        uint256 aliceCash = ch.cashOf(a);
+        uint256 carolCash = ch.cashOf(c);
+        uint256 shortQty = _shortQty(e2);
+        uint256 oi = ch.openInterest(put170);
+
+        vm.expectEmit(true, true, true, true, address(ah));
+        emit IAuctionHouse.LiquidationBid(a, c, f, int256(pay), d);
+        vm.expectEmit(true, true, true, true, address(ah));
+        emit IAuctionHouse.LiquidationEnded(a);
+        vm.prank(carol);
+        assertEq(ah.bidLiquidation(a, f, c, int256(pay)), int256(pay));
+
+        // half the short puts and half the cash moved; the bidder paid into the account
+        _assertPos(a, put170, -5e18);
+        _assertPos(c, put170, -5e18);
+        _assertPos(b, put170, 10e18);
+        assertEq(ch.cashOf(a), aliceCash - aliceCash / 2 + pay - penalty);
+        assertEq(ch.cashOf(c), carolCash + aliceCash / 2 - pay);
+        // a transfer between two shorts changes neither open interest nor the expiry's short qty
+        assertEq(_shortQty(e2), shortQty);
+        assertEq(ch.openInterest(put170), oi);
+
+        // the bidder gained about the discount on the equity it took over
+        int256 gain = ch.accountState(c).equity - cb.equity;
+        assertApproxEqAbs(gain, int256(_mw(_mw(f, uint256(st.equity)), d)), 1e6);
+        assertTrue(ch.accountState(c).healthy);
+
+        // the account's maintenance gap closed: it's healthy again and the auction ended
+        AccountState memory sa = ch.accountState(a);
+        assertLt(int256(sa.mm) - sa.equity, int256(st.mm) - st.equity);
+        assertTrue(sa.healthy);
+        (, active) = ah.liquidationDiscount(a);
+        assertFalse(active);
+        assertEq(ah.liquidationStartedAt(a), 0);
+        _assertBacked(_ids(a, b, c));
+    }
+
+    function test_cannotLiquidateHealthy() public {
+        (uint256 a,) = _shortPuts(520 * USDG);
+        uint256 c = _fund(carol, 10_000 * USDG, 0);
+        vm.expectRevert(AuctionHouse.NotLiquidatable.selector);
+        ah.startLiquidation(a);
+
+        // cash and collateral only, an unknown account: nothing to liquidate
+        uint256 nvdaOnly = _fund(dave, 0, 5e18);
+        vm.expectRevert(AuctionHouse.NotLiquidatable.selector);
+        ah.startLiquidation(nvdaOnly);
+        vm.expectRevert(AuctionHouse.NotLiquidatable.selector);
+        ah.startLiquidation(999);
+
+        // no auction, no bid
+        vm.prank(carol);
+        vm.expectRevert(AuctionHouse.AuctionNotActive.selector);
+        ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
+
+        // an account that recovers during its auction can't be bid on
+        _setPrice(address(nvda), 150e18);
+        ah.startLiquidation(a);
+        _setPrice(address(nvda), 180e18);
+        assertFalse(ch.accountState(a).liquidatable);
+        vm.prank(carol);
+        vm.expectRevert(AuctionHouse.NotLiquidatable.selector);
+        ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
+    }
+
+    /// An account in deficit with no positions left is below maintenance through its stock
+    /// collateral; selling that is the deficit sale's job, not a liquidation's.
+    function test_noLiquidationWithoutPositions() public {
+        uint256 d = _deficitAccount(300e18, 1_500e18);
+        assertTrue(ch.accountState(d).liquidatable);
+        vm.expectRevert(AuctionHouse.NotLiquidatable.selector);
+        ah.startLiquidation(d);
+    }
+
+    function test_discountRampsLinearly() public {
+        uint256 a = _liquidatable();
+        uint256 c = _fund(carol, 10_000 * USDG, 0);
+        (uint256 d, bool active) = ah.liquidationDiscount(a);
+        assertEq(d, 0);
+        assertFalse(active);
+
+        uint256 t0 = vm.getBlockTimestamp();
+        ah.startLiquidation(a);
+        _assertDiscount(a, 0.02e18, true);
+        vm.warp(t0 + 1);
+        _assertDiscount(a, 0.02e18 + uint256(0.1e18) / 1800, true);
+        vm.warp(t0 + 450);
+        _assertDiscount(a, 0.045e18, true);
+        vm.warp(t0 + 900);
+        _assertDiscount(a, 0.07e18, true);
+        vm.expectRevert(AuctionHouse.AuctionActive.selector);
+        ah.startLiquidation(a);
+        vm.warp(t0 + 1800);
+        _assertDiscount(a, 0.12e18, true);
+        vm.expectRevert(AuctionHouse.AuctionActive.selector);
+        ah.startLiquidation(a);
+
+        // past the duration the auction is over: no bids until someone restarts it
+        vm.warp(t0 + 1801);
+        _assertDiscount(a, 0.12e18, false);
+        vm.prank(carol);
+        vm.expectRevert(AuctionHouse.AuctionNotActive.selector);
+        ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
+
+        // a restart begins the ramp again
+        vm.expectEmit(true, true, true, true, address(ah));
+        emit IAuctionHouse.LiquidationStarted(a, uint64(t0 + 1801));
+        ah.startLiquidation(a);
+        _assertDiscount(a, 0.02e18, true);
+        vm.warp(t0 + 1801 + 360);
+        _assertDiscount(a, 0.04e18, true);
+    }
+
+    function test_bidderMustStayHealthy() public {
+        uint256 a = _liquidatable();
+        uint256 poor = _fund(carol, 50 * USDG, 0);
+        ah.startLiquidation(a);
+        vm.prank(carol);
+        vm.expectRevert(AuctionHouse.BidderUnhealthy.selector);
+        ah.bidLiquidation(a, 0.5e18, poor, type(int256).max);
+
+        // with enough margin behind it the same takeover goes through
+        uint256 rich = _fund(dave, 2_000 * USDG, 0);
+        vm.prank(dave);
+        ah.bidLiquidation(a, 0.25e18, rich, type(int256).max);
+        assertTrue(ch.accountState(rich).healthy);
+    }
+
+    function test_insolventLiquidationPaidByInsurance() public {
+        (uint256 a, uint256 b) = _shortPuts(520 * USDG);
+        usdg.mint(address(insurance), 1_000 * USDG);
+        _setPrice(address(nvda), 90e18);
+        uint256 c = _fund(carol, 10_000 * USDG, 0);
+        ah.startLiquidation(a);
+
+        AccountState memory st = ch.accountState(a);
+        assertLt(st.equity, 0);
+        AccountState memory cb = ch.accountState(c);
+        uint256 bonus = _mw(1e18, uint256(-st.equity) + _mw(0.02e18, st.mm));
+        uint256 units = bonus / USDG_SCALE; // the fund pays whole USDG units
+        uint256 paid = units * USDG_SCALE;
+        uint256 fundBefore = usdg.balanceOf(address(insurance));
+        uint256 chBefore = usdg.balanceOf(address(ch));
+        uint256 aliceCash = ch.cashOf(a);
+        uint256 carolCash = ch.cashOf(c);
+
+        // insolvent, so a full takeover is allowed; the bidder can ask for a minimum bonus
+        vm.prank(carol);
+        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.PayAboveMax.selector, -int256(paid), -int256(paid) - 1));
+        ah.bidLiquidation(a, 1e18, c, -int256(paid) - 1);
+        vm.prank(carol);
+        assertEq(ah.bidLiquidation(a, 1e18, c, -int256(paid)), -int256(paid));
+
+        // the fund paid the bonus and wrote it off; the bidder got exactly what arrived
+        assertEq(usdg.balanceOf(address(insurance)), fundBefore - units);
+        assertEq(usdg.balanceOf(address(ch)), chBefore + units);
+        assertEq(insurance.outstandingWad(), 0);
+        assertEq(ch.cashOf(c), carolCash + aliceCash + paid);
+        assertEq(ch.cashOf(a), 0);
+        assertEq(ch.positionsOf(a).length, 0);
+        _assertPos(c, put170, -10e18);
+
+        // the bidder is paid the discount on maintenance margin for taking the book over
+        int256 gain = ch.accountState(c).equity - cb.equity;
+        assertApproxEqAbs(gain, int256(_mw(0.02e18, st.mm)), 1e12);
+        assertTrue(ch.accountState(c).healthy);
+        assertEq(ah.liquidationStartedAt(a), 0);
+        _assertBacked(_ids(a, b, c));
+    }
+
+    function test_insolventBidWithEmptyFund() public {
+        (uint256 a,) = _shortPuts(520 * USDG);
+        _setPrice(address(nvda), 90e18);
+        uint256 c = _fund(carol, 10_000 * USDG, 0);
+        ah.startLiquidation(a);
+        assertEq(usdg.balanceOf(address(insurance)), 270_000); // only the trade fee's share
+
+        // the fund can cover only 0.27: that's all the bidder gets, and a minimum stops the bid
+        vm.prank(carol);
+        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.PayAboveMax.selector, int256(-0.27e18), int256(-1e18)));
+        ah.bidLiquidation(a, 1e18, c, -1e18);
+        vm.prank(carol);
+        assertEq(ah.bidLiquidation(a, 1e18, c, 0), -0.27e18);
+        assertEq(usdg.balanceOf(address(insurance)), 0);
+    }
+
+    function test_noBidsOnWeekend() public {
+        (uint256 a,) = _shortPuts(520 * USDG);
+        uint256 c = _fund(carol, 10_000 * USDG, 0);
+
+        vm.warp(FRI_1940_EDT);
+        _setPrice(address(nvda), 150e18);
+        assertEq(uint8(hub.session(address(nvda))), uint8(Session.EXTENDED));
+        assertTrue(ch.accountState(a).liquidatable);
+        ah.startLiquidation(a);
+
+        // 20:05 EDT Friday: the weekend has begun, the auction is paused
+        vm.warp(FRI_1940_EDT + 1500);
+        assertEq(uint8(hub.session(address(nvda))), uint8(Session.WEEKEND));
+        vm.prank(carol);
+        vm.expectRevert(AuctionHouse.MarketClosed.selector);
+        ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
+
+        vm.warp(SAT_NOON);
+        assertTrue(ch.accountState(a).liquidatable);
+        vm.expectRevert(AuctionHouse.MarketClosed.selector);
+        ah.startLiquidation(a);
+
+        // Monday pre-market it can run again
+        vm.warp(MON_0430_EDT);
+        _setPrice(address(nvda), 150e18);
+        ah.startLiquidation(a);
+        vm.prank(carol);
+        ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
+    }
+
+    function test_liquidationNeedsLivePricesForEveryUnderlying() public {
+        (uint256 a,) = _shortPuts(520 * USDG);
+        _deposit(alice, a, address(spy), 0.01e18); // a little SPY, collateral only
+        uint256 c = _fund(carol, 10_000 * USDG, 0);
+        _setPrice(address(nvda), 150e18);
+        assertTrue(ch.accountState(a).liquidatable);
+        address[] memory us = ch.underlyingsOf(a);
+        assertEq(us.length, 2);
+        assertEq(us[0], address(nvda));
+        assertEq(us[1], address(spy));
+
+        // the option underlying is halted
+        nvda.setPaused(true);
+        vm.expectRevert(AuctionHouse.MarketClosed.selector);
+        ah.startLiquidation(a);
+        nvda.setPaused(false);
+
+        // the collateral-only token has no usable price: margin values it at 0, the auction waits
+        _setPrice(address(spy), 7_000e18);
+        vm.expectRevert(MarketDataHub.ImplausiblePrice.selector);
+        hub.spot(address(spy));
+        assertTrue(ch.accountState(a).liquidatable);
+        vm.expectRevert(AuctionHouse.MarketClosed.selector);
+        ah.startLiquidation(a);
+
+        _setPrice(address(spy), 600e18);
+        ah.startLiquidation(a);
+        // ... and bids stop again while it is halted (a fresh price is not enough)
+        spy.setOraclePaused(true);
+        vm.prank(carol);
+        vm.expectRevert(AuctionHouse.MarketClosed.selector);
+        ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
+        spy.setOraclePaused(false);
+        vm.prank(carol);
+        ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
+        // the bidder took half the SPY too
+        assertEq(ch.collateralOf(c, address(spy)), 0.005e18);
+    }
+
+    function test_penaltyGoesToInsurance() public {
+        uint256 a = _liquidatable();
+        uint256 c = _fund(carol, 10_000 * USDG, 0);
+        ah.startLiquidation(a);
+
+        AccountState memory st = ch.accountState(a);
+        uint256 f = 0.4e18;
+        uint256 taken = _mw(f, uint256(st.equity));
+        uint256 pay = F.mulWadUp(F.mulWadUp(f, uint256(st.equity)), 0.98e18);
+        uint256 penalty = _mw(0.01e18, taken);
+        assertGt(penalty % USDG_SCALE, 0); // a sub-unit part stays in the clearinghouse
+        uint256 fundBefore = usdg.balanceOf(address(insurance));
+        uint256 chBefore = usdg.balanceOf(address(ch));
+        uint256 aliceCash = ch.cashOf(a);
+        uint256 moved = aliceCash * f / 1e18;
+
+        vm.prank(carol);
+        ah.bidLiquidation(a, f, c, int256(pay));
+
+        assertEq(usdg.balanceOf(address(insurance)), fundBefore + penalty / USDG_SCALE);
+        assertEq(usdg.balanceOf(address(ch)), chBefore - penalty / USDG_SCALE);
+        assertEq(ch.cashOf(a), aliceCash - moved + pay - penalty);
+        _assertBacked(_ids(a, c, 0));
+    }
+
+    function test_bidChecks() public {
+        uint256 a = _liquidatable();
+        uint256 c = _fund(carol, 10_000 * USDG, 0);
+        ah.startLiquidation(a);
+        AccountState memory st = ch.accountState(a);
+        assertGt(st.equity, 5e18); // above dustEquity: one bid takes at most half
+
+        vm.prank(dave);
+        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.NotBidder.selector, c, dave));
+        ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
+        vm.prank(alice);
+        vm.expectRevert(AuctionHouse.SelfBid.selector);
+        ah.bidLiquidation(a, 0.5e18, a, type(int256).max);
+        vm.startPrank(carol);
+        vm.expectRevert(AuctionHouse.BadFraction.selector);
+        ah.bidLiquidation(a, 0, c, type(int256).max);
+        vm.expectRevert(AuctionHouse.BadFraction.selector);
+        ah.bidLiquidation(a, 1e18 + 1, c, type(int256).max);
+        vm.expectRevert(AuctionHouse.FractionTooLarge.selector);
+        ah.bidLiquidation(a, 0.5e18 + 1, c, type(int256).max);
+        uint256 pay = F.mulWadUp(F.mulWadUp(0.5e18, uint256(st.equity)), 0.98e18);
+        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.PayAboveMax.selector, int256(pay), int256(pay) - 1));
+        ah.bidLiquidation(a, 0.5e18, c, int256(pay) - 1);
+        vm.stopPrank();
+
+        // a bidder that owes a deficit can't take positions over
+        _cheatDeficitTotal(c, 1);
+        vm.prank(carol);
+        vm.expectRevert(AuctionHouse.BidderInDeficit.selector);
+        ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
+        _cheatDeficitTotal(c, 0);
+
+        vm.prank(carol);
+        assertEq(ah.bidLiquidation(a, 0.5e18, c, int256(pay)), int256(pay));
+    }
+
+    function test_partialBidsKeepAuctionUntilHealthy() public {
+        uint256 a = _liquidatable();
+        uint256 c = _fund(carol, 10_000 * USDG, 0);
+        ah.startLiquidation(a);
+        // a small bid leaves the account liquidatable: the auction goes on
+        vm.prank(carol);
+        ah.bidLiquidation(a, 0.1e18, c, type(int256).max);
+        assertTrue(ch.accountState(a).liquidatable);
+        (, bool active) = ah.liquidationDiscount(a);
+        assertTrue(active);
+        _assertPos(a, put170, -9e18);
+        _assertPos(c, put170, -1e18);
+        vm.prank(carol);
+        ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
+        _assertPos(a, put170, -4.5e18);
+        assertTrue(ch.accountState(a).healthy);
+        (, active) = ah.liquidationDiscount(a);
+        assertFalse(active);
+    }
+
+    function test_deficitAccountLiquidationPricedBeforeDeficit() public {
+        (uint256 a, uint256 b) = _shortPuts(520 * USDG);
+        usdg.mint(address(insurance), 1_000 * USDG);
+        _setPrice(address(nvda), 150e18);
+        uint256 c = _fund(carol, 10_000 * USDG, 0);
+        // the account also owes a deficit larger than its equity: insolvent overall, but its book
+        // (cash plus options) is still worth something, and the bidder pays for that
+        _cheatDeficitTotal(a, 400e18);
+        AccountState memory st = ch.accountState(a);
+        assertLt(st.equity, 0);
+        int256 bookValue = st.equity + 400e18;
+        assertGt(bookValue, 0);
+        ah.startLiquidation(a);
+
+        uint256 pay = F.mulWadUp(uint256(bookValue), 0.98e18);
+        uint256 penalty = _mw(0.01e18, uint256(bookValue));
+        uint256 fundBefore = usdg.balanceOf(address(insurance));
+        vm.prank(carol);
+        assertEq(ah.bidLiquidation(a, 1e18, c, int256(pay)), int256(pay));
+        // the payment stays in the account for its deficit; the fund paid nothing out
+        assertEq(ch.cashOf(a), pay - penalty);
+        assertEq(usdg.balanceOf(address(insurance)), fundBefore + penalty / USDG_SCALE);
+        assertEq(ch.positionsOf(a).length, 0);
+        _assertBacked(_ids(a, b, c));
+    }
+
+    /// Lots are rounded to the minimum size, so a tiny fraction can hand the bidder far more of a
+    /// small position than its share. That difference is settled at mark: whatever the fraction,
+    /// the bidder gains only the discount on its share, solvent or not.
+    function test_lotRoundingSettledAtMark() public {
+        (uint256 a, uint256 b) = _shortPuts(520 * USDG);
+        _trade(a, alice, b, bob, put160, 0.015e18, 0.3e18);
+        _trade(a, alice, b, bob, put150, 0.025e18, 0.2e18);
+        usdg.mint(address(insurance), 1_000 * USDG);
+        _setPrice(address(nvda), 150e18);
+        uint256 c = _fund(carol, 10_000 * USDG, 0);
+        ah.startLiquidation(a);
+
+        // 0.1%: 0.01 of the put170 short, but all 0.015 put160 and 0.01 (not 0.000025) put150
+        AccountState memory st = ch.accountState(a);
+        assertGt(st.equity, 0);
+        int256 carolBefore = ch.accountState(c).equity;
+        uint256 f = 0.001e18;
+        uint256 share = _mw(f, uint256(st.equity));
+        uint256 gain = share - F.mulWadUp(F.mulWadUp(f, uint256(st.equity)), 0.98e18);
+        uint256 penalty = _mw(0.01e18, share);
+        vm.prank(carol);
+        int256 paid = ah.bidLiquidation(a, f, c, type(int256).max);
+        _assertPos(c, put170, -0.01e18);
+        _assertPos(c, put160, 0.015e18);
+        _assertPos(c, put150, 0.01e18);
+        assertGt(paid, int256(share)); // it paid for the extra long puts at mark
+        assertApproxEqAbs(ch.accountState(c).equity - carolBefore, int256(gain), 10);
+        // the account lost only the discount on the share and the penalty
+        assertApproxEqAbs(st.equity - ch.accountState(a).equity, int256(gain + penalty), 10);
+
+        // now insolvent: the fund pays for the liabilities actually taken, plus the discount
+        _setPrice(address(nvda), 90e18);
+        st = ch.accountState(a);
+        assertLt(st.equity, 0);
+        carolBefore = ch.accountState(c).equity;
+        f = 0.1e18;
+        // the 0.015 put150 left would split into 0.0015 + 0.0135: it moves whole
+        vm.prank(carol);
+        paid = ah.bidLiquidation(a, f, c, 0);
+        assertLt(paid, 0);
+        _assertPos(a, put150, 0);
+        _assertPos(c, put150, 0.025e18);
+        assertApproxEqAbs(ch.accountState(c).equity - carolBefore, int256(_mw(f, _mw(0.02e18, st.mm))), 1e12);
+        _assertBacked(_ids(a, b, c));
+    }
+
+    /// Unpaid settlement claims count in equity but stay with the account (a claim belongs to its
+    /// expiry pool entry, transferFraction doesn't move it): the bidder pays only for the rest.
+    function test_claimsStayWithAccount() public {
+        uint256 a = _liquidatable();
+        uint256 c = _fund(carol, 10_000 * USDG, 0);
+        _cheatClaimableTotal(a, 20e18);
+        AccountState memory st = ch.accountState(a);
+        assertTrue(st.liquidatable);
+        ah.startLiquidation(a);
+
+        int256 transferable = st.equity + int256(st.deficit) - 20e18;
+        assertGt(transferable, 0);
+        uint256 pay = F.mulWadUp(F.mulWadUp(0.5e18, uint256(transferable)), 0.98e18);
+        vm.prank(carol);
+        assertEq(ah.bidLiquidation(a, 0.5e18, c, int256(pay)), int256(pay));
+        assertEq(ch.claimableTotalOf(a), 20e18);
+        assertEq(ch.claimableTotalOf(c), 0);
+    }
+
+    /// A book worth less than nothing next to a claim: the fund only covers what the claim doesn't.
+    function test_claimsReduceInsuranceBonus() public {
+        (uint256 a,) = _shortPuts(520 * USDG);
+        usdg.mint(address(insurance), 1_000 * USDG);
+        _setPrice(address(nvda), 90e18);
+        uint256 c = _fund(carol, 10_000 * USDG, 0);
+        _cheatClaimableTotal(a, 300e18);
+        AccountState memory st = ch.accountState(a);
+        assertTrue(st.liquidatable);
+        ah.startLiquidation(a);
+
+        int256 transferable = st.equity + int256(st.deficit) - 300e18;
+        assertLt(transferable, 0);
+        int256 net = transferable + 300e18; // book plus claim
+        uint256 shortfall = net < 0 ? uint256(-net) : 0;
+        uint256 bonus = _mw(0.5e18, shortfall + _mw(0.02e18, st.mm));
+        int256 paid = -int256(bonus / USDG_SCALE * USDG_SCALE);
+        vm.prank(carol);
+        assertEq(ah.bidLiquidation(a, 0.5e18, c, 0), paid);
+        assertEq(ch.claimableTotalOf(a), 300e18);
+        // never more than the uncovered shortfall plus the discount on maintenance margin
+        assertLe(uint256(-paid), _mw(0.5e18, uint256(-transferable) + _mw(0.02e18, st.mm)));
+    }
+
+    // ================================================================ hooks
+
+    function test_hooksOnlyAuctionHouse() public {
+        bytes memory err = abi.encodeWithSelector(CHErrors.NotAuctionHouse.selector, address(this));
+        vm.expectRevert(err);
+        ch.transferFraction(1, 2, 1);
+        vm.expectRevert(err);
+        ch.transferCash(1, 2, 0);
+        vm.expectRevert(err);
+        ch.transferCollateral(1, 2, address(nvda), 0);
+        vm.expectRevert(err);
+        ch.chargePenalty(1, 0);
+        vm.expectRevert(err);
+        ch.insurancePay(1, 0);
+
+        vm.startPrank(address(ah));
+        vm.expectRevert(CHErrors.SelfTrade.selector);
+        ch.transferFraction(1, 1, 0.5e18);
+        vm.expectRevert(CHErrors.InvalidFraction.selector);
+        ch.transferFraction(1, 2, 0);
+        vm.expectRevert(CHErrors.InvalidFraction.selector);
+        ch.transferFraction(1, 2, 1e18 + 1);
+        vm.stopPrank();
+    }
+
+    function test_transferFractionMovesShares() public {
+        uint256 a = _fund(alice, 2_000 * USDG, 3e18);
+        _deposit(alice, a, address(spy), 1e18 + 7);
+        uint256 b = _fund(bob, 10_000 * USDG, 0);
+        uint256 c = _newAccount(carol);
+        _trade(a, alice, b, bob, put170, -10e18, 50e18);
+        _trade(a, alice, b, bob, put160, 0.015e18, 0.3e18);
+        _trade(a, alice, b, bob, put150, -0.05e18, 0.5e18);
+        _cheatCashIndex(0.9e18); // cash moves as index-scaled norm
+        uint256 aliceCash = ch.cashOf(a);
+        uint256 shortQty = _shortQty(e2);
+
+        vm.prank(address(ah));
+        ch.transferFraction(a, c, 0.1e18);
+        // 10%: one put170. A 0.0015 or 0.005 lot would be dust, so it is rounded up to 0.01; for
+        // the 0.015 put160 that would leave 0.005 behind, so the whole position moves
+        _assertPos(a, put170, -9e18);
+        _assertPos(c, put170, -1e18);
+        _assertPos(a, put160, 0);
+        _assertPos(c, put160, 0.015e18);
+        _assertPos(a, put150, -0.04e18);
+        _assertPos(c, put150, -0.01e18);
+        assertEq(ch.collateralOf(a, address(nvda)), 2.7e18);
+        assertEq(ch.collateralOf(c, address(nvda)), 0.3e18);
+        assertEq(ch.collateralOf(c, address(spy)), 0.1e18); // floor(1e18+7 / 10)
+        assertEq(ch.collateralOf(a, address(spy)), 0.9e18 + 7);
+        assertLe(ch.cashOf(a) + ch.cashOf(c), aliceCash);
+        assertApproxEqAbs(ch.cashOf(c), aliceCash / 10, 1);
+        assertEq(_shortQty(e2), shortQty);
+
+        vm.prank(address(ah));
+        ch.transferFraction(a, c, 0.5e18);
+        _assertPos(a, put170, -4.5e18);
+        _assertPos(c, put170, -5.5e18);
+        _assertPos(a, put150, -0.02e18);
+        _assertPos(c, put150, -0.03e18);
+        assertEq(_shortQty(e2), shortQty);
+
+        // a bidder that would end up with a sub-minimum position can't take the lot
+        uint256 d = _fund(dave, 1_000 * USDG, 0);
+        _trade(d, dave, b, bob, put150, 0.015e18, 0.2e18);
+        vm.prank(address(ah));
+        vm.expectRevert(abi.encodeWithSelector(CHErrors.DustPosition.selector, d, int256(0.005e18)));
+        ch.transferFraction(a, d, 0.5e18);
+
+        // everything, for the rest
+        vm.prank(address(ah));
+        ch.transferFraction(a, c, 1e18);
+        assertEq(ch.positionsOf(a).length, 0);
+        assertEq(ch.cashOf(a), 0);
+        assertEq(ch.collateralTokensOf(a).length, 0);
+        _assertPos(c, put150, -0.05e18);
+        _assertBacked(_ids(a, b, c));
+    }
+
+    function test_cashAndCollateralHooks() public {
+        uint256 a = _fund(alice, 100 * USDG, 2e18);
+        uint256 c = _newAccount(carol);
+        vm.startPrank(address(ah));
+        ch.transferCash(a, c, 40e18);
+        ch.transferCollateral(a, c, address(nvda), 0.5e18);
+        vm.expectRevert(abi.encodeWithSelector(CHErrors.InsufficientCash.selector, a, 60e18, 60e18 + 1));
+        ch.transferCash(a, c, 60e18 + 1);
+        vm.expectRevert(
+            abi.encodeWithSelector(CHErrors.InsufficientCollateral.selector, a, address(nvda), 1.5e18, 2e18)
+        );
+        ch.transferCollateral(a, c, address(nvda), 2e18);
+        vm.stopPrank();
+        assertEq(ch.cashOf(a), 60e18);
+        assertEq(ch.cashOf(c), 40e18);
+        assertEq(ch.collateralOf(a, address(nvda)), 1.5e18);
+        assertEq(ch.collateralOf(c, address(nvda)), 0.5e18);
+
+        // penalty: at most the cash; whole units reach the fund, the sub-unit rest stays behind
+        uint256 fundBefore = usdg.balanceOf(address(insurance));
+        vm.prank(address(ah));
+        ch.chargePenalty(a, 1.5e18 + 1);
+        assertEq(ch.cashOf(a), 58.5e18 - 1);
+        assertEq(usdg.balanceOf(address(insurance)), fundBefore + 1.5e6);
+        vm.prank(address(ah));
+        ch.chargePenalty(a, 1_000e18);
+        assertEq(ch.cashOf(a), 0);
+        assertEq(usdg.balanceOf(address(insurance)), fundBefore + 60e6 - 1);
+        _assertBacked(_ids(a, c, 0));
+    }
+
+    function test_insurancePayCreditsOnlyWhatArrived() public {
+        uint256 c = _newAccount(carol);
+        usdg.mint(address(insurance), 100 * USDG);
+        uint256 chBefore = usdg.balanceOf(address(ch));
+
+        vm.prank(address(ah));
+        assertEq(ch.insurancePay(c, 250e18 + 5), 100e18);
+        assertEq(ch.cashOf(c), 100e18);
+        assertEq(usdg.balanceOf(address(ch)), chBefore + 100 * USDG);
+        assertEq(usdg.balanceOf(address(insurance)), 0);
+        assertEq(insurance.outstandingWad(), 0);
+
+        // an empty fund pays nothing and nothing is credited
+        vm.prank(address(ah));
+        assertEq(ch.insurancePay(c, 1e18), 0);
+        assertEq(ch.cashOf(c), 100e18);
+
+        // the fund pays whole units only
+        usdg.mint(address(insurance), 5 * USDG);
+        vm.prank(address(ah));
+        assertEq(ch.insurancePay(c, 1e18 + 1e12 - 1), 1e18);
+        assertEq(ch.cashOf(c), 101e18);
+
+        // a fund that reports more than it sends gets no cash credited for the difference
+        vm.mockCall(address(insurance), abi.encodeWithSelector(IInsuranceFund.cover.selector), abi.encode(3e18));
+        vm.prank(address(ah));
+        assertEq(ch.insurancePay(c, 3e18), 0);
+        assertEq(ch.cashOf(c), 101e18);
+        vm.clearMockedCalls();
+        _assertBacked(_ids(c, 0, 0));
+    }
+
+    // ================================================================ deficit sales
+
+    function test_onlyChCanStartDeficitSale() public {
+        uint256 d = _fund(dave, 0, 10e18);
+        vm.expectRevert(AuctionHouse.NotClearinghouse.selector);
+        ah.startDeficitSale(d, e1);
+        vm.prank(dave);
+        vm.expectRevert(AuctionHouse.NotClearinghouse.selector);
+        ah.startDeficitSale(d, e1);
+        (, bool active) = ah.deficitDiscount(d, e1);
+        assertFalse(active);
+
+        vm.expectEmit(true, true, true, true, address(ah));
+        emit IAuctionHouse.DeficitSaleStarted(d, e1, uint64(vm.getBlockTimestamp()));
+        vm.prank(address(ch));
+        ah.startDeficitSale(d, e1);
+        (uint256 disc, bool active2) = ah.deficitDiscount(d, e1);
+        assertEq(disc, 0.02e18);
+        assertTrue(active2);
+        vm.warp(vm.getBlockTimestamp() + 3600); // the discount stops at the maximum, the sale goes on
+        (disc, active2) = ah.deficitDiscount(d, e1);
+        assertEq(disc, 0.12e18);
+        assertTrue(active2);
+    }
+
+    /// startDeficitSale runs inside settleAccount: for the clearinghouse it must never fail.
+    function test_startDeficitSaleNeverFailsForClearinghouse() public {
+        uint256 n = _newAccount(carol); // no collateral, no cash
+        uint256 t0 = vm.getBlockTimestamp();
+        vm.startPrank(address(ch));
+        ah.startDeficitSale(n, e1);
+        ah.startDeficitSale(999, e1); // not even an account
+        vm.stopPrank();
+        assertEq(ah.saleStartedAt(n, e1), t0);
+
+        // a repeat call keeps the original start and the ramp goes on
+        vm.warp(t0 + 600);
+        vm.recordLogs();
+        vm.prank(address(ch));
+        ah.startDeficitSale(n, e1);
+        assertEq(vm.getRecordedLogs().length, 0);
+        assertEq(ah.saleStartedAt(n, e1), t0);
+        (uint256 disc, bool active) = ah.deficitDiscount(n, e1);
+        assertEq(disc, 0.02e18 + uint256(0.1e18) / 3);
+        assertTrue(active);
+
+        // another expiry of the same account is a sale of its own, and the weekend doesn't matter
+        vm.warp(SAT_NOON);
+        vm.prank(address(ch));
+        ah.startDeficitSale(n, e2);
+        assertEq(ah.saleStartedAt(n, e2), SAT_NOON);
+        (disc, active) = ah.deficitDiscount(n, e2);
+        assertEq(disc, 0.02e18);
+        assertTrue(active);
+        (disc,) = ah.deficitDiscount(n, e1);
+        assertEq(disc, 0.12e18);
+    }
+
+    function test_deficitSaleRepaysPendingThenInsurance() public {
+        uint256 d = _deficitAccount(300e18, 500e18);
+        uint256 c = _fund(carol, 10_000 * USDG, 0);
+        uint256 fundBefore = usdg.balanceOf(address(insurance));
+        assertEq(insurance.outstandingWad(), 500e18);
+
+        // 2 NVDA at 180 * 0.98 = 176.4 each
+        uint256 pay = 352.8e18;
+        vm.expectEmit(true, true, true, true, address(ah));
+        emit IAuctionHouse.DeficitBid(d, c, address(nvda), 2e18, pay);
+        vm.prank(carol);
+        assertEq(ah.bidDeficit(d, e1, address(nvda), 2e18, c, pay), pay);
+
+        // 300 filled the pool's pending part, the other 52.8 went back to the fund
+        (uint256 total, uint256 bridged, uint256 pend) = ch.deficitOf(d, e1);
+        assertEq(total, 447.2e18);
+        assertEq(bridged, 447.2e18);
+        assertEq(pend, 0);
+        (uint256 poolWad, uint256 pendingWad,) = ch.pool(e1);
+        assertEq(poolWad, 800e18);
+        assertEq(pendingWad, 0);
+        assertEq(usdg.balanceOf(address(insurance)), fundBefore + 52.8e6);
+        assertEq(insurance.outstandingWad(), 447.2e18);
+        assertEq(ch.cashOf(d), 0);
+        assertEq(ch.cashOf(c), 10_000e18 - pay);
+        assertEq(ch.collateralOf(d, address(nvda)), 8e18);
+        assertEq(ch.collateralOf(c, address(nvda)), 2e18);
+        (, bool active) = ah.deficitDiscount(d, e1);
+        assertTrue(active);
+        _assertBacked(_ids(d, c, 0));
+    }
+
+    function test_deficitSaleEndsWhenRepaid() public {
+        uint256 d = _deficitAccount(300e18, 500e18);
+        uint256 c = _fund(carol, 10_000 * USDG, 0);
+        vm.warp(vm.getBlockTimestamp() + 900); // 7% off: 167.4 per NVDA
+        uint256 price = 167.4e18;
+
+        // the sale can't sell more than the debt needs
+        uint256 need = F.divWadUp(800e18, price);
+        vm.prank(carol);
+        vm.expectRevert(AuctionHouse.ExceedsDeficit.selector);
+        ah.bidDeficit(d, e1, address(nvda), need + 1, c, type(uint256).max);
+
+        uint256 pay = F.mulWadUp(need, price);
+        assertGe(pay, 800e18);
+        vm.expectEmit(true, true, true, true, address(ah));
+        emit AuctionHouse.DeficitSaleEnded(d, e1);
+        vm.prank(carol);
+        ah.bidDeficit(d, e1, address(nvda), need, c, pay);
+
+        (uint256 total, uint256 bridged, uint256 pend) = ch.deficitOf(d, e1);
+        assertEq(total + bridged + pend, 0);
+        assertEq(insurance.outstandingWad(), 0);
+        (, bool active) = ah.deficitDiscount(d, e1);
+        assertFalse(active);
+        // what's left over stays with the owner, who can withdraw again
+        assertEq(ch.cashOf(d), pay - 800e18);
+        assertEq(ch.collateralOf(d, address(nvda)), 10e18 - need);
+        vm.prank(dave);
+        ch.withdraw(d, address(nvda), 1e18, dave);
+
+        vm.prank(carol);
+        vm.expectRevert(AuctionHouse.SaleNotActive.selector);
+        ah.bidDeficit(d, e1, address(nvda), 1e18, c, type(uint256).max);
+        _assertBacked(_ids(d, c, 0));
+    }
+
+    function test_deficitBidChecks() public {
+        uint256 d = _deficitAccount(300e18, 500e18);
+        uint256 c = _fund(carol, 10_000 * USDG, 0);
+        uint256 x = _fund(alice, 1_000 * USDG, 1e18);
+
+        vm.prank(carol);
+        vm.expectRevert(AuctionHouse.SaleNotActive.selector);
+        ah.bidDeficit(d, e2, address(nvda), 1e18, c, type(uint256).max);
+        vm.prank(dave);
+        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.NotBidder.selector, c, dave));
+        ah.bidDeficit(d, e1, address(nvda), 1e18, c, type(uint256).max);
+        vm.prank(dave);
+        vm.expectRevert(AuctionHouse.SelfBid.selector);
+        ah.bidDeficit(d, e1, address(nvda), 1e18, d, type(uint256).max);
+        vm.startPrank(carol);
+        vm.expectRevert(AuctionHouse.ExceedsCollateral.selector);
+        ah.bidDeficit(d, e1, address(nvda), 10e18 + 1, c, type(uint256).max);
+        vm.expectRevert(
+            abi.encodeWithSelector(AuctionHouse.PayAboveMax.selector, int256(176.4e18), int256(176.4e18 - 1))
+        );
+        ah.bidDeficit(d, e1, address(nvda), 1e18, c, 176.4e18 - 1);
+        // a token the account doesn't hold, and the cash token itself, aren't for sale
+        vm.expectRevert(AuctionHouse.ExceedsCollateral.selector);
+        ah.bidDeficit(d, e1, address(spy), 1e18, c, type(uint256).max);
+        vm.expectRevert(AuctionHouse.MarketClosed.selector);
+        ah.bidDeficit(d, e1, address(usdg), 1e18, c, type(uint256).max);
+        vm.stopPrank();
+
+        // the sold token must be trading
+        nvda.setPaused(true);
+        vm.prank(carol);
+        vm.expectRevert(AuctionHouse.MarketClosed.selector);
+        ah.bidDeficit(d, e1, address(nvda), 1e18, c, type(uint256).max);
+        nvda.setPaused(false);
+
+        // a bidder in deficit, or one left under margin, can't buy
+        _cheatDeficitTotal(x, 1);
+        vm.prank(alice);
+        vm.expectRevert(AuctionHouse.BidderInDeficit.selector);
+        ah.bidDeficit(d, e1, address(nvda), 1e18, x, type(uint256).max);
+        _cheatDeficitTotal(x, 0);
+        uint256 b = _fund(bob, 10_000 * USDG, 0);
+        _trade(x, alice, b, bob, put170, -10e18, 30e18);
+        _setPrice(address(nvda), 60e18);
+        assertFalse(ch.accountState(x).healthy);
+        vm.prank(alice);
+        vm.expectRevert(AuctionHouse.BidderUnhealthy.selector);
+        ah.bidDeficit(d, e1, address(nvda), 1e18, x, type(uint256).max);
+
+        // the weekend pauses the sale
+        vm.warp(SAT_NOON);
+        vm.prank(carol);
+        vm.expectRevert(AuctionHouse.MarketClosed.selector);
+        ah.bidDeficit(d, e1, address(nvda), 1e18, c, type(uint256).max);
+    }
+
+    // ================================================================ helpers
+
+    uint256 constant USDG_SCALE = 1e12;
+
+    /// @dev alice sells 10 NVDA puts K=170 (next week) to bob at 50 on `usdgUnits` of cash.
+    function _shortPuts(uint256 usdgUnits) internal returns (uint256 a, uint256 b) {
+        a = _fund(alice, usdgUnits, 0);
+        b = _fund(bob, 10_000 * USDG, 0);
+        _trade(a, alice, b, bob, put170, -10e18, 50e18);
+    }
+
+    /// @dev alice short 10 puts on 520 USDG, NVDA down to 150: equity ~297 > 0 but < MM ~340.
+    function _liquidatable() internal returns (uint256 a) {
+        (a,) = _shortPuts(520 * USDG);
+        _setPrice(address(nvda), 150e18);
+        assertTrue(ch.accountState(a).liquidatable);
+    }
+
+    /// @dev dave holds 10 NVDA and owes the e1 pool `pendingWad` plus the fund `bridgedWad` (which
+    /// the fund already paid into the pool), with a deficit sale started right after the e1 close.
+    function _deficitAccount(uint256 pendingWad, uint256 bridgedWad) internal returns (uint256 d) {
+        d = _fund(dave, 0, 10e18);
+        vm.warp(e1 + 300);
+        _setPrice(address(nvda), 180e18);
+        _setPrice(address(spy), 600e18);
+        usdg.mint(address(insurance), 1_000 * USDG);
+        vm.prank(address(ch));
+        insurance.cover(bridgedWad);
+
+        bytes memory code = address(ch).code;
+        vm.etch(address(ch), address(seeder).code);
+        SettlementSeeder(address(ch)).seed(d, e1, pendingWad, bridgedWad);
+        vm.etch(address(ch), code);
+
+        DeficitProceedsStub stub = new DeficitProceedsStub(address(ah), IERC20(address(usdg)), insurance, USDG_SCALE);
+        vm.mockFunction(
+            address(ch), address(stub), abi.encodeWithSelector(IClearinghouse.applyDeficitProceeds.selector)
+        );
+
+        vm.prank(address(ch));
+        ah.startDeficitSale(d, e1);
+    }
+
+    function _trade(
+        uint256 takerId,
+        address taker,
+        uint256 makerId,
+        address maker,
+        uint32 sid,
+        int256 qty,
+        uint256 premium
+    ) internal {
+        venue.trade(
+            TradeParams({
+                takerActor: taker,
+                makerActor: maker,
+                takerId: takerId,
+                makerId: makerId,
+                seriesId: sid,
+                qty: qty,
+                premium: premium
+            })
+        );
+    }
+
+    function _assertDiscount(uint256 id, uint256 expected, bool expectedActive) internal view {
+        (uint256 d, bool active) = ah.liquidationDiscount(id);
+        assertEq(d, expected, "discount");
+        assertEq(active, expectedActive, "active");
+    }
+
+    function _assertPos(uint256 id, uint32 sid, int256 qty) internal view {
+        Position[] memory ps = ch.positionsOf(id);
+        for (uint256 i = 0; i < ps.length; ++i) {
+            if (ps[i].seriesId == sid) {
+                assertEq(ps[i].qty, qty);
+                return;
+            }
+        }
+        assertEq(qty, 0, "position missing");
+    }
+
+    function _shortQty(uint64 ex) internal view returns (uint256 q) {
+        (,, q) = ch.pool(ex);
+    }
+
+    /// @dev USDG held by the clearinghouse covers the cash of `ids` (0 = skip) plus both pools;
+    /// stock held covers the collateral.
+    function _assertBacked(uint256[3] memory ids) internal view {
+        uint256 owed;
+        uint256 nv;
+        uint256 sp;
+        for (uint256 i = 0; i < 3; ++i) {
+            if (ids[i] == 0) continue;
+            owed += ch.cashOf(ids[i]);
+            nv += ch.collateralOf(ids[i], address(nvda));
+            sp += ch.collateralOf(ids[i], address(spy));
+        }
+        (uint256 p1,,) = ch.pool(e1);
+        (uint256 p2,,) = ch.pool(e2);
+        assertGe(usdg.balanceOf(address(ch)) * USDG_SCALE, owed + p1 + p2, "usdg backing");
+        assertGe(nvda.balanceOf(address(ch)), nv, "nvda backing");
+        assertGe(spy.balanceOf(address(ch)), sp, "spy backing");
+    }
+
+    /// @dev Sets only claimableTotal (no per-expiry claim, no pool): what a liquidation reads.
+    function _cheatClaimableTotal(uint256 id, uint256 wad) internal {
+        bytes memory code = address(ch).code;
+        vm.etch(address(ch), address(seeder).code);
+        SettlementSeeder(address(ch)).setClaimableTotal(id, wad);
+        vm.etch(address(ch), code);
+    }
+
+    function _mw(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a * b / 1e18;
+    }
+
+    function _ids(uint256 a, uint256 b, uint256 c) internal pure returns (uint256[3] memory r) {
+        r[0] = a;
+        r[1] = b;
+        r[2] = c;
+    }
+}

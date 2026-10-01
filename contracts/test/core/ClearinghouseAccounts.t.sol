@@ -1011,16 +1011,6 @@ contract ClearinghouseAccountsTest is Fixture {
         vm.expectRevert(CHErrors.NotImplemented.selector);
         ch.socializeRemainder(1, 0);
         vm.expectRevert(CHErrors.NotImplemented.selector);
-        ch.transferFraction(1, 2, 0);
-        vm.expectRevert(CHErrors.NotImplemented.selector);
-        ch.transferCash(1, 2, 0);
-        vm.expectRevert(CHErrors.NotImplemented.selector);
-        ch.transferCollateral(1, 2, address(nvda), 0);
-        vm.expectRevert(CHErrors.NotImplemented.selector);
-        ch.chargePenalty(1, 0);
-        vm.expectRevert(CHErrors.NotImplemented.selector);
-        ch.insurancePay(1, 0);
-        vm.expectRevert(CHErrors.NotImplemented.selector);
         ch.applyDeficitProceeds(1, 0);
     }
 
