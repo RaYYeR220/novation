@@ -1119,7 +1119,7 @@ contract AuctionHouseTest is Fixture {
     /// A socialization clears the expiry's books, but the account keeps owing the rest as
     /// residual debt: the sale goes on and its proceeds repay that debt to the fund.
     function test_deficitSaleRepaysSocializedDebt() public {
-        uint256 d = _deficitAccount(3_000e18, 0);
+        uint256 d = _deficitAccount(3_000e18, 0, 0.025e18); // 0.025 NVDA more than the 10: dust
         uint256 c = _fund(carol, 10_000 * USDG, 0);
         // the stock covers only part of the debt: carol buys all 10 NVDA at 176.4
         vm.prank(carol);
@@ -1135,24 +1135,31 @@ contract AuctionHouseTest is Fixture {
         (, bool active) = ah.deficitDiscount(d, e1);
         assertTrue(active);
 
-        // dave brings in 1 more NVDA: the sale sells it and the proceeds go to the residual debt
-        // (to the unit: below index 1e18 a cash credit rounds down by a wei, and the fund is paid
-        // in whole USDG units)
-        _deposit(dave, d, address(nvda), 1e18);
-        uint256 fundBefore = usdg.balanceOf(address(insurance));
-        vm.prank(carol);
-        ah.bidDeficit(d, e1, address(nvda), 1e18, c, type(uint256).max);
-        assertApproxEqAbs(ch.socializedDebtOf(d), 1_059.6e18, 1e12);
+        // dave can't bring in more stock while he owes it; cash from anyone repays it (in whole
+        // USDG units), here all but one unit
+        nvda.mint(dave, 1e18);
+        vm.startPrank(dave);
+        nvda.approve(address(ch), 1e18);
+        vm.expectRevert(CHErrors.DepositNotAllowed.selector);
+        ch.deposit(d, address(nvda), 1e18);
+        vm.stopPrank();
+        _deposit(alice, d, address(usdg), 1_235 * USDG);
+        ch.repayDeficit(d);
+        // (to the unit: below index 1e18 the cash credit rounds down by a wei)
+        uint256 owed = ch.socializedDebtOf(d);
+        assertApproxEqAbs(owed, 1e18, 1e12);
+        assertEq(owed % 1e12, 0);
         (uint256 total,,) = ch.deficitOf(d, e1);
-        assertEq(total, ch.socializedDebtOf(d));
+        assertEq(total, owed);
         assertLt(ch.cashOf(d), 1e12);
-        assertApproxEqAbs(usdg.balanceOf(address(insurance)), fundBefore + 176.4e6, 1);
         (, active) = ah.deficitDiscount(d, e1);
         assertTrue(active);
 
-        // the sale can't sell more than the residual debt needs, and ends once it is repaid
-        _deposit(dave, d, address(nvda), 10e18);
+        // the sale sells the dust left on the account towards the residual debt, never more than
+        // the debt needs, and ends once it is repaid
+        uint256 fundBefore = usdg.balanceOf(address(insurance));
         uint256 need = F.divWadUp(ch.socializedDebtOf(d) - ch.cashOf(d), 176.4e18);
+        assertLt(need, ch.collateralOf(d, address(nvda)));
         vm.prank(carol);
         vm.expectRevert(AuctionHouse.ExceedsDeficit.selector);
         ah.bidDeficit(d, e1, address(nvda), need + 1, c, type(uint256).max);
@@ -1163,10 +1170,11 @@ contract AuctionHouseTest is Fixture {
         assertEq(ch.socializedDebtOf(d), 0);
         (total,,) = ch.deficitOf(d, e1);
         assertEq(total, 0);
+        assertEq(usdg.balanceOf(address(insurance)), fundBefore + owed / 1e12);
         (, active) = ah.deficitDiscount(d, e1);
         assertFalse(active);
         vm.prank(dave);
-        ch.withdraw(d, address(nvda), 1e18, dave);
+        ch.withdraw(d, address(nvda), 0.025e18 - need, dave);
     }
 
     // ================================================================ helpers
@@ -1206,7 +1214,12 @@ contract AuctionHouseTest is Fixture {
     /// holds) and the e1 pool `pendingWad`. Settled right after the close, which starts the
     /// deficit sale; NVDA is back at 180 for the bids.
     function _deficitAccount(uint256 pendingWad, uint256 bridgedWad) internal returns (uint256 d) {
-        d = _fund(dave, 50 * USDG, 10e18);
+        return _deficitAccount(pendingWad, bridgedWad, 0);
+    }
+
+    /// @dev Same, with `extraNvda` more NVDA collateral.
+    function _deficitAccount(uint256 pendingWad, uint256 bridgedWad, uint256 extraNvda) internal returns (uint256 d) {
+        d = _fund(dave, 50 * USDG, 10e18 + extraNvda);
         uint256 b = _fund(bob, 10_000 * USDG, 0);
         uint32 call180 = _list(address(nvda), e1, 180e18, true);
         _trade(d, dave, b, bob, call180, -10e18, 30e18);
