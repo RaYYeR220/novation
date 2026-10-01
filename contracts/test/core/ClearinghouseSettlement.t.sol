@@ -4,7 +4,8 @@ pragma solidity 0.8.30;
 import {Fixture} from "../utils/Fixture.sol";
 import {MockAuctionHouse} from "../utils/MockAuctionHouse.sol";
 import {CHErrors} from "../../src/core/ClearinghouseStorage.sol";
-import {IClearinghouse, TradeParams} from "../../src/interfaces/IClearinghouse.sol";
+import {IClearinghouse, TradeParams, AccountState} from "../../src/interfaces/IClearinghouse.sol";
+import {SettlementLogic} from "../../src/core/logic/SettlementLogic.sol";
 import {IInsuranceFund} from "../../src/interfaces/IInsuranceFund.sol";
 import {GlobalParams} from "../../src/interfaces/IRiskParams.sol";
 import {NyseCalendar} from "../../src/libraries/NyseCalendar.sol";
@@ -324,9 +325,11 @@ contract ClearinghouseSettlementTest is Fixture {
             ch.settleAccount(id, e);
             if (net < 0) {
                 assertEq(cashBefore - ch.cashOf(id), uint256(-net), "paid");
+                assertEq(ch.claimableTotalOf(id), 0);
                 paidIn += uint256(-net);
             } else {
                 assertEq(ch.claimable(id, e), uint256(net), "claim");
+                assertEq(ch.claimableTotalOf(id), uint256(net), "claim total");
             }
             assertEq(_pool(e), paidIn);
             _assertSolvent();
@@ -338,6 +341,7 @@ contract ClearinghouseSettlementTest is Fixture {
             uint256 before = ch.cashOf(ids[i]);
             ch.claim(ids[i], e);
             assertEq(ch.cashOf(ids[i]) - before, amt);
+            assertEq(ch.claimableTotalOf(ids[i]), 0);
             claimed += amt;
         }
         assertLe(claimed, paidIn);
@@ -558,12 +562,19 @@ contract ClearinghouseSettlementTest is Fixture {
         uint256 claimAmt = _floorMul(5e18, px - 180e18);
         uint256 debt = _ceilMul(5e18, px - 180e18);
         uint256 cashV = ch.cashOf(v);
+        int256 eqV = ch.accountState(v).equity;
+        int256 eqB = ch.accountState(b).equity;
 
+        // settling moves no equity: the payer loses at most the bridge's round-up (and one wei of
+        // debit rounding), the receiver nothing
         ch.settleAccount(v, e);
         _assertSolvent();
         _assertDeficitBooks(v);
+        assertLe(ch.accountState(v).equity, eqV);
+        assertGe(ch.accountState(v).equity, eqV - 1e12);
         ch.settleAccount(b, e);
         assertEq(ch.claimable(b, e), claimAmt);
+        assertEq(ch.accountState(b).equity, eqB);
         {
             // the pool (plus what is pending) holds the debt, plus the bridge's round-up to a unit
             uint256 short = debt > cashV ? debt - cashV : 0;
@@ -589,9 +600,14 @@ contract ClearinghouseSettlementTest is Fixture {
         _assertSolvent();
 
         uint256 before = ch.cashOf(b);
+        int256 eqClaim = ch.accountState(b).equity; // a socialization may have shrunk b's cash
         ch.claim(b, e);
         assertLe(ch.cashOf(b) - before, claimAmt);
         assertApproxEqAbs(ch.cashOf(b) - before, claimAmt, 1);
+        // claiming moves the value into cash: equity unchanged up to the credit's rounding down
+        assertLe(ch.accountState(b).equity, eqClaim);
+        assertGe(ch.accountState(b).equity, eqClaim - 1);
+        assertEq(ch.claimableTotalOf(b), 0);
         _assertSolvent();
     }
 
@@ -834,7 +850,170 @@ contract ClearinghouseSettlementTest is Fixture {
         ch.socializeRemainder(w, e);
     }
 
+    // ================================================================ claims in margin equity
+
+    /// Settling moves an expired payoff from the positions into a claim (receiver) or the pool
+    /// (payer) without changing either account's equity; claiming moves it from the claim to cash.
+    function test_settlingAndClaimingKeepEquity() public {
+        uint256 a = _fund(alice, 1000 * USDG, 0);
+        uint256 b = _fund(bob, 1000 * USDG, 0);
+        _trade(a, b, call180, 5e18 + 1, 40e18); // alice long 5 + 1 wei
+        _trade(b, a, call190, 2e18 + 1, 9e18); // alice short 2 + 1 wei
+        _settleAt(address(nvda), 197.5e18);
+        // alice: floor((5e18+1) * 17.5) - ceil((2e18+1) * 7.5) = (87.5e18 + 17) - (15e18 + 8)
+        uint256 net = 72.5e18 + 9;
+
+        AccountState memory a0 = ch.accountState(a);
+        AccountState memory b0 = ch.accountState(b);
+        assertEq(a0.settledValue, int256(net));
+        assertEq(b0.settledValue, -int256(net + 2)); // the payer side rounds up per position
+
+        // a third party settles both: equities are untouched
+        vm.prank(dave);
+        ch.settleAccount(a, e);
+        assertEq(ch.claimable(a, e), net);
+        assertEq(ch.claimableTotalOf(a), net);
+        AccountState memory a1 = ch.accountState(a);
+        _assertSameEquity(a0, a1);
+        assertEq(a1.cash, a0.cash);
+        assertEq(a1.settledValue, int256(net)); // now the claim
+        assertEq(ch.marginAfter(a, 0, 0, 0).equity, a0.equity);
+
+        vm.prank(dave);
+        ch.settleAccount(b, e);
+        AccountState memory b1 = ch.accountState(b);
+        _assertSameEquity(b0, b1);
+        assertEq(b1.settledValue, 0);
+        assertEq(b1.cash, b0.cash - (net + 2));
+
+        // claiming moves the value from the claim to cash, equity unchanged
+        vm.prank(dave);
+        ch.claim(a, e);
+        AccountState memory a2 = ch.accountState(a);
+        _assertSameEquity(a0, a2);
+        assertEq(a2.cash, a0.cash + net);
+        assertEq(a2.settledValue, 0);
+        assertEq(ch.claimableTotalOf(a), 0);
+    }
+
+    /// The griefing case: an account whose margin rests on an expired ITM long is settled by a
+    /// third party before its counterparties. Its pending claim keeps counting, so it can't be
+    /// pushed into liquidation.
+    function test_thirdPartySettleCannotMakeReceiverLiquidatable() public {
+        uint32 far200 = _list(address(nvda), e2, 200e18, true);
+        uint256 a = _newAccount(alice);
+        uint256 b = _fund(bob, 100_000 * USDG, 0);
+        uint256 c = _fund(carol, 100_000 * USDG, 0);
+        _cheatMovePosition(a, call180, 5e18); // expires ITM: worth 200 at 220
+        _cheatMovePosition(b, call180, -5e18);
+        _cheatMovePosition(a, far200, -3e18); // the risk that needs margin
+        _cheatMovePosition(c, far200, 3e18);
+        _settleAt(address(nvda), 220e18);
+        uint256 claim = 200e18;
+
+        // fund alice so she sits above maintenance only thanks to the expired long
+        AccountState memory s0 = ch.accountState(a);
+        assertEq(s0.settledValue, int256(claim));
+        int256 gap = int256(s0.mm) - s0.equity; // cash needed to reach MM exactly
+        uint256 topUp = uint256(gap > 0 ? gap : int256(0)) + claim / 2;
+        _deposit(alice, a, address(usdg), topUp / 1e12 + 1);
+        AccountState memory s1 = ch.accountState(a);
+        assertFalse(s1.liquidatable);
+        assertLt(s1.equity - int256(claim), int256(s1.mm)); // without the claim she'd be liquidatable
+
+        vm.prank(dave);
+        ch.settleAccount(a, e);
+        AccountState memory s2 = ch.accountState(a);
+        _assertSameEquity(s1, s2);
+        assertEq(s2.mm, s1.mm);
+        assertFalse(s2.liquidatable);
+        vm.expectRevert(CHErrors.PoolNotReady.selector);
+        ch.claim(a, e); // bob hasn't paid in yet
+
+        // once the pool is complete the claim turns into cash, still not liquidatable
+        ch.settleAccount(b, e);
+        ch.claim(a, e);
+        AccountState memory s3 = ch.accountState(a);
+        _assertSameEquity(s1, s3);
+        assertFalse(s3.liquidatable);
+        assertEq(s3.cash, s1.cash + claim);
+    }
+
+    /// An impaired claim is carried at face until it is claimed; the claim then realizes the
+    /// haircut: the face leaves the claim total, only the pro-rata payout reaches cash.
+    function test_impairedClaimRealizesHaircut() public {
+        uint256 v = _fund(alice, 450 * USDG, 0);
+        uint256 b = _fund(bob, 25.2e6, 0);
+        uint256 b2 = _fund(erin, 16.8e6, 0);
+        _fund(dave, 10 * USDG, 0);
+        _trade(b, v, call180, 3e18, 25.2e18);
+        _trade(b2, v, call180, 2e18, 16.8e18);
+        _settleAt(address(nvda), 300e18);
+        ch.settleAccount(v, e);
+        ch.settleAccount(b, e);
+        ch.settleAccount(b2, e);
+        ch.socializeRemainder(v, e);
+        uint256 pool0 = 492e18 + 10e18 - 10;
+
+        AccountState memory s0 = ch.accountState(b);
+        assertEq(s0.cash, 0);
+        assertEq(s0.settledValue, 360e18); // at face while unclaimed
+        assertEq(s0.equity, 360e18);
+
+        uint256 paidB = 360e18 * pool0 / 600e18;
+        vm.expectEmit(true, true, false, true, address(ch));
+        emit SettlementLogic.ClaimHaircut(b, e, 360e18, paidB);
+        vm.expectEmit(true, true, false, true, address(ch));
+        emit IClearinghouse.Claimed(b, e, paidB);
+        ch.claim(b, e);
+
+        AccountState memory s1 = ch.accountState(b);
+        assertEq(ch.claimableTotalOf(b), 0);
+        assertEq(s1.cash, paidB);
+        assertEq(s1.settledValue, 0);
+        assertEq(s1.equity, int256(paidB)); // the haircut 360 - paidB is realized
+        assertEq(ch.claimableTotalOf(b2), 240e18);
+
+        ch.claim(b2, e);
+        assertEq(ch.claimableTotalOf(b2), 0);
+        assertEq(ch.accountState(b2).equity, int256(pool0 - paidB));
+        _assertSolvent();
+    }
+
+    /// Claims over several expiries add up in the total and each claim removes only its own.
+    function test_claimTotalAcrossExpiries() public {
+        uint32 far = _list(address(nvda), e2, 180e18, true);
+        uint256 a = _fund(alice, 1000 * USDG, 0);
+        uint256 b = _fund(bob, 1000 * USDG, 0);
+        _trade(a, b, call180, 1e18, 10e18);
+        _trade(a, b, far, 2e18, 30e18);
+
+        _settleAt(address(nvda), 190e18);
+        ch.settleAccount(a, e);
+        assertEq(ch.claimableTotalOf(a), 10e18);
+
+        vm.warp(e2 + 1 hours);
+        _settleExpiry(address(nvda), e2, 200e18);
+        ch.settleAccount(a, e2);
+        assertEq(ch.claimableTotalOf(a), 10e18 + 40e18);
+        assertEq(ch.accountState(a).settledValue, 50e18);
+        assertEq(ch.accountState(a).equity, int256(ch.cashOf(a) + 50e18));
+
+        ch.settleAccount(b, e2);
+        ch.claim(a, e2);
+        assertEq(ch.claimableTotalOf(a), 10e18);
+        ch.settleAccount(b, e);
+        ch.claim(a, e);
+        assertEq(ch.claimableTotalOf(a), 0);
+        assertEq(ch.cashOf(a), 960e18 + 50e18);
+    }
+
     // ================================================================ helpers
+
+    function _assertSameEquity(AccountState memory x, AccountState memory y) internal pure {
+        assertEq(y.equity, x.equity, "equity");
+        assertEq(y.liquidatable, x.liquidatable, "liquidatable");
+    }
 
     function _trade(uint256 takerId, uint256 makerId, uint32 sid, int256 qty, uint256 premium) internal {
         venue.trade(

@@ -22,7 +22,7 @@ struct AgentPolicy {
 struct AccountState {
     uint256 cash;          // WAD USDG (index-scaled)
     int256 mtm;            // kernel mtm
-    int256 settledValue;   // expired + settled positions not yet settleAccount-ed (rounded against the account)
+    int256 settledValue;   // expired + settled positions not yet settleAccount-ed (rounded against the account) + unpaid claims at face
     uint256 deficit;       // WAD owed
     int256 equity;         // cash + mtm + settledValue - deficit
     uint256 im;            // kernel lossIM

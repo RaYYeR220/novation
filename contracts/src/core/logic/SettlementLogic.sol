@@ -25,6 +25,10 @@ library SettlementLogic {
     using SafeERC20 for IERC20;
     using SafeCast for uint256;
 
+    /// @notice An impaired pool paid `paidWad` for a claim of `claimWad`: the difference is the
+    /// claimant's realized loss.
+    event ClaimHaircut(uint256 indexed id, uint64 indexed expiry, uint256 claimWad, uint256 paidWad);
+
     /// @notice Closes every position of `id` that expires at `expiry` and settles the net payoff
     /// through pool[expiry]. Permissionless; each (underlying, expiry) involved must be settled in
     /// the registry.
@@ -71,6 +75,7 @@ library SettlementLogic {
             uint256 amt = uint256(net);
             $.claimable[id][expiry] += amt;
             $.totalClaimable[expiry] += amt;
+            $.claimableTotal[id] += amt; // keeps counting in the account's equity until claimed
             emit IClearinghouse.AccountSettled(id, expiry, net, 0, 0, 0);
             return;
         }
@@ -103,7 +108,8 @@ library SettlementLogic {
 
     /// @notice Moves the claim of `id` on pool[expiry] into its cash. Only once every short of the
     /// expiry is settled and nothing is pending; a pool marked impaired pays pro rata (never more
-    /// than the claim). Nothing to claim is a no-op.
+    /// than the claim) and the shortfall is the claimant's realized loss (ClaimHaircut). Nothing
+    /// to claim is a no-op.
     function claim(Deps memory, uint256 id, uint64 expiry) external {
         CHStorage storage $ = CHS.s();
         uint256 amt = $.claimable[id][expiry];
@@ -119,10 +125,14 @@ library SettlementLogic {
             revert CHErrors.PoolShortfall();
         }
 
+        // the claim leaves the account's equity at face; only `pay` comes back as cash, so an
+        // impaired payout realizes the difference as a loss
         $.claimable[id][expiry] = 0;
         $.totalClaimable[expiry] -= amt;
+        $.claimableTotal[id] -= amt;
         $.pool[expiry] = poolWad - pay;
         CHS.credit(id, pay);
+        if (pay < amt) emit ClaimHaircut(id, expiry, amt, pay);
         emit IClearinghouse.Claimed(id, expiry, pay);
     }
 

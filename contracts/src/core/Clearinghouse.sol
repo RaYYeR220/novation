@@ -26,6 +26,8 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
     event VenueAdded(address indexed venue);
     event AuctionHouseBound(address indexed auctionHouse);
     event SetupFinalized();
+    /// @dev Emitted by SettlementLogic (same signature), declared here so it is in this ABI.
+    event ClaimHaircut(uint256 indexed id, uint64 indexed expiry, uint256 claimWad, uint256 paidWad);
 
     IRiskParams public immutable params;
     IMarketDataHub public immutable hub;
@@ -310,6 +312,11 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
 
     function claimable(uint256 id, uint64 expiry) external view returns (uint256) {
         return CHS.s().claimable[id][expiry];
+    }
+
+    /// @notice The account's unpaid claims over all expiries, at face. Counted in its equity.
+    function claimableTotalOf(uint256 id) external view returns (uint256) {
+        return CHS.s().claimableTotal[id];
     }
 
     /// @return total the account's deficit over all expiries

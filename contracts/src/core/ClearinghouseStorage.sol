@@ -45,6 +45,7 @@ struct CHStorage {
     // account's union while it has collateral > 0 or at least one open position on it.
     mapping(uint256 => mapping(address => uint256)) positionsOn; // open positions per underlying
     mapping(uint256 => uint256) underlyingCount; // size of the union
+    mapping(uint256 => uint256) claimableTotal; // sum over expiries of claimable[id][E], at face
 }
 
 /// @notice Dependencies handed to the logic libraries, built by the Clearinghouse from its
