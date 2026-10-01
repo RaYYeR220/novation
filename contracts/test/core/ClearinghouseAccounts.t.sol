@@ -1005,12 +1005,6 @@ contract ClearinghouseAccountsTest is Fixture {
 
     function test_hooksNotImplementedYet() public {
         vm.expectRevert(CHErrors.NotImplemented.selector);
-        ch.settleAccount(1, 0);
-        vm.expectRevert(CHErrors.NotImplemented.selector);
-        ch.claim(1, 0);
-        vm.expectRevert(CHErrors.NotImplemented.selector);
-        ch.socializeRemainder(1, 0);
-        vm.expectRevert(CHErrors.NotImplemented.selector);
         ch.transferFraction(1, 2, 0);
         vm.expectRevert(CHErrors.NotImplemented.selector);
         ch.transferCash(1, 2, 0);
@@ -1020,8 +1014,6 @@ contract ClearinghouseAccountsTest is Fixture {
         ch.chargePenalty(1, 0);
         vm.expectRevert(CHErrors.NotImplemented.selector);
         ch.insurancePay(1, 0);
-        vm.expectRevert(CHErrors.NotImplemented.selector);
-        ch.applyDeficitProceeds(1, 0);
     }
 
     function test_storageSlotIsErc7201() public pure {

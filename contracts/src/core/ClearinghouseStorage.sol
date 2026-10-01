@@ -92,6 +92,14 @@ library CHErrors {
     error OpenInterestCap();
     error AgentRiskBudgetExceeded(uint256 id, uint256 worstLoss, uint256 budget);
     error AgentPremiumExceeded();
+    // settlement and deficits
+    error NothingToSettle();
+    error ExpiryNotSettled();
+    error PoolNotReady();
+    error PoolShortfall();
+    error NotAuctionHouse(address caller);
+    error NothingToSocialize();
+    error AccountNotEmpty(uint256 id);
     // setup
     error NotSetupAdmin();
     error SetupAlreadyFinalized();

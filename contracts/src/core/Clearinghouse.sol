@@ -14,6 +14,7 @@ import {IInsuranceFund} from "../interfaces/IInsuranceFund.sol";
 import {CHS, CHStorage, CHErrors, Account, Deps} from "./ClearinghouseStorage.sol";
 import {MarginLogic} from "./logic/MarginLogic.sol";
 import {TradeLogic} from "./logic/TradeLogic.sol";
+import {SettlementLogic} from "./logic/SettlementLogic.sol";
 import {Position, WAD} from "../types/Types.sol";
 
 /// @notice Options clearinghouse: subaccounts, index-scaled USDG cash, stock-token collateral,
@@ -213,16 +214,29 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
         return TradeLogic.trade(_deps(), t);
     }
 
-    function settleAccount(uint256, uint64) external pure {
-        revert CHErrors.NotImplemented();
+    modifier onlyAuctionHouse() {
+        if (msg.sender != CHS.s().auctionHouse) revert CHErrors.NotAuctionHouse(msg.sender);
+        _;
     }
 
-    function claim(uint256, uint64) external pure {
-        revert CHErrors.NotImplemented();
+    /// @notice Permissionless: closes every position of `id` expiring at `expiry` (the registry
+    /// must have settled each underlying) and settles the net through the expiry's pool: a payer
+    /// pays in (cash, then the InsuranceFund's bridge, then pending plus a deficit sale), a
+    /// receiver gets a claim (see SettlementLogic).
+    function settleAccount(uint256 id, uint64 expiry) external nonReentrant {
+        SettlementLogic.settleAccount(_deps(), id, expiry);
     }
 
-    function socializeRemainder(uint256, uint64) external pure {
-        revert CHErrors.NotImplemented();
+    /// @notice Permissionless: pays the claim of `id` on the `expiry` pool into its cash once no
+    /// short of that expiry is unsettled and nothing is pending. No claim is a no-op.
+    function claim(uint256 id, uint64 expiry) external nonReentrant {
+        SettlementLogic.claim(_deps(), id, expiry);
+    }
+
+    /// @notice Permissionless: socializes the pending deficit of an emptied account through the
+    /// cash index (see SettlementLogic).
+    function socializeRemainder(uint256 id, uint64 expiry) external nonReentrant {
+        SettlementLogic.socializeRemainder(_deps(), id, expiry);
     }
 
     function transferFraction(uint256, uint256, uint256) external pure {
@@ -245,8 +259,10 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
         revert CHErrors.NotImplemented();
     }
 
-    function applyDeficitProceeds(uint256, uint64) external pure {
-        revert CHErrors.NotImplemented();
+    /// @notice Auction house only, after a deficit-sale bid credited the bidder's payment to `id`:
+    /// applies the account's cash to its `expiry` deficit, the pool's pending part first.
+    function applyDeficitProceeds(uint256 id, uint64 expiry) external nonReentrant onlyAuctionHouse {
+        SettlementLogic.applyDeficitProceeds(_deps(), id, expiry);
     }
 
     // ================================================================ views
