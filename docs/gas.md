@@ -107,7 +107,7 @@ The kernel redeployed from the current source, same script, 2026-10-01 (parity: 
 
 ### Under the 32M transaction cap
 
-[`tools/e2e/scenario.py`](../tools/e2e/scenario.py) repeats the 256-position estimate with the gas allowance set to the chain's 32,000,000 per-transaction limit. The Stylus kernel returns 1,661,950. `KernelReference` fails with "gas required exceeds allowance (32000000)": in checked Solidity, one margin evaluation of this book can't be sent as a transaction. The result is the `gasProof` entry in [`tools/e2e/out/46630.json`](../tools/e2e/out/46630.json).
+[`tools/e2e/scenario.py`](../tools/e2e/scenario.py) repeats the 256-position estimate with the gas allowance set to the chain's 32,000,000 per-transaction limit. The Stylus kernel returns 1,663,660. `KernelReference` fails with "gas required exceeds allowance (32000000)": in checked Solidity, one margin evaluation of this book can't be sent as a transaction. The result is the `gasProof` entry in [`tools/e2e/out/46630.json`](../tools/e2e/out/46630.json).
 
 At the transaction level, fixed costs paid by both sides narrow the ratio for small books. The baseline's 32-position estimate was 3,037,754 gas including L1, 11.6x the Stylus kernel's 262,876 on the 32-position book above. At 256 positions it was 23,939,893, 14.4x the kernel's 1,664,367. The two books differ, but both hold one underlying and the same number of positions.
 

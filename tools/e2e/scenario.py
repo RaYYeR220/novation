@@ -12,6 +12,10 @@ transactions and writes every hash to tools/e2e/out/<chainId>.json:
      AgentRiskBudgetExceeded;
   5. a withdrawal that would leave the user's account below initial margin reverts on-chain with
      InsufficientMargin;
+  6. the user deposits NVDA into the covered-call vault (ERC-4626);
+  7. corporate action: a pending AAPL multiplier change (ERC-8056 effectiveAt within haltWindow) halts
+     AAPL; an RFQ fill that simulated fine just before reverts on-chain with OpeningNotAllowed, and
+     the mock multiplier is reset afterwards;
 plus the gas proof: eth_estimateGas of kernel.margin for a 256-position book under the 32M
 transaction cap, Stylus kernel vs the Solidity KernelReference.
 
@@ -171,6 +175,7 @@ def main():
     params = c(dep["riskParams"], "RiskParams")
     usdg = c(dep["tokens"]["USDG"], "MockUSDG")
     nvda = c(dep["tokens"]["NVDA"], "MockStockToken")
+    aapl = c(dep["tokens"]["AAPL"], "MockStockToken")
     cc = c(next(v["address"] for v in dep["vaults"] if v["type"] == "coveredCall" and v["underlying"] == "NVDA"),
            "CoveredCallVault")
     N = nvda.address
@@ -270,6 +275,36 @@ def main():
     expect_call_revert(w3, wd, user.address, "InsufficientMargin(uint256,int256,uint256)")
     r.send(user, wd, gas=3_000_000, label="5 withdraw past initial margin", expect_revert="InsufficientMargin")
     out["withdraw"] = {"subaccount": uid, "cash": cash, "equity": equity, "im": im, "amountUsdg": amt}
+
+    # ---- 6. a vault deposit
+    r.send(user, nvda.functions.mint(user.address, W), label="6 mint NVDA for the vault deposit")
+    r.send(user, nvda.functions.approve(cc.address, W), label="6 approve the vault")
+    r.send(user, cc.functions.deposit(W, user.address), label="6 deposit 1 NVDA into the covered-call vault")
+
+    # ---- 7. corporate action: a pending AAPL multiplier change halts opening on AAPL
+    A = aapl.address
+    a_spot = hub.functions.spot(A).call()[0]
+    a_e = max(s[1] for s in (reg.functions.series(i).call() for i in range(1, reg.functions.seriesCount().call() + 1))
+              if s[0] == A)
+    a_k = (a_spot * 95 // 100 + 5 * W // 2) // (5 * W) * (5 * W)
+    a_sid = reg.functions.seriesId(A, a_e, a_k, False).call()
+    now = w3.eth.get_block("latest")["timestamp"]
+    a_px = bs_put(a_spot / W, a_k / W, (a_e - now) / (365 * 86400), hub.functions.markVol(A).call() / W)
+    aq = (maker.address, mid, a_sid, False, W, int(a_px * 0.98 * 1e6) * 10**12, now + 3600, int(time.time()) + 1)
+    a_sig = Account.unsafe_sign_hash(rfq.functions.hashQuote(aq).call(), maker.key).signature
+    a_fill = rfq.functions.fill(aq, a_sig, uid, W)
+    a_fill.call({"from": user.address})  # fills fine while AAPL trades normally
+    cur = aapl.functions.uiMultiplier().call()
+    r.send(user, aapl.functions.setUiMultiplier(cur, 2 * cur, now + 1800),
+           label="7 AAPL announces a 2-for-1 multiplier change effective in 30 min (mock)")
+    try:
+        assert hub.functions.session(A).call() == 4, "AAPL not HALTED"
+        expect_call_revert(w3, a_fill, user.address, "OpeningNotAllowed(uint256)")
+        r.send(user, a_fill, gas=3_000_000, label="7 RFQ fill on AAPL inside the multiplier window",
+               expect_revert="OpeningNotAllowed")
+    finally:
+        r.send(user, aapl.functions.setUiMultiplier(cur, cur, 0), label="7 reset the AAPL mock multiplier")
+    out["corporateAction"] = {"underlying": "AAPL", "seriesId": a_sid, "strike": a_k, "expiry": a_e}
 
     # ---- gas proof: margin for a 256-position book under the 32M cap
     data = margin_data(256, 1)
