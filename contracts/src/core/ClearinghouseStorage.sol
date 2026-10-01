@@ -117,6 +117,8 @@ library CHErrors {
     error AlreadyBound();
     error AuctionHouseNotBound();
     error NotImplemented();
+    // auction house hooks
+    error InvalidFraction();
 }
 
 /// @notice ERC-7201 storage accessor plus the ledger primitives every logic library goes through.

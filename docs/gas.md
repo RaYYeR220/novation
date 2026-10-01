@@ -17,11 +17,12 @@ This page records every gas number Novation publishes: what was measured, on whi
 | Per-transaction gas limit | 32,000,000 (`ArbGasInfo.getMaxTxGasLimit`) |
 | Stylus cache | none: the chain has no CacheManager, so every call pays the uncached program init (about 20,900 gas) |
 | `eth_call` gas allowance on the public RPC | about 50,000,000 |
-| Dates | Stylus kernel and `KernelReference`: 2026-09-30, transaction-level re-run 2026-10-01. Hand-optimized baseline: 2026-09-25 |
+| Dates | Stylus kernel and `KernelReference`: 2026-09-30, transaction-level re-run 2026-10-01, kernel redeployed from the current source and re-measured 2026-10-01. Hand-optimized baseline: 2026-09-25 |
 
 | Contract | Address | Notes |
 |---|---|---|
-| Stylus risk kernel | [`0x6d07e246eb757A1F97E3cdB7d1881ee5De27ceaA`](https://explorer.testnet.chain.robinhood.com/address/0x6d07e246eb757A1F97E3cdB7d1881ee5De27ceaA) | [create](https://explorer.testnet.chain.robinhood.com/tx/0xe3853d9b273b45d74f26010fe5a4e54be3ff5931be8f69882da5a68947768cfa) 5,907,781 gas, [activate](https://explorer.testnet.chain.robinhood.com/tx/0x51639d8fb40153b8f20f482882457696d627a4f74a1309ee1d911bb8f63dec60) 3,684,406 gas plus a 0.000107 ETH data fee |
+| Stylus risk kernel (current source, used by the clearinghouse) | [`0xAeE1D4F45AF43a9C4d52ADa65d423b1c0e67f0fd`](https://explorer.testnet.chain.robinhood.com/address/0xAeE1D4F45AF43a9C4d52ADa65d423b1c0e67f0fd) | [create](https://explorer.testnet.chain.robinhood.com/tx/0xfd08b73ec31d2f969a54034bcb46c9c8f522564105486dc074610aa70b07fffc) 5,888,860 gas, [activate](https://explorer.testnet.chain.robinhood.com/tx/0xfc72bde27f5d48b918df81296154042b718c17cc2f4b1ab031bc0d563d0eb8a6) 3,684,512 gas plus a 0.000107 ETH data fee |
+| Previous Stylus kernel (built before the decoder hardening) | [`0x6d07e246eb757A1F97E3cdB7d1881ee5De27ceaA`](https://explorer.testnet.chain.robinhood.com/address/0x6d07e246eb757A1F97E3cdB7d1881ee5De27ceaA) | [create](https://explorer.testnet.chain.robinhood.com/tx/0xe3853d9b273b45d74f26010fe5a4e54be3ff5931be8f69882da5a68947768cfa) 5,907,781 gas, [activate](https://explorer.testnet.chain.robinhood.com/tx/0x51639d8fb40153b8f20f482882457696d627a4f74a1309ee1d911bb8f63dec60) 3,684,406 gas plus a 0.000107 ETH data fee |
 | `KernelReference` (checked Solidity twin) | [`0xB7d9232c8ff46b4950d85ed639908c86C08750C6`](https://explorer.testnet.chain.robinhood.com/address/0xB7d9232c8ff46b4950d85ed639908c86C08750C6) | [create](https://explorer.testnet.chain.robinhood.com/tx/0xd2d6eff91925b66072a4f80d84b98dc44ff31e5e01374a8cecdcc0309485569f) |
 | Hand-optimized Solidity baseline (`BSMarginSol`) | [`0x9F5a98A1E678b124998328cfa0056c90720ceCEe`](https://explorer.testnet.chain.robinhood.com/address/0x9F5a98A1E678b124998328cfa0056c90720ceCEe) | benchmark contract, not part of the protocol |
 
@@ -93,7 +94,20 @@ Method: [`tools/stylus-deploy/parity.py`](../tools/stylus-deploy/parity.py) agai
 | 64 positions, 8 underlyings | 486,067 | over the 50M allowance | 495,279 | over the 50M allowance |
 | 256 positions, 1 underlying | 1,664,367 | over the 50M allowance | 1,671,146 | over the 50M allowance |
 
-The two runs differ by a few thousand gas because the L1 component follows Ethereum's fee market.
+The two runs differ by a few thousand gas because the L1 component follows Ethereum's fee market. The columns above were measured on the previous program.
+
+The kernel redeployed from the current source, same script, 2026-10-01 (parity: `PARITY OK`):
+
+| Book | Stylus | `KernelReference` |
+|---|---|---|
+| 32 positions, 1 underlying | 262,182 | 22,091,869 |
+| 32 positions, 8 underlyings | 284,115 | 23,006,332 |
+| 64 positions, 8 underlyings | 484,955 | over the 50M allowance |
+| 256 positions, 1 underlying | 1,663,710 | over the 50M allowance |
+
+### Under the 32M transaction cap
+
+[`tools/e2e/scenario.py`](../tools/e2e/scenario.py) repeats the 256-position estimate with the gas allowance set to the chain's 32,000,000 per-transaction limit. The Stylus kernel returns 1,663,660. `KernelReference` fails with "gas required exceeds allowance (32000000)": in checked Solidity, one margin evaluation of this book can't be sent as a transaction. The result is the `gasProof` entry in [`tools/e2e/out/46630.json`](../tools/e2e/out/46630.json).
 
 At the transaction level, fixed costs paid by both sides narrow the ratio for small books. The baseline's 32-position estimate was 3,037,754 gas including L1, 11.6x the Stylus kernel's 262,876 on the 32-position book above. At 256 positions it was 23,939,893, 14.4x the kernel's 1,664,367. The two books differ, but both hold one underlying and the same number of positions.
 
@@ -110,12 +124,10 @@ A single Black-Scholes evaluation is cheaper in plain Solidity, because the Styl
 
 | Build | On-chain code | Limit |
 |---|---|---|
-| Deployed testnet program | 23,997 bytes | 24,576 |
-| Current source | 24,085 bytes | 24,576 |
+| Deployed testnet program (current source) | 24,085 bytes | 24,576 |
+| Previous testnet program | 23,997 bytes | 24,576 |
 
-The deployed program was built before the decoder hardening described in [SECURITY.md](../SECURITY.md#issues-found-and-fixed-in-internal-review); the changes affect only malformed calldata and an integer square-root range the kernel never reaches, and the program will be redeployed from the current source. Its WASM SHA-256 and code hash are recorded in [`contracts/deployments/46630.json`](../contracts/deployments/46630.json).
-
-<!-- FILL: update the address, code hash, size and gas rows after the kernel redeploy from the current source -->
+The previous program was built before the decoder hardening described in [SECURITY.md](../SECURITY.md#issues-found-and-fixed-in-internal-review). On 2026-10-01 the kernel was redeployed from the current source at [`0xAeE1D4F45AF43a9C4d52ADa65d423b1c0e67f0fd`](https://explorer.testnet.chain.robinhood.com/address/0xAeE1D4F45AF43a9C4d52ADa65d423b1c0e67f0fd), and the clearinghouse uses that program. Code hash `0xa34c0177edcade5da15ac0fe4aeddb59161e76165303686f66a9eeaed27a5c8d`, WASM SHA-256 `ed1fdde1c826c81c39ef6e4e72336c24f098ef581346691e7b7d735bb2487096`; both programs are recorded in [`contracts/deployments/46630.json`](../contracts/deployments/46630.json) (`kernel`, `kernelPrevious`).
 
 A Stylus program expires 365 days after activation. The deployed program must be kept alive or re-activated before then; both are permissionless ArbWasm calls that pay a data fee.
 

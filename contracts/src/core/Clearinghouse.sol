@@ -14,6 +14,7 @@ import {IInsuranceFund} from "../interfaces/IInsuranceFund.sol";
 import {CHS, CHStorage, CHErrors, Account, Deps} from "./ClearinghouseStorage.sol";
 import {MarginLogic} from "./logic/MarginLogic.sol";
 import {TradeLogic} from "./logic/TradeLogic.sol";
+import {AuctionHookLogic} from "./logic/AuctionHookLogic.sol";
 import {SettlementLogic} from "./logic/SettlementLogic.sol";
 import {Position, WAD} from "../types/Types.sol";
 
@@ -251,24 +252,45 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
         SettlementLogic.repayDeficit(_deps(), id);
     }
 
-    function transferFraction(uint256, uint256, uint256) external pure {
-        revert CHErrors.NotImplemented();
+    /// @notice Auction house only: moves `fractionWad` of `fromId`'s positions, collateral and cash
+    /// to `toId` (see AuctionHookLogic). The auction house checks the receiver's margin.
+    function transferFraction(uint256 fromId, uint256 toId, uint256 fractionWad)
+        external
+        nonReentrant
+        onlyAuctionHouse
+    {
+        AuctionHookLogic.transferFraction(_deps(), fromId, toId, fractionWad);
     }
 
-    function transferCash(uint256, uint256, uint256) external pure {
-        revert CHErrors.NotImplemented();
+    /// @notice Auction house only: a bidder's payment between accounts.
+    function transferCash(uint256 fromId, uint256 toId, uint256 amountWad) external nonReentrant onlyAuctionHouse {
+        AuctionHookLogic.transferCash(fromId, toId, amountWad);
     }
 
-    function transferCollateral(uint256, uint256, address, uint256) external pure {
-        revert CHErrors.NotImplemented();
+    /// @notice Auction house only: collateral sold in a deficit sale.
+    function transferCollateral(uint256 fromId, uint256 toId, address token, uint256 amountWad)
+        external
+        nonReentrant
+        onlyAuctionHouse
+    {
+        AuctionHookLogic.transferCollateral(fromId, toId, token, amountWad);
     }
 
-    function chargePenalty(uint256, uint256) external pure {
-        revert CHErrors.NotImplemented();
+    /// @notice Auction house only: a liquidation penalty, up to the account's cash, to the
+    /// InsuranceFund.
+    function chargePenalty(uint256 id, uint256 amountWad) external nonReentrant onlyAuctionHouse {
+        AuctionHookLogic.chargePenalty(_deps(), id, amountWad);
     }
 
-    function insurancePay(uint256, uint256) external pure returns (uint256) {
-        revert CHErrors.NotImplemented();
+    /// @notice Auction house only: pays a liquidation bonus from the InsuranceFund into `toId`.
+    /// @return paidWad what the fund actually covered (and `toId` was credited)
+    function insurancePay(uint256 toId, uint256 amountWad)
+        external
+        nonReentrant
+        onlyAuctionHouse
+        returns (uint256 paidWad)
+    {
+        return AuctionHookLogic.insurancePay(_deps(), toId, amountWad);
     }
 
     /// @notice Auction house only, after a deficit-sale bid credited the bidder's payment to `id`:
@@ -309,6 +331,18 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
 
     function collateralTokensOf(uint256 id) external view returns (address[] memory) {
         return CHS.s().collateralTokens[id];
+    }
+
+    /// @notice Every underlying the account holds as collateral or has a position on, in
+    /// RiskParams order.
+    function underlyingsOf(uint256 id) external view returns (address[] memory) {
+        return AuctionHookLogic.underlyingsOf(_deps(), id);
+    }
+
+    /// @return live positions whose series hasn't expired
+    /// @return awaiting expired positions whose expiry the registry hasn't settled yet
+    function positionStatus(uint256 id) external view returns (uint256 live, uint256 awaiting) {
+        return AuctionHookLogic.positionStatus(_deps(), id);
     }
 
     function pool(uint64 expiry)

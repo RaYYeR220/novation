@@ -1011,19 +1011,6 @@ contract ClearinghouseAccountsTest is Fixture {
         new Clearinghouse(params, hub, registry, kernel, insurance, address(0));
     }
 
-    function test_hooksNotImplementedYet() public {
-        vm.expectRevert(CHErrors.NotImplemented.selector);
-        ch.transferFraction(1, 2, 0);
-        vm.expectRevert(CHErrors.NotImplemented.selector);
-        ch.transferCash(1, 2, 0);
-        vm.expectRevert(CHErrors.NotImplemented.selector);
-        ch.transferCollateral(1, 2, address(nvda), 0);
-        vm.expectRevert(CHErrors.NotImplemented.selector);
-        ch.chargePenalty(1, 0);
-        vm.expectRevert(CHErrors.NotImplemented.selector);
-        ch.insurancePay(1, 0);
-    }
-
     function test_storageSlotIsErc7201() public pure {
         bytes32 expected =
             keccak256(abi.encode(uint256(keccak256("novation.storage.Clearinghouse")) - 1)) & ~bytes32(uint256(0xff));

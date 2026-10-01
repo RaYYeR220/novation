@@ -210,7 +210,7 @@ The clearinghouse keeps these properties at all times: its USDG balance covers a
 
 ## Liquidation
 
-The liquidation engine is in development; its parameters already live in `RiskParams`. An account becomes liquidatable when `equity < MM`. Anyone can start a Dutch auction, in which bidders take over a fraction of the account's positions, collateral and cash at a discount that grows linearly from `startDiscount` (2%) to `maxDiscount` (12%) over `auctionDuration` (30 minutes). A bid takes at most `maxFractionPerBid` (50%) unless the account is insolvent or below `dustEquity` (5 USDG). The bidder must pass its own IM check after the takeover, and `liquidationPenalty` (1%) goes to the InsuranceFund.
+Liquidations run in the `AuctionHouse`; its parameters live in `RiskParams`. An account becomes liquidatable when `equity < MM`. Anyone can start a Dutch auction, in which bidders take over a fraction of the account's positions, collateral and cash at a discount that grows linearly from `startDiscount` (2%) to `maxDiscount` (12%) over `auctionDuration` (30 minutes). A bid takes at most `maxFractionPerBid` (50%) unless the account is insolvent or below `dustEquity` (5 USDG). The bidder must pass its own IM check after the takeover, and `liquidationPenalty` (1%) goes to the InsuranceFund.
 
 Auctions pause while the underlying is in a WEEKEND session or HALTED. The weekend shock range is wider precisely so that accounts reach Monday without a fire sale into a market with no price.
 
