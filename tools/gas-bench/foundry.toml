@@ -1,0 +1,9 @@
+[profile.default]
+src = "."
+out = "out"
+libs = []
+solc_version = "0.8.30"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 1000000
+via_ir = true

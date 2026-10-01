@@ -26,9 +26,7 @@ This page records every gas number Novation publishes: what was measured, on whi
 | `KernelReference` (checked Solidity twin) | [`0xB7d9232c8ff46b4950d85ed639908c86C08750C6`](https://explorer.testnet.chain.robinhood.com/address/0xB7d9232c8ff46b4950d85ed639908c86C08750C6) | [create](https://explorer.testnet.chain.robinhood.com/tx/0xd2d6eff91925b66072a4f80d84b98dc44ff31e5e01374a8cecdcc0309485569f) |
 | Hand-optimized Solidity baseline (`BSMarginSol`) | [`0x9F5a98A1E678b124998328cfa0056c90720ceCEe`](https://explorer.testnet.chain.robinhood.com/address/0x9F5a98A1E678b124998328cfa0056c90720ceCEe) | benchmark contract, not part of the protocol |
 
-<!-- FILL: publish BSMarginSol.sol and its benchmark script under tools/gas-bench/ and link them here -->
-
-The baseline's source is not in this repository yet; it will be published with its benchmark script under `tools/gas-bench/`. It computes the same 39-scenario Black-Scholes grid with the same integer algorithms (Abramowitz-Stegun CDF, Taylor `exp`, atanh-series `ln`), and the same correlated and per-underlying worst losses. It was written for gas: unchecked arithmetic after input validation, Horner steps with inlined constants, per-position values hoisted out of the scenario loop, no assembly. It leaves out the short-option minimum, which the production kernel computes.
+The baseline's source is [`tools/gas-bench/BSMarginSol.sol`](../tools/gas-bench/BSMarginSol.sol), and the script that measures it is [`tools/gas-bench/bench.py`](../tools/gas-bench/bench.py). It computes the same 39-scenario Black-Scholes grid with the same integer algorithms (Abramowitz-Stegun CDF, Taylor `exp`, atanh-series `ln`), and the same correlated and per-underlying worst losses. It was written for gas: unchecked arithmetic after input validation, Horner steps with inlined constants, per-position values hoisted out of the scenario loop, no assembly. It leaves out the short-option minimum, which the production kernel computes.
 
 ## Execution gas of one margin call
 
