@@ -1045,6 +1045,36 @@ contract ClearinghouseSettlementTest is Fixture {
         _assertSolvent();
     }
 
+    /// A socialized remainder with a sub-unit part becomes a debt in whole USDG units, so the
+    /// account's later cash (or a deficit sale) can repay it all and the account isn't held in
+    /// deficit for good by a rest below one unit.
+    function test_socializedDebtHasNoSubUnitRest() public {
+        (uint256 v, uint256 b) = _nakedShortSold();
+        _settleAt(address(nvda), 300.12345678e18); // owes 5 x 120.12345678 = 600.6172839
+        ch.settleAccount(v, e);
+        ch.settleAccount(b, e);
+        uint256 rem = 600.6172839e18 - 492e18; // its cash was 450 + 42
+        assertEq(_pending(e), rem);
+        assertGt(rem % 1e12, 0);
+
+        int256 eq0 = ch.accountState(v).equity;
+        ch.socializeRemainder(v, e);
+        uint256 owed = rem - rem % 1e12 + 1e12; // rounded up to a whole unit
+        _assertBuckets(v, e, 0, 0, owed);
+        assertEq(ch.accountState(v).equity, eq0 - int256(owed - rem)); // the rounding is the defaulter's
+        _assertSolvent();
+
+        _deposit(bidder, v, address(usdg), 200 * USDG); // later cash
+        uint256 fund0 = insurance.balanceWad();
+        ch.repayDeficit(v);
+        _assertBuckets(v, e, 0, 0, 0);
+        assertEq(insurance.balanceWad(), fund0 + owed);
+        assertApproxEqAbs(ch.cashOf(v), 200e18 - owed, 2); // index-scaled cash, below 1e18 now
+        vm.prank(alice);
+        ch.withdraw(v, address(usdg), 91 * USDG, alice);
+        _assertSolvent();
+    }
+
     /// alice's naked short settles at 300 with an empty fund: 108 pending; NVDA then prints 250.
     function _defaultAt300(uint256 v, uint256 b) internal {
         _settleAt(address(nvda), 300e18);

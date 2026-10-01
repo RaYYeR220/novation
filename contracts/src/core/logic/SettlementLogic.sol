@@ -206,7 +206,10 @@ library SettlementLogic {
     /// it then). Any cash that reached the account repays the deficit first.
     ///
     /// The defaulter is not let off: the socialized amount and the fund's bridge (written off in
-    /// the fund's books) become its socializedDebt, still part of its deficit. It keeps blocking
+    /// the fund's books) become its socializedDebt, still part of its deficit, rounded up to a
+    /// whole USDG unit: the fund is repaid in whole units, so a sub-unit rest could never be repaid
+    /// and would keep the account in deficit for good (the deficit total grows by that rounding,
+    /// less than one unit, against the defaulter). It keeps blocking
     /// withdrawals and opening and is repaid to the fund from any cash the account gets later, a
     /// pending claim included (repayDeficit).
     ///
@@ -245,14 +248,16 @@ library SettlementLogic {
             $.impaired[expiry] = true;
         }
 
-        // the expiry's books are cleared; the account's deficit total is unchanged
+        // the expiry's books are cleared; the account keeps owing it all, in whole USDG units
         uint256 bridged = $.defBridged[id][expiry];
+        uint256 owed = _ceilToUnit(rem + bridged, d.usdgScale);
         $.cashIndex = newIndex;
         $.pool[expiry] += toPool;
         $.pending[expiry] -= rem;
         $.defPending[id][expiry] = 0;
         $.defBridged[id][expiry] = 0;
-        $.socializedDebt[id] += rem + bridged;
+        $.socializedDebt[id] += owed;
+        $.accounts[id].deficitTotal += owed - rem - bridged;
         _untrack($, id, expiry);
 
         emit IClearinghouse.LossSocialized(expiry, toPool, newIndex);
