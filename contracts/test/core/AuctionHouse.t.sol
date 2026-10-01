@@ -363,6 +363,14 @@ contract AuctionHouseTest is Fixture {
 
         _setPrice(address(spy), 600e18);
         ah.startLiquidation(a);
+        // a running auction takes no bids while that token has no price either: the account is
+        // honest, only its collateral's feed is out
+        _setPrice(address(spy), 0);
+        assertTrue(ch.accountState(a).liquidatable);
+        vm.prank(carol);
+        vm.expectRevert(AuctionHouse.MarketClosed.selector);
+        ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
+        _setPrice(address(spy), 600e18);
         // ... and bids stop again while it is halted (a fresh price is not enough)
         spy.setOraclePaused(true);
         vm.prank(carol);
