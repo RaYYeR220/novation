@@ -18,7 +18,7 @@ import type { WhatIfArgs } from '@/lib/client/hooks';
 import type { AccountState, AgentGrant, Quote, Underlying, Vault, Venue } from '@/lib/client/types';
 import { cn } from '@/lib/cn';
 import { fmtDays, fmtFee, fmtNumber, fmtSeries, fmtSeriesShort, fmtSigned } from '@/lib/format';
-import { fmtCloseEt } from '@/lib/nyse';
+import { fmtCloseEt, fmtEt } from '@/lib/nyse';
 import { perContract } from '@/lib/margin';
 import type { ChainSeries, Side } from './options-chain';
 
@@ -145,7 +145,9 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
       ? `The ${p.vault.kind === 'coveredCall' ? 'covered-call' : 'put-write'} vault fills now at the ${p.side === 'buy' ? 'ask' : 'bid'}, ${fmtNumber(p.price ?? 0)}.`
       : p.demo
         ? `Best RFQ quote: the demo maker at mid, ${fmtNumber(p.price ?? 0)}.`
-        : `No RFQ maker relay is connected here: the what-if prices at the kernel mark, ${fmtNumber(p.price ?? 0)}, and the ticket can't be sent.`;
+        : quote?.rfq
+          ? `Signed quote from maker account ${quote.rfq.makerId}, valid until ${fmtEt(quote.rfq.expiresAt, { seconds: true })}.`
+          : `No RFQ maker relay is answering: the what-if prices at the kernel mark, ${fmtNumber(p.price ?? 0)}, and the ticket can't be sent.`;
   const noVault = !p.vault;
   const signerNote = grant
     ? `${grant.label} may leave at most ${fmtNumber(grant.maxWorstLoss)} of worst-case loss (now ${fmtNumber(now?.im ?? grant.used)}) and pay at most ${fmtNumber(grant.maxPremiumPerTrade)} premium per trade.`
@@ -172,6 +174,11 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
     }
     if (net.status === 'disconnected') {
       toast({ tone: 'neutral', title: 'Connect a wallet to sign', description: 'Use Connect wallet in the top bar.' });
+      return;
+    }
+    if (p.venue === 'rfq' && quote?.rfq && !grant) {
+      const qty = Number(p.qty);
+      void live.run(label, (c) => c.fillRfq(p.accountId, series.id, p.side, qty));
       return;
     }
     if (p.venue === 'rfq') {
@@ -385,8 +392,8 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
                 ? 'Refused before signing. Change the ticket and the check runs again.'
                 : p.demo
                 ? 'Demo mode: the ticket is checked, nothing is sent.'
-                : p.venue === 'rfq'
-                  ? 'Checked on chain. An RFQ fill needs a signed maker quote, which this build has no relay for.'
+                : p.venue === 'rfq' && !quote?.rfq
+                  ? 'Checked on chain. An RFQ fill needs a signed maker quote, and no relay is answering.'
                   : 'Your wallet signs; the Clearinghouse re-runs the same margin check on chain.'}
           </p>
           <p className="text-t12 text-navy-200">Stock tokens are not available to US persons.</p>

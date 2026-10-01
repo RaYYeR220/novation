@@ -24,6 +24,8 @@ export interface Quote {
   afterGrid?: number[];
   /** True when any figure here (margin, after-trade grid) is a float estimate rather than the kernel's own output. */
   approx?: boolean;
+  /** Live RFQ tickets: the signed maker quote the premium comes from, and when it expires (unix seconds). */
+  rfq?: { maker: string; makerId: number; expiresAt: number };
 }
 export type Venue = 'vault' | 'rfq';
 export interface WhatIfOptions { agent?: string; venue?: Venue; }

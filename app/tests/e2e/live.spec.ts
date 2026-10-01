@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { open } from './helpers';
-import { MOCK_ACCOUNT, mockChain } from './mock-chain';
+import { MOCK_ACCOUNT, MOCK_MAKER_ID, mockChain, mockRelay } from './mock-chain';
 
 const DEMO_NOTE = 'Demo data: computed with the Novation kernel reference.';
 const LIVE_NOTE = 'Live data: read from the Novation contracts on Robinhood Chain testnet.';
@@ -73,6 +73,17 @@ test.describe('live mode on a mocked RPC', () => {
     await expect(page.getByRole('table', { name: /Margin now and after/ })).toContainText('2,000.93');
     await expect(page.getByRole('button', { name: /^Buy 1 NVDA/ })).toBeEnabled();
     await expect(page.getByText('Your wallet signs; the Clearinghouse re-runs the same margin check on chain.')).toBeVisible();
+  });
+
+  test("an RFQ ticket takes the relay's signed quote and checks it on chain", async ({ page }) => {
+    await mockRelay(page, 1.75);
+    await open(page, `/app/trade?data=live&account=${MOCK_ACCOUNT}`);
+    // nobody quotes the 220 put on the vault side, so the ticket goes to RFQ
+    await page.getByRole('button', { name: 'Buy NVDA 220 put: no ask quoted' }).click();
+    await expect(page.getByText(`Signed quote from maker account ${MOCK_MAKER_ID}`, { exact: false })).toBeVisible();
+    const ticket = page.locator('dl').filter({ hasText: 'You pay' });
+    await expect(ticket).toContainText('1.75');
+    await expect(page.getByRole('button', { name: /^Buy 1 NVDA/ })).toBeEnabled();
   });
 
   test('portfolio, earn, risk and agents render chain data, with honest empty states', async ({ page }) => {

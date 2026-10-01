@@ -62,6 +62,9 @@ import {
   simulateMint,
   simulateRequestRedeem,
   simulateRevokeAgent,
+  simulateRfqFill,
+  verifyQuote,
+  getRfqDomain,
   simulateVaultBuy,
   simulateVaultDeposit,
   simulateVaultSellBack,
@@ -73,6 +76,7 @@ import {
   toWad,
   tokenOf,
   tradeFee,
+  withGasHeadroom,
   type AccountState as ChainState,
   type AgentPolicy,
   type GlobalParams,
@@ -83,8 +87,9 @@ import {
   type Refusal as ChainRefusal,
   type SeriesInfo,
   type VaultState,
+  type RfqQuote,
 } from '@novation/sdk';
-import { maxUint256, zeroAddress, type Address, type Hash, type PublicClient, type WalletClient } from 'viem';
+import { maxUint256, zeroAddress, type Address, type Hash, type Hex, type PublicClient, type WalletClient } from 'viem';
 import gasJson from '../../fixtures/gas.json';
 import type {
   AccountExpiry,
@@ -118,6 +123,36 @@ import type {
 /** The chain live mode reads: Robinhood Chain testnet, where the contracts are deployed. */
 export const LIVE_CHAIN = robinhoodChainTestnet;
 export const LIVE_RPC = process.env.NEXT_PUBLIC_RH_TESTNET_RPC || robinhoodChainTestnet.rpcUrls.default.http[0];
+/** The RFQ maker relay (the mm-bot handler): GET {url}/quotes?series=&side=&qty= returns signed quotes. */
+export const RFQ_URL = process.env.NEXT_PUBLIC_RFQ_URL || '/api/rfq';
+
+type SignedQuote = { quote: RfqQuote; signature: Hex; premium: bigint; expiresAt: number };
+type RelayAnswer = SignedQuote | { refusal: { code: string; message: string } } | undefined;
+
+/** One side of the relay's JSON answer, back into the RfqVenue.Quote struct. */
+function parseRelayQuote(x: {
+  quote: { signer: string; makerId: string; seriesId: number | string; makerSells: boolean; maxQty: string; price: string; deadline: string; nonce: string };
+  signature: string;
+  premium: string;
+  expiresAt: number;
+}): SignedQuote {
+  const q = x.quote;
+  return {
+    quote: {
+      signer: q.signer as Address,
+      makerId: BigInt(q.makerId),
+      seriesId: Number(q.seriesId),
+      makerSells: q.makerSells,
+      maxQty: BigInt(q.maxQty),
+      price: BigInt(q.price),
+      deadline: BigInt(q.deadline),
+      nonce: BigInt(q.nonce),
+    },
+    signature: x.signature as Hex,
+    premium: BigInt(x.premium),
+    expiresAt: Number(x.expiresAt),
+  };
+}
 
 type ChainSeries = Series & { bid: number; ask: number; delta: number; iv: number; mark?: number };
 type AccountData = Awaited<ReturnType<NovationClient['account']>>;
@@ -441,6 +476,11 @@ export class ChainClient implements NovationClient {
       if (p !== undefined) premiumW = p;
       else refusal = why ? appRefusal(why, { before }) : { code: 'VaultNotLive', message: refusalMessage('VaultNotLive') };
     }
+    // an RFQ ticket takes the relay's signed quote for this size, when a relay answers
+    const relay = opts.venue === 'rfq' ? await this.rfqQuote(s.id, qty > 0n ? 'buy' : 'sell', Math.abs(qtyDelta)) : undefined;
+    const signed = relay && 'quote' in relay ? relay : undefined;
+    if (signed) premiumW = signed.premium;
+    else if (relay && 'refusal' in relay) refusal = { code: relay.refusal.code, message: `The maker relay quotes no ${qty > 0n ? 'ask' : 'bid'}: ${relay.refusal.message}` };
     const fee = tradeFee(g, size, spot, premiumW);
     const cashDelta = takerCashDelta(qty, premiumW, fee);
 
@@ -460,11 +500,12 @@ export class ChainClient implements NovationClient {
       }
     };
     const simulate = async (): Promise<Refusal | undefined> => {
-      if (refusal || !vault) return undefined;
+      if (refusal || (!vault && !signed)) return undefined;
       const signer = agent ?? owner;
       try {
-        if (qty > 0n) await simulateVaultBuy(this.ctx, signer, vault.address, s.id, size, premiumW, id);
-        else await simulateVaultSellBack(this.ctx, signer, vault.address, s.id, size, premiumW, id);
+        if (signed) await simulateRfqFill(this.ctx, signer, signed.quote, signed.signature, id, size);
+        else if (qty > 0n) await simulateVaultBuy(this.ctx, signer, vault!.address, s.id, size, premiumW, id);
+        else await simulateVaultSellBack(this.ctx, signer, vault!.address, s.id, size, premiumW, id);
         return undefined;
       } catch (e) {
         if (!(e instanceof RefusalError)) throw e;
@@ -477,7 +518,7 @@ export class ChainClient implements NovationClient {
       simulate(),
     ]);
 
-    if (vault) {
+    if (vault || signed) {
       refusal = refusal ?? simulated;
     } else if (!refusal) {
       refusal = await this.takerChecks({ id, s, m, qty, size, premiumW, fee, before, after, raw, g, now, policy, agent, cashShort });
@@ -490,7 +531,43 @@ export class ChainClient implements NovationClient {
       ...(refusal ? { refusal } : {}),
       afterGrid: grid.cells.map(fromWad),
       approx: false,
+      ...(signed ? { rfq: { maker: signed.quote.signer, makerId: Number(signed.quote.makerId), expiresAt: signed.expiresAt } } : {}),
     };
+  }
+
+  /**
+   * A signed maker quote for `qty` contracts of the series from the RFQ relay, checked against this
+   * deployment's venue domain; the relay's refusal when it won't quote; undefined when no relay
+   * answers. Quotes are kept until shortly before they expire, so the ticket fills the one it showed.
+   */
+  async rfqQuote(seriesId: number, side: 'buy' | 'sell', qty: number): Promise<RelayAnswer> {
+    const key = `rfq:${seriesId}:${side}:${qty}`;
+    const hit = this.memos.get(key) as { at: number; p: Promise<RelayAnswer> } | undefined;
+    if (hit) {
+      const v = await hit.p;
+      if (!v || !('quote' in v) || v.expiresAt - 10 > Date.now() / 1000) return v;
+    }
+    const p = (async (): Promise<RelayAnswer> => {
+      try {
+        const base = RFQ_URL.replace(/\/$/, '');
+        const r = await fetch(`${base}/quotes?series=${seriesId}&side=${side}&qty=${qty}`, { headers: { accept: 'application/json' } });
+        if (r.status !== 200 && r.status !== 422) return undefined;
+        const j = (await r.json()) as { quotes?: Parameters<typeof parseRelayQuote>[0][]; refusals?: { side: string; code: string; message: string }[] };
+        const raw = j.quotes?.find((x) => (x as { side?: string }).side === side);
+        if (raw) {
+          const q = parseRelayQuote(raw);
+          if (q.quote.seriesId !== seriesId || q.quote.makerSells !== (side === 'buy')) return undefined;
+          if (!(await verifyQuote(q.quote, q.signature, getRfqDomain(this.ctx)))) return undefined;
+          return q;
+        }
+        const no = j.refusals?.find((x) => x.side === side);
+        return no ? { refusal: { code: no.code, message: no.message } } : undefined;
+      } catch {
+        return undefined;
+      }
+    })();
+    this.memos.set(key, { at: Date.now(), p });
+    return p;
   }
 
   /** TradeLogic's checks on the taker side, in its order, on chain figures. */
@@ -1011,7 +1088,9 @@ export class ChainClient implements NovationClient {
   private async send(sim: Promise<{ request: unknown }>): Promise<Hash> {
     const { wallet } = this.signer();
     const { request } = await sim;
-    const hash = await wallet.writeContract(request as Parameters<WalletClient['writeContract']>[0]);
+    // the wallet signs; gas carries the SDK's headroom over the estimate
+    const req = await withGasHeadroom(this.ctx.client, request as Parameters<WalletClient['writeContract']>[0]);
+    const hash = await wallet.writeContract(req);
     const rc = await this.ctx.client.waitForTransactionReceipt({ hash });
     this.invalidate();
     if (rc.status !== 'success') {
@@ -1116,6 +1195,15 @@ export class ChainClient implements NovationClient {
     const v = await this.vaultFor(s);
     if (!v) throw new Error('No live vault buys this series back.');
     return this.send(simulateVaultSellBack(this.ctx, account, v.address, seriesId, toWad(qty), toWad(Number(minPremium.toFixed(6))), id));
+  }
+
+  /** Fills the relay's signed quote the ticket showed (same series, side and size). */
+  async fillRfq(id: number, seriesId: number, side: 'buy' | 'sell', qty: number): Promise<Hash> {
+    const { account } = this.signer();
+    const q = await this.rfqQuote(seriesId, side, qty);
+    if (!q || !('quote' in q)) throw new Error('No signed RFQ quote for this ticket: the relay is not answering.');
+    if (q.expiresAt <= Date.now() / 1000) throw new Error('The RFQ quote expired; the ticket asks for a new one.');
+    return this.send(simulateRfqFill(this.ctx, account, q.quote, q.signature, id, toWad(qty)));
   }
 
   /** ERC-4626 deposit of `amount` of the vault's asset, to the connected wallet. */

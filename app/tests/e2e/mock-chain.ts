@@ -35,7 +35,11 @@ import {
   riskParamsAbi,
   seriesRegistryAbi,
   vaultQuoteLensAbi,
+  rfqDomain,
+  signQuote,
+  toWad,
 } from '@novation/sdk';
+import { privateKeyToAccount } from 'viem/accounts';
 
 const W = 10n ** 18n;
 const d = getDeployment(46630);
@@ -434,4 +438,37 @@ export async function mockChain(page: Page) {
     (url) => url.hostname === EXPLORER_HOST,
     (route) => route.fulfill({ status: 404, body: '{}' }),
   );
+}
+
+/** anvil's well-known third account: a throwaway maker key that holds nothing anywhere. */
+const MAKER_KEY = '0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a';
+export const MOCK_MAKER_ID = 7;
+
+/** Serves the RFQ relay's GET /quotes with a quote that maker signs for whatever is asked. */
+export async function mockRelay(page: Page, price = 1.75) {
+  const maker = privateKeyToAccount(MAKER_KEY);
+  await page.route('**/api/rfq/quotes?*', async (route) => {
+    const url = new URL(route.request().url());
+    const series = Number(url.searchParams.get('series'));
+    const side = url.searchParams.get('side') === 'sell' ? 'sell' : 'buy';
+    const qty = toWad(url.searchParams.get('qty') ?? '1');
+    const q = {
+      signer: maker.address,
+      makerId: BigInt(MOCK_MAKER_ID),
+      seriesId: series,
+      makerSells: side === 'buy',
+      maxQty: qty,
+      price: toWad(price),
+      deadline: BigInt(MOCK_NOW + 60),
+      nonce: 12345n,
+    };
+    const signature = await signQuote(maker, q, rfqDomain(46630, d.rfq));
+    const premium = (qty * q.price) / W;
+    const quote = Object.fromEntries(Object.entries(q).map(([k, v]) => [k, typeof v === 'bigint' ? v.toString() : v]));
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ series, quotes: [{ side, quote, signature, premium: premium.toString(), expiresAt: Math.floor(Date.now() / 1000) + 60 }], refusals: [] }),
+    });
+  });
 }
