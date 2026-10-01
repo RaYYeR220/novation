@@ -13,7 +13,7 @@ import {ISeriesRegistry} from "../interfaces/ISeriesRegistry.sol";
 import {IMarketDataHub} from "../interfaces/IMarketDataHub.sol";
 import {IRiskParams, GlobalParams, UnderlyingParams} from "../interfaces/IRiskParams.sol";
 import {IAggregatorV3} from "../interfaces/IAggregatorV3.sol";
-import {BlackScholes} from "../libraries/BlackScholes.sol";
+import {VaultPricing} from "./VaultPricing.sol";
 import {FixedPointMath as F} from "../libraries/FixedPointMath.sol";
 import {Position, Series, Session, WAD} from "../types/Types.sol";
 
@@ -605,9 +605,8 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
     /// near-worthless lottery tickets that cost a taker nothing and pin a series slot, and no
     /// near-the-money risk beyond the strategy's intent.
     function _checkOfferBand(Series memory s, uint256 spot, int256 rate) private view {
-        (int256 delta,,,) =
-            BlackScholes.greeks(spot, s.strike, s.expiry - block.timestamp, hub.markVol(underlying), rate, s.isCall);
-        uint256 a = delta < 0 ? uint256(-delta) : uint256(delta);
+        uint256 a =
+            VaultPricing.absDelta(spot, s.strike, s.expiry - block.timestamp, hub.markVol(underlying), rate, s.isCall);
         VaultConfig storage c = _cfg;
         if (a < c.minDelta || a > c.maxDelta) revert OutsideOfferBand(a);
     }
@@ -629,10 +628,8 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         if (after_ != 0 && after_ < minQty) revert DustPosition(vaultId, -int256(after_));
     }
 
-    /// @dev Single-option pricing runs in Solidity (BlackScholes.price, bit-identical to the risk
-    /// kernel's bsQuote price and to the mark it gives each position): on Robinhood Chain one
-    /// evaluation measured 26.9k gas here against 46.5k through an uncached call into the Stylus
-    /// kernel. The kernel pays off on portfolio margin, not on one price.
+    /// @dev Single-option pricing runs in Solidity, in the linked VaultPricing library (see there);
+    /// the kernel pays off on portfolio margin, not on one price.
     function _premium(
         Series memory s,
         uint256 spot,
@@ -644,22 +641,26 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         int256 rate
     ) private view returns (uint256) {
         VaultConfig storage c = _cfg;
-        uint256 vol = hub.markVol(underlying);
-        uint256 volQ;
+        uint256 utilTerm;
         {
-            int256 lnm = F.lnWad(F.divWad(int256(uint256(s.strike)), int256(spot)));
-            uint256 m = lnm < 0 ? uint256(-lnm) : uint256(lnm);
             uint256 locked = Math.ceilDiv(lockedAfterWad, _assetScale);
             uint256 total = locked + _sub(_free(lockedAfterWad, b.backingWad), b.queued);
             uint256 util = total == 0 ? 0 : locked * WAD / total;
-            volQ =
-                _mulWad(vol, WAD + _mulWad(c.skewSlope, m) + _mulWad(c.utilSlope, util)) + c.sessionVolAdd[uint8(sess)];
+            utilTerm = _mulWad(c.utilSlope, util);
         }
-        uint256 tau = s.expiry - block.timestamp;
-        uint256 px = BlackScholes.price(spot, s.strike, tau, volQ, rate, s.isCall);
+        uint256 px = VaultPricing.unitPrice(
+            spot,
+            s.strike,
+            s.expiry - block.timestamp,
+            hub.markVol(underlying),
+            c.skewSlope,
+            utilTerm,
+            c.sessionVolAdd[uint8(sess)],
+            rate,
+            s.isCall,
+            takerBuys
+        );
         if (takerBuys) return F.mulWadUp(F.mulWadUp(qty, px), WAD + c.spread);
-        uint256 mark = BlackScholes.price(spot, s.strike, tau, vol, rate, s.isCall);
-        if (mark < px) px = mark;
         return _mulWad(_mulWad(qty, px), WAD - c.spread);
     }
 
