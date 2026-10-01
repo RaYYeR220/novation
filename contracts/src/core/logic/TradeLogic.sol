@@ -27,6 +27,7 @@ library TradeLogic {
         bool opening;
         bool restricted; // reducing side while opening is blocked for its account
         bool lastShortClosed; // bought back a short and left the account with no position at all
+        int256 newQty; // position in the traded series after the trade
         int256 preEquity; // reducing and agent-acted sides only
         uint256 preIm; // reducing and agent-acted sides only
         uint256 feePaid;
@@ -44,12 +45,17 @@ library TradeLogic {
         if (t.takerId == t.makerId) revert CHErrors.SelfTrade();
         GlobalParams memory g = d.params.globals();
         uint256 absQty = _abs(t.qty);
-        if (absQty == 0 || absQty < g.minTradeQty) revert CHErrors.QtyTooSmall();
+        if (absQty == 0) revert CHErrors.QtyTooSmall();
 
-        // 2. who acts for each side, and what its position becomes
+        // 2. who acts for each side, and what its position becomes. Below minTradeQty a trade may
+        // only close a position out (one left below the minimum when governance raised it), so no
+        // position is ever stuck; every resulting position is flat or at least the minimum.
         UnderlyingParams memory up = d.params.underlying(s.underlying);
-        Side memory tk = _side($, t.takerId, t.takerActor, t.seriesId, t.qty, up.index, g.minTradeQty);
-        Side memory mk = _side($, t.makerId, t.makerActor, t.seriesId, -t.qty, up.index, g.minTradeQty);
+        Side memory tk = _side($, t.takerId, t.takerActor, t.seriesId, t.qty, up.index);
+        Side memory mk = _side($, t.makerId, t.makerActor, t.seriesId, -t.qty, up.index);
+        if (absQty < g.minTradeQty && tk.newQty != 0 && mk.newQty != 0) revert CHErrors.QtyTooSmall();
+        _noDust(tk, g.minTradeQty);
+        _noDust(mk, g.minTradeQty);
 
         // 3. opening gates; while opening is blocked, reducing sides are held to §5.3 after the trade
         bool closedToOpening = !up.enabled || d.params.openingPaused() || d.hub.session(s.underlying) == Session.HALTED;
@@ -104,18 +110,14 @@ library TradeLogic {
     }
 
     /// @dev Authorises `actor` for `id` and classifies the side. The owner (never the zero address)
-    /// acts freely; an agent needs a live policy that allows the series' underlying. The resulting
-    /// position must be flat or at least minTradeQty. A side opens when it grows |qty| or moves the
-    /// position to the other side of zero (a flip is a close plus an open).
-    function _side(
-        CHStorage storage $,
-        uint256 id,
-        address actor,
-        uint32 seriesId,
-        int256 delta,
-        uint8 uIndex,
-        uint256 minQty
-    ) private view returns (Side memory x) {
+    /// acts freely; an agent needs a live policy that allows the series' underlying. A side opens
+    /// when it grows |qty| or moves the position to the other side of zero (a flip is a close plus
+    /// an open).
+    function _side(CHStorage storage $, uint256 id, address actor, uint32 seriesId, int256 delta, uint8 uIndex)
+        private
+        view
+        returns (Side memory x)
+    {
         x.id = id;
         x.actor = actor;
         x.delta = delta;
@@ -129,8 +131,13 @@ library TradeLogic {
         uint256 slot1 = $.posIndex[id][seriesId];
         int256 oldQty = slot1 == 0 ? int256(0) : int256($.positions[id][slot1 - 1].qty);
         int256 newQty = oldQty + delta;
-        if (newQty != 0 && _abs(newQty) < minQty) revert CHErrors.DustPosition(id, newQty);
+        x.newQty = newQty;
         x.opening = newQty != 0 && (_abs(newQty) > _abs(oldQty) || (oldQty > 0) != (newQty > 0));
+    }
+
+    /// @dev The side's position must end flat or at least minTradeQty.
+    function _noDust(Side memory x, uint256 minQty) private pure {
+        if (x.newQty != 0 && _abs(x.newQty) < minQty) revert CHErrors.DustPosition(x.id, x.newQty);
     }
 
     /// @dev Opening is blocked on a disabled underlying, while paused or HALTED, and for an account

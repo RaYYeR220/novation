@@ -4,6 +4,7 @@ pragma solidity 0.8.30;
 import {VaultFixture, DeficitSaleRecorder} from "./VaultFixture.sol";
 import {CHErrors} from "../../src/core/ClearinghouseStorage.sol";
 import {AccountState} from "../../src/interfaces/IClearinghouse.sol";
+import {GlobalParams} from "../../src/interfaces/IRiskParams.sol";
 import {OptionVaultBase, VaultConfig} from "../../src/venues/OptionVaultBase.sol";
 import {CoveredCallVault} from "../../src/venues/CoveredCallVault.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -506,6 +507,29 @@ contract CoveredCallVaultTest is VaultFixture {
         assertEq(ch.positionsOf(vid).length, 0);
         assertEq(vault.lockedAssets(), 0);
         assertEq(vault.freeAssets(), 10e18);
+    }
+
+    /// The vault never holds a dust short, and one left below minTradeQty by a later increase of
+    /// it can still be bought back in full.
+    function test_shortBelowRaisedMinimumCanBeBoughtBack() public {
+        _vaultDeposit(vault, alice, 10e18);
+        _buy(vault, call190, 1e18);
+        vm.startPrank(taker);
+        // a buyback leaving the vault 0.005 short is refused up front
+        vm.expectRevert(abi.encodeWithSelector(CHErrors.DustPosition.selector, vid, -int256(0.005e18)));
+        vault.sellBack(call190, 0.995e18, 0, takerId);
+        vault.sellBack(call190, 0.95e18, 0, takerId); // the vault keeps 0.05 short
+        vm.stopPrank();
+
+        GlobalParams memory g = params.globals();
+        g.minTradeQty = 0.1e18;
+        params.setGlobals(g);
+        _assertPos(vid, call190, -0.05e18);
+
+        vm.prank(taker);
+        vault.sellBack(call190, 0.05e18, 0, takerId); // below the new minimum, but it closes both out
+        assertEq(ch.positionsOf(vid).length, 0);
+        assertEq(ch.positionsOf(takerId).length, 0);
     }
 
     function test_inflationAttackMitigated() public {

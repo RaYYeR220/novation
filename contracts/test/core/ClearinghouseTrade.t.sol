@@ -904,6 +904,47 @@ contract ClearinghouseTradeTest is Fixture {
         );
     }
 
+    /// When governance raises minTradeQty, a position left below it can still be closed out, with
+    /// a trade below the new minimum; nothing else may trade below it or leave a position below it.
+    function test_positionBelowRaisedMinimumCanBeClosed() public {
+        uint256 a = _fund(alice, 1000 * USDG, 0);
+        uint256 b = _fund(bob, 1000 * USDG, 0);
+        uint256 c = _fund(carol, 1000 * USDG, 0);
+        uint256 d = _fund(_user("dave"), 1000 * USDG, 0);
+        _trade(a, b, call180, 0.05e18, 0.4e18); // alice long 0.05, bob short 0.05
+        _trade(c, d, call180, 1e18, 8e18); // carol long 1, dave short 1
+
+        GlobalParams memory g = params.globals();
+        g.minTradeQty = 0.1e18;
+        params.setGlobals(g);
+
+        address dave = ch.ownerOf(d);
+        // adding below the minimum, on both sides: refused
+        _expectTradeRevert(
+            _tp(c, carol, d, dave, call180, 0.05e18, 0.4e18), abi.encodeWithSelector(CHErrors.QtyTooSmall.selector)
+        );
+        // alice can close out, but not into a fresh account that would be left below the minimum
+        uint256 x = _fund(_user("erin"), 1000 * USDG, 0);
+        _expectTradeRevert(
+            _tp(a, alice, x, _user("erin"), call180, -0.05e18, 0.3e18),
+            abi.encodeWithSelector(CHErrors.DustPosition.selector, x, int256(0.05e18))
+        );
+        // closing out against a counterparty that stays above the minimum works for taker and maker
+        _trade(a, c, call180, -0.05e18, 0.3e18); // alice sells her 0.05 to carol
+        assertEq(ch.positionsOf(a).length, 0);
+        _assertPos(c, call180, 1.05e18);
+        _trade(b, d, call180, 0.05e18, 0.4e18); // bob buys back his 0.05 from dave
+        assertEq(ch.positionsOf(b).length, 0);
+        _assertPos(d, call180, -1.05e18);
+        // a sub-minimum trade that closes nothing out stays refused
+        _expectTradeRevert(
+            _tp(c, carol, d, dave, call180, -0.05e18, 0.3e18), abi.encodeWithSelector(CHErrors.QtyTooSmall.selector)
+        );
+        _trade(c, d, call180, -1.05e18, 8e18); // carol and dave close the rest
+        assertEq(ch.positionsOf(c).length, 0);
+        assertEq(ch.openInterest(call180), 0);
+    }
+
     function test_openingOnDisabledUnderlyingReverts() public {
         (uint256 a, uint256 b) = _collar();
         uint256 c = _fund(carol, 1000 * USDG, 0);
