@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { getAddress, type PublicClient } from 'viem';
+import { createWalletClient, getAddress, http, type PublicClient } from 'viem';
 import {
   baseSession,
   createNovation,
@@ -30,6 +30,9 @@ import {
   tradeFee,
   wadToToken,
   WAD,
+  GAS_HEADROOM_PERCENT,
+  padGas,
+  sendRequest,
   type UnderlyingParams,
 } from '../../src/index';
 
@@ -45,6 +48,11 @@ describe('units', () => {
     expect(wadToToken(1_999_999_999_999_999_999n, 6)).toBe(1_999_999n);
     expect(mulWadUp(3n, WAD / 2n)).toBe(2n);
     expect(mulWadUp(0n, 5n)).toBe(0n);
+  });
+
+  it('pads gas estimates by a quarter', () => {
+    expect(padGas(100_000n)).toBe(125_000n);
+    expect(GAS_HEADROOM_PERCENT).toBe(125n);
   });
 
   it('takes the square root the way FixedPointMath.sqrtWad does', () => {
@@ -172,6 +180,14 @@ describe('events', () => {
     } as unknown as PublicClient;
     const ctx = { client, deployment: getDeployment(46630) };
     await expect(getEvents(ctx, { address: ctx.deployment.clearinghouse, abi: clearinghouseAbi, eventName: 'Traded', fromBlock: 0n })).rejects.toThrow('connection reset');
+  });
+});
+
+describe('sendRequest', () => {
+  it('refuses a wallet that would ask the node to sign', async () => {
+    const wallet = createWalletClient({ account: '0x00000000000000000000000000000000000000aa', chain: robinhoodChainTestnet, transport: http('http://127.0.0.1:1') });
+    const client = {} as PublicClient;
+    await expect(sendRequest(wallet, client, undefined, {} as never)).rejects.toThrow(/LocalAccount/);
   });
 });
 

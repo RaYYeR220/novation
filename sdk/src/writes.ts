@@ -197,10 +197,30 @@ export function simulateBidLiquidation(ctx: NovationContext, account: Who, id: b
 
 // ---------------------------------------------------------------- sending
 
+/** Gas headroom over the estimate, in percent. Black-Scholes inside the margin check costs a little
+ * more or less gas at a different block timestamp, so an exact estimate can run out by a few percent. */
+export const GAS_HEADROOM_PERCENT = 125n;
+
+/** `estimate` with the headroom added. */
+export function padGas(estimate: bigint): bigint {
+  return (estimate * GAS_HEADROOM_PERCENT) / 100n;
+}
+
 /**
- * Sends a simulated request and waits for it. A transaction that still reverts on chain (state
- * moved between simulation and inclusion) is replayed and thrown as RefusalError when the revert
- * is one we know.
+ * Estimates a simulated request's gas (from the request's own account) and returns it with the
+ * headroom set as `gas`. Every write should go out through this.
+ */
+export async function withGasHeadroom<R extends object>(client: PublicClient, request: R): Promise<R & { gas: bigint }> {
+  const estimate = await client.estimateContractGas(request as unknown as Parameters<PublicClient['estimateContractGas']>[0]);
+  return { ...request, gas: padGas(estimate) };
+}
+
+/**
+ * Signs a simulated request locally, sends it with gas headroom and waits for it. `wallet` must be
+ * bound to a LocalAccount (privateKeyToAccount): public RPCs such as Robinhood Chain testnet's refuse
+ * eth_sendTransaction, so nothing here asks the node to sign. A transaction that still reverts on
+ * chain (state moved between simulation and inclusion) is explained and thrown as RefusalError when
+ * the revert is one we know.
  */
 export async function sendRequest(
   wallet: WalletClient,
@@ -208,7 +228,12 @@ export async function sendRequest(
   ctx: NovationContext | undefined,
   request: Parameters<WalletClient['writeContract']>[0],
 ): Promise<{ hash: Hash; receipt: TransactionReceipt }> {
-  const hash = await wallet.writeContract(request);
+  const account = wallet.account;
+  if (!account || account.type !== 'local') {
+    throw new Error('sendRequest signs locally: pass a wallet client bound to a LocalAccount (viem/accounts privateKeyToAccount).');
+  }
+  const req = await withGasHeadroom(client, { ...request, account } as Parameters<WalletClient['writeContract']>[0]);
+  const hash = await wallet.writeContract(req);
   const receipt = await client.waitForTransactionReceipt({ hash });
   if (receipt.status !== 'success') {
     const why = ctx ? await explainTx(ctx, hash).catch(() => undefined) : undefined;

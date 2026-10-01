@@ -1,7 +1,7 @@
 import { inject } from 'vitest';
 import { createPublicClient, createWalletClient, defineChain, http, type Address, type PublicClient, type WalletClient } from 'viem';
 import { privateKeyToAccount, type PrivateKeyAccount } from 'viem/accounts';
-import { parseDeployment, type NovationContext } from '../../src/index';
+import { parseDeployment, sendRequest, type NovationContext } from '../../src/index';
 
 /** anvil's default accounts 1-3 (public test mnemonic): a taker, a maker and an agent. */
 const KEYS = [
@@ -50,11 +50,9 @@ export function local(): Local | null {
   };
 }
 
-/** Sends a simulated request and waits; throws if it reverts. */
+/** Signs a simulated request locally, with gas headroom, and waits; throws if it reverts. */
 export async function send(l: Local, wallet: WalletClient, request: unknown): Promise<`0x${string}`> {
-  const hash = await wallet.writeContract(request as Parameters<WalletClient['writeContract']>[0]);
-  const rc = await l.client.waitForTransactionReceipt({ hash });
-  if (rc.status !== 'success') throw new Error(`reverted: ${hash}`);
+  const { hash } = await sendRequest(wallet, l.client, l.ctx, request as Parameters<WalletClient['writeContract']>[0]);
   return hash;
 }
 
