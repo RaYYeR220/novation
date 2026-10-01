@@ -1,0 +1,155 @@
+# @novation/mcp
+
+An MCP server that lets any AI agent trade a Novation account inside an on-chain risk budget.
+
+The account owner grants an agent key an `AgentPolicy` on the clearinghouse: a cap on the account's worst-case loss (its initial margin after a trade), a premium cap per trade, a cap on the value one trade may give up against the mark, the underlyings it may touch and an expiry. The server holds that agent key and nothing else. Every trade it signs is simulated first, so a ticket the chain would refuse comes back to the agent as a structured `Refusal` (the contract's error name, its numbers and the rule in one sentence) instead of a failed transaction.
+
+It speaks MCP over stdio, so it works with any MCP client: a desktop assistant, an IDE, or your own agent loop.
+
+## Tools
+
+| Tool | What it does |
+|---|---|
+| `list_underlyings` | Every underlying with spot, session (`REGULAR`, `EXTENDED`, `WEEKEND`, `HOLIDAY`, `HALTED`), the halt reason if halted, mark vol, feed age, and whether this agent may trade it |
+| `get_chain` | Listed series for an underlying and expiry: strike, type, mark price and delta, open interest, and the vault's ask and bid for a quantity. Series the vault won't sell say why (type, tenor, distance from spot, delta band) |
+| `quote` | The vault's ask (buy) or bid (sell back) for a series and quantity, with the fee and the total |
+| `what_if_margin` | Cash, equity and initial margin before and after a hypothetical trade, from the clearinghouse's own `marginAfter`, plus every rule the trade will face (margin, risk budget, premium cap, value drain) and the refusal it would get |
+| `portfolio` | Account state, positions, collateral, and the 39-scenario grid (13 price moves x 3 vol levels) with the worst case and each underlying's session-scaled shock range |
+| `risk_budget` | The agent's policy: budget, used (the current initial margin), headroom, premium cap, value-drain cap, allowed underlyings, expiry |
+| `buy_from_vault` | Buy from the covered-call or cash-secured-put vault, signed with the agent key |
+| `sell_to_vault` | Sell back to the vault (it buys back at most its short) |
+| `fill_rfq` | Fill a market maker's EIP-712 signed quote on the RFQ venue |
+| `explain_refusal` | Why a mined transaction reverted: replays it and decodes the revert into a `Refusal` |
+
+Amounts are decimal USDG, quantities are contracts (one contract is one token of the underlying). Every result carries a one-line `summary` and the full object as `structuredContent`.
+
+### How a trade runs
+
+`buy_from_vault`, `sell_to_vault` and `fill_rfq` take `send_even_if_refused` (default `false`):
+
+1. The exact transaction is simulated from the agent's address (`eth_call`).
+2. If the chain would refuse it, the tool returns `{ status: "refused", sent: false, refusal: { code, message, numbers } }`. Nothing is signed or sent.
+3. Otherwise it is sent and the tool returns `{ status: "filled", txHash, premium, fee, accountAfter, budget }`.
+
+With `send_even_if_refused: true` a refused ticket is sent anyway with a fixed gas limit (`NOVATION_REFUSAL_GAS`, default 5,000,000), so the revert is mined and anyone can verify the refusal on-chain. It costs gas and changes nothing else.
+
+A refusal looks like this:
+
+```json
+{
+  "status": "refused",
+  "sent": false,
+  "refusal": {
+    "code": "AgentRiskBudgetExceeded",
+    "message": "Worst-case loss after this trade exceeds the agent's risk budget.",
+    "numbers": { "id": 9, "worstLoss": 4.018316, "budget": 1.53888 }
+  },
+  "summary": "REFUSED (not sent): AgentRiskBudgetExceeded: worst-case loss after the trade 4.018316 USDG > the agent's budget 1.53888 USDG. The simulation of this exact transaction reverted, so nothing was signed or sent."
+}
+```
+
+`fill_rfq` takes the quote as the maker published it, integers as decimal strings in raw on-chain units:
+
+```json
+{
+  "quote": {
+    "signer": "0x...", "makerId": "3", "seriesId": "5", "makerSells": true,
+    "maxQty": "2000000000000000000", "price": "1490000000000000000",
+    "deadline": "1790971200", "nonce": "8411..."
+  },
+  "signature": "0x...",
+  "qty": 1
+}
+```
+
+## Security model
+
+- **The server only ever holds an agent key.** There is no setting for an owner key. If `NOVATION_AGENT_KEY` turns out to be the owner of the account, the server refuses to start.
+- **It refuses to start without a live policy.** At startup it reads `agentPolicy(account, agent)` on-chain and exits unless a policy exists and has not expired. Without `NOVATION_ACCOUNT` it looks the account up in the `AgentGranted` log and needs exactly one live grant.
+- **The chain is the authority.** The simulation is a courtesy to the agent: the same rules are enforced by `TradeLogic` in the transaction itself, so a modified or compromised server can't trade past the budget either. An agent can't withdraw, deposit stock collateral, grant or revoke agents, or call the clearinghouse directly; the server exposes none of that.
+- **Revocation is immediate.** Once the owner calls `revokeAgent`, every simulation refuses with `NotAuthorized` and the server won't start again.
+- **Read-only mode.** Without a key the server starts with the read tools only.
+- **No secrets in output.** The key is used only to sign; tool results and logs never contain it. Logs go to stderr, since stdout carries the protocol.
+- **Known limit.** The value-drain cap applies per trade, so many trades can add up to more than one cap ([SECURITY.md](../SECURITY.md)). Size the premium cap and the policy expiry with that in mind.
+
+## Run it
+
+From the repository root:
+
+```bash
+pnpm install
+# read-only, Robinhood Chain testnet
+node mcp/bin/novation-mcp.mjs
+# as an agent
+NOVATION_AGENT_KEY=0x... NOVATION_ACCOUNT=12 node mcp/bin/novation-mcp.mjs
+```
+
+| Variable | Meaning |
+|---|---|
+| `NOVATION_AGENT_KEY` | The agent's private key. Absent: read-only mode |
+| `NOVATION_ACCOUNT` | The subaccount the agent trades for. Absent: found from the `AgentGranted` log |
+| `NOVATION_RPC_URL` | JSON-RPC endpoint. Default: the chain's public RPC |
+| `NOVATION_CHAIN_ID` | Default `46630` (Robinhood Chain testnet) |
+| `NOVATION_DEPLOYMENT` | Path to a `contracts/deployments/<chainId>.json`, for a local or new deployment |
+| `NOVATION_REFUSAL_GAS` | Gas limit for `send_even_if_refused`. Default 5,000,000 |
+
+### MCP client configuration
+
+Any MCP client that launches stdio servers takes a block like this (use absolute paths):
+
+```json
+{
+  "mcpServers": {
+    "novation": {
+      "command": "node",
+      "args": ["/path/to/novation/mcp/bin/novation-mcp.mjs"],
+      "env": {
+        "NOVATION_AGENT_KEY": "0x<agent key>",
+        "NOVATION_ACCOUNT": "<subaccount id>",
+        "NOVATION_RPC_URL": "https://rpc.testnet.chain.robinhood.com"
+      }
+    }
+  }
+}
+```
+
+Leave out `NOVATION_AGENT_KEY` and `NOVATION_ACCOUNT` for a read-only server.
+
+## Demo
+
+`scripts/demo-agent.ts` runs an agent's session end to end on testnet: it derives an owner key and an agent key from the deployer key, funds them with a little gas, has the owner open an account and grant a budget of 1.5x the initial margin of one call, then starts this server over stdio and calls it as an agent would: `risk_budget`, `what_if_margin`, `buy_from_vault` for 1 call (in budget, sent), for 3 more (refused in simulation, not sent), the same with `send_even_if_refused` (the revert is mined), then `explain_refusal` on that transaction.
+
+```bash
+pnpm --filter @novation/mcp demo
+```
+
+It reads `DEPLOYER_PRIVATE_KEY` and `RH_TESTNET_RPC` from the root `.env` and writes the transaction hashes and the transcript to [`out/46630.json`](out/46630.json).
+
+The run on Robinhood Chain testnet, abridged:
+
+```text
+> risk_budget {}
+< budget 1.53888 USDG, used 0, headroom 1.53888 USDG; premium cap 25 USDG; NVDA allowed until 2026-10-08T17:37:38Z
+> what_if_margin {"series_id":5,"qty":1}
+< PASSES: initial margin 0 -> 1.025784 USDG, budget 1.53888 USDG
+> buy_from_vault {"series_id":5,"qty":1}
+< FILLED: buy 1 NVDA 2026-10-02 255 C for 1.256553 USDG (fee 0.069068); initial margin 1.004617 of budget 1.53888 USDG; tx 0x0307e2d5...
+> buy_from_vault {"series_id":5,"qty":3}
+< REFUSED (not sent): AgentRiskBudgetExceeded: worst-case loss after the trade 4.018316 USDG > the agent's budget 1.53888 USDG. ...
+> buy_from_vault {"series_id":5,"qty":3,"send_even_if_refused":true}
+< REFUSED ON-CHAIN: AgentRiskBudgetExceeded: worst-case loss after the trade 4.018164 USDG > the agent's budget 1.53888 USDG. The transaction was mined and reverted: 0x2aa5a4ce...
+> explain_refusal {"tx_hash":"0x2aa5a4ce..."}
+< 0x2aa5a4ce... was refused on-chain: AgentRiskBudgetExceeded: worst-case loss after the trade 4.018164 USDG > the agent's budget 1.53888 USDG
+```
+
+- In-budget fill: [`0x0307e2d54fd130e1858ce85cc1dfd72e37bedc0434f9429abbe213f8388b36fc`](https://explorer.testnet.chain.robinhood.com/tx/0x0307e2d54fd130e1858ce85cc1dfd72e37bedc0434f9429abbe213f8388b36fc)
+- Over-budget buy, mined as a revert: [`0x2aa5a4ceaf099d14136d921b29b5bc2bce8b52f618b25e4935b04494210f1064`](https://explorer.testnet.chain.robinhood.com/tx/0x2aa5a4ceaf099d14136d921b29b5bc2bce8b52f618b25e4935b04494210f1064)
+
+## Tests
+
+```bash
+pnpm --filter @novation/mcp test:unit
+pnpm --filter @novation/mcp test:anvil
+```
+
+The anvil suite reuses the SDK's fixture (a local anvil, `KernelReference` as the kernel, the repository's own deploy and seed scripts). It runs every tool handler in-process: startup refusals for an owner key, a missing or revoked policy; the reads; an in-budget fill; an over-budget refusal that sends nothing; the mined refusal and its explanation; a sale back to the vault; an RFQ fill and a tampered quote. A second file spawns the real server over stdio and drives it with the MCP client.
