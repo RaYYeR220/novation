@@ -282,17 +282,58 @@ contract AuctionHouseTest is Fixture {
         vm.expectRevert(AuctionHouse.MarketClosed.selector);
         ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
 
+        // the auction's clock stops with the market: 20 of its 30 minutes are used
         vm.warp(SAT_NOON);
         assertTrue(ch.accountState(a).liquidatable);
-        vm.expectRevert(AuctionHouse.MarketClosed.selector);
+        _assertDiscount(a, 0.02e18 + uint256(0.1e18) * 1200 / 1800, true);
+        vm.expectRevert(AuctionHouse.AuctionActive.selector);
         ah.startLiquidation(a);
 
-        // Monday pre-market it can run again
+        // Monday pre-market it has run out (the window reopened Sunday 20:00) and starts again
         vm.warp(MON_0430_EDT);
         _setPrice(address(nvda), 150e18);
+        _assertDiscount(a, 0.12e18, false);
         ah.startLiquidation(a);
         vm.prank(carol);
         ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
+    }
+
+    /// The discount clock counts market time: an auction caught by the weekend resumes at the
+    /// discount it had when the window reopens, and a deficit sale started on the weekend opens at
+    /// the start discount.
+    function test_discountClockPausesOutsideMarket() public {
+        uint256 sun2000 = 1_790_553_600; // 2026-09-27 20:00 EDT: the window reopens
+        (uint256 a,) = _shortPuts(520 * USDG);
+        uint256 c = _fund(carol, 10_000 * USDG, 0);
+        vm.warp(FRI_1940_EDT);
+        _setPrice(address(nvda), 150e18);
+        ah.startLiquidation(a);
+        uint256 n = _newAccount(dave);
+        vm.prank(address(ch));
+        ah.startDeficitSale(n, e1); // 20 minutes before the close too
+        vm.warp(SAT_NOON);
+        vm.prank(address(ch));
+        ah.startDeficitSale(n, e2); // on the weekend
+
+        vm.warp(sun2000 + 300); // 25 minutes of market time for the Friday auctions
+        uint256 at25 = 0.02e18 + uint256(0.1e18) * 1500 / 1800;
+        _assertDiscount(a, at25, true);
+        (uint256 d1,) = ah.deficitDiscount(n, e1);
+        assertEq(d1, at25);
+        (uint256 d2,) = ah.deficitDiscount(n, e2);
+        assertEq(d2, 0.02e18 + uint256(0.1e18) * 300 / 1800);
+
+        // the liquidation is still running and takes bids in the reopened (extended) session
+        _setPrice(address(nvda), 150e18);
+        assertEq(uint8(hub.session(address(nvda))), uint8(Session.EXTENDED));
+        vm.prank(carol);
+        int256 paid = ah.bidLiquidation(a, 0.1e18, c, type(int256).max);
+        assertGt(paid, 0);
+        vm.warp(sun2000 + 601); // 30 minutes and a second: over
+        _assertDiscount(a, 0.12e18, false);
+        vm.prank(carol);
+        vm.expectRevert(AuctionHouse.AuctionNotActive.selector);
+        ah.bidLiquidation(a, 0.1e18, c, type(int256).max);
     }
 
     function test_liquidationNeedsLivePricesForEveryUnderlying() public {

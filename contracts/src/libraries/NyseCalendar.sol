@@ -172,6 +172,33 @@ library NyseCalendar {
         return true;
     }
 
+    /// UTC timestamp of 20:00 ET on ET day `day`, where the 24/5 window opens or closes.
+    function eveningTs(int256 day) internal pure returns (uint256) {
+        int256 base = day * int256(1 days) + int256(SEC_EXTENDED_END);
+        uint256 cand = uint256(base + int256(4 hours));
+        if (isDst(cand)) return cand;
+        return uint256(base + int256(5 hours));
+    }
+
+    /// Seconds of [from, to) inside the 24/5 window, i.e. where baseSession is REGULAR or EXTENDED,
+    /// counted up to `cap` (the walk stops there). The window only opens or closes at 20:00 ET:
+    /// from 20:00 ET on the day before ET day d until 20:00 ET on d, it is open iff d is a trading
+    /// day. The walk visits one such day per step and stops once `cap` is reached, so it takes a
+    /// handful of steps (a closed stretch is at most a long weekend) whatever the span.
+    function tradableSeconds(uint256 from, uint256 to, uint256 cap) internal pure returns (uint256 acc) {
+        if (to <= from) return 0;
+        (int256 d,,) = etParts(from);
+        if (from >= eveningTs(d)) ++d;
+        while (from < to && acc < cap) {
+            uint256 end = eveningTs(d);
+            if (end > to) end = to;
+            if (isTradingDay(d)) acc += end - from;
+            from = end;
+            ++d;
+        }
+        if (acc > cap) acc = cap;
+    }
+
     /// Smallest t > ts with isWeeklyExpiry(t). Walks forward day by day, at most 14 days.
     function nextWeeklyExpiry(uint256 ts) internal pure returns (uint256) {
         (int256 d,,) = etParts(ts);
