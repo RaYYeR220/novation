@@ -125,7 +125,8 @@ export interface NovationClient {
   /** Unix seconds the data reflects: the latest block for the chain, the snapshot for demo fixtures. */
   asOf(): Promise<number>;
   underlyings(): Promise<Underlying[]>;
-  chain(underlying: string, expiry?: number): Promise<{ expiries: number[]; series: (Series & { bid: number; ask: number; delta: number; iv: number })[] }>;
+  /** `bid`/`ask` are NaN where nobody quotes that side; `mark` is the kernel's price at mark vol, where known. */
+  chain(underlying: string, expiry?: number): Promise<{ expiries: number[]; series: (Series & { bid: number; ask: number; delta: number; iv: number; mark?: number })[] }>;
   account(id: number): Promise<{ id: number; owner: string; state: AccountState; positions: (Position & Series)[]; collateral: Record<string, number> }>;
   scenarioGrid(id: number, session?: Session): Promise<ScenarioGrid>;
   /**
