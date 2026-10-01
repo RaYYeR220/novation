@@ -3,25 +3,48 @@
   {
    "agent": "0xb0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0",
    "label": "hedge-bot",
-   "maxWorstLoss": 1500,
-   "maxPremiumPerTrade": 500,
+   "maxWorstLoss": 1500.0,
+   "maxPremiumPerTrade": 500.0,
    "allowed": [
     "NVDA",
     "SPY"
    ],
    "expiresAt": 1793289600,
-   "used": 1180,
+   "used": 596.506189,
    "lastRefusal": {
     "code": "AgentRiskBudgetExceeded",
-    "message": "Worst-case loss 2130.01 exceeds the risk budget of 1500.00.",
+    "message": "Worst-case loss 1762.72 exceeds the risk budget of 1500.00.",
     "numbers": {
-     "worstLoss": 2130.01,
+     "worstLoss": 1762.715506,
      "budget": 1500.0,
-     "used": 1180.0,
-     "remaining": 320.0
+     "used": 596.506189,
+     "remaining": 903.493811
     },
     "txHash": "0x7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c"
    }
+  },
+  {
+   "agent": "0xd3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3",
+   "label": "mcp-desk",
+   "maxWorstLoss": 1000.0,
+   "maxPremiumPerTrade": 250.0,
+   "allowed": [
+    "NVDA",
+    "TSLA"
+   ],
+   "expiresAt": 1791302400,
+   "used": 596.506189
+  },
+  {
+   "agent": "0xe1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1",
+   "label": "rebalancer",
+   "maxWorstLoss": 800.0,
+   "maxPremiumPerTrade": 150.0,
+   "allowed": [
+    "SPY"
+   ],
+   "expiresAt": 1789920000,
+   "used": 596.506189
   }
  ]
 }

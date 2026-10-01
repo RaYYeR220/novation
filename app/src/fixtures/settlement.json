@@ -1,0 +1,835 @@
+{
+ "pools": [
+  {
+   "expiry": 1789761600,
+   "status": "closed",
+   "prices": [
+    {
+     "symbol": "NVDA",
+     "method": "last print",
+     "round": 1061,
+     "price": 222.44729849,
+     "priceWad": "222447298490000000000",
+     "updatedAt": 1789761332,
+     "lag": 268,
+     "proof": {
+      "kind": "latest"
+     },
+     "settledAt": 1789761780
+    },
+    {
+     "symbol": "TSLA",
+     "method": "last print",
+     "round": 1279,
+     "price": 363.79999999,
+     "priceWad": "363799999990000000000",
+     "updatedAt": 1789760927,
+     "lag": 673,
+     "proof": {
+      "kind": "latest"
+     },
+     "settledAt": 1789761780
+    },
+    {
+     "symbol": "SPY",
+     "method": "last print",
+     "round": 138,
+     "price": 761.55079369,
+     "priceWad": "761550793690000000000",
+     "updatedAt": 1789734121,
+     "lag": 27479,
+     "proof": {
+      "kind": "latest"
+     },
+     "settledAt": 1789761780
+    },
+    {
+     "symbol": "AAPL",
+     "method": "last print",
+     "round": 645,
+     "price": 335.3847472,
+     "priceWad": "335384747200000000000",
+     "updatedAt": 1789744288,
+     "lag": 17312,
+     "proof": {
+      "kind": "latest"
+     },
+     "settledAt": 1789761780
+    }
+   ],
+   "paidIn": 74.472985,
+   "bridged": 0.0,
+   "pending": 0.0,
+   "claims": 74.472985,
+   "claimed": 74.472985,
+   "unsettledShortQty": 0.0,
+   "shortQtySettled": 3085.0,
+   "readyAt": 1789761840,
+   "accounts": 5,
+   "settledAt": 1789761780
+  },
+  {
+   "expiry": 1790366400,
+   "status": "closed",
+   "prices": [
+    {
+     "symbol": "NVDA",
+     "method": "last print",
+     "round": 1100,
+     "price": 225.57472086,
+     "priceWad": "225574720860000000000",
+     "updatedAt": 1790317336,
+     "lag": 49064,
+     "proof": {
+      "kind": "latest"
+     },
+     "settledAt": 1790366580
+    },
+    {
+     "symbol": "TSLA",
+     "method": "last print",
+     "round": 1337,
+     "price": 380.245,
+     "priceWad": "380245000000000000000",
+     "updatedAt": 1790316803,
+     "lag": 49597,
+     "proof": {
+      "kind": "latest"
+     },
+     "settledAt": 1790366580
+    },
+    {
+     "symbol": "SPY",
+     "method": "last print",
+     "round": 145,
+     "price": 768.4328968,
+     "priceWad": "768432896800000000000",
+     "updatedAt": 1790309069,
+     "lag": 57331,
+     "proof": {
+      "kind": "latest"
+     },
+     "settledAt": 1790366580
+    },
+    {
+     "symbol": "AAPL",
+     "method": "last print",
+     "round": 668,
+     "price": 336.30526799,
+     "priceWad": "336305267990000000000",
+     "updatedAt": 1790279725,
+     "lag": 86675,
+     "proof": {
+      "kind": "latest"
+     },
+     "settledAt": 1790366580
+    }
+   ],
+   "paidIn": 318.0,
+   "bridged": 198.0,
+   "pending": 0.0,
+   "claims": 317.241626,
+   "claimed": 317.241626,
+   "unsettledShortQty": 0.0,
+   "shortQtySettled": 3075.0,
+   "readyAt": 1790366640,
+   "accounts": 6,
+   "settledAt": 1790366580
+  },
+  {
+   "expiry": 1790971200,
+   "status": "open",
+   "prices": [],
+   "paidIn": 0.0,
+   "bridged": 0.0,
+   "pending": 0.0,
+   "claims": 0.0,
+   "claimed": 0.0,
+   "unsettledShortQty": 3474.0,
+   "readyAt": null,
+   "accounts": 6,
+   "settledAt": null
+  }
+ ],
+ "accounts": {
+  "7": [
+   {
+    "expiry": 1790971200,
+    "status": "open",
+    "net": -1022.8,
+    "legs": [
+     {
+      "underlying": "NVDA",
+      "strike": 200,
+      "isCall": true,
+      "qty": -40.0,
+      "settlePrice": 225.57,
+      "payoff": -1022.8
+     },
+     {
+      "underlying": "NVDA",
+      "strike": 170,
+      "isCall": false,
+      "qty": 10.0,
+      "settlePrice": 225.57,
+      "payoff": 0.0
+     },
+     {
+      "underlying": "TSLA",
+      "strike": 380,
+      "isCall": false,
+      "qty": -6.0,
+      "settlePrice": 380.245,
+      "payoff": -0.0
+     },
+     {
+      "underlying": "SPY",
+      "strike": 640,
+      "isCall": false,
+      "qty": 4.0,
+      "settlePrice": 768.43,
+      "payoff": 0.0
+     }
+    ],
+    "cash": 2400.0,
+    "shortfall": 0.0
+   },
+   {
+    "expiry": 1790366400,
+    "net": 33.731587,
+    "legs": [
+     {
+      "underlying": "NVDA",
+      "strike": 235,
+      "isCall": true,
+      "qty": -20.0,
+      "settlePrice": 225.574721,
+      "payoff": -0.0
+     },
+     {
+      "underlying": "SPY",
+      "strike": 760,
+      "isCall": true,
+      "qty": 4.0,
+      "settlePrice": 768.432897,
+      "payoff": 33.731587
+     }
+    ],
+    "settledAt": 1790366580,
+    "status": "claimed",
+    "claimable": 33.731587,
+    "readyAt": 1790366640,
+    "claimedAt": 1790366760
+   },
+   {
+    "expiry": 1789761600,
+    "net": 74.472985,
+    "legs": [
+     {
+      "underlying": "NVDA",
+      "strike": 215,
+      "isCall": true,
+      "qty": 10.0,
+      "settlePrice": 222.447298,
+      "payoff": 74.472985
+     },
+     {
+      "underlying": "TSLA",
+      "strike": 360,
+      "isCall": false,
+      "qty": -6.0,
+      "settlePrice": 363.8,
+      "payoff": -0.0
+     }
+    ],
+    "settledAt": 1789761780,
+    "status": "claimed",
+    "claimable": 74.472985,
+    "readyAt": 1789761840,
+    "claimedAt": 1789761960
+   }
+  ],
+  "12": [
+   {
+    "expiry": 1790971200,
+    "status": "open",
+    "net": -414.0,
+    "legs": [
+     {
+      "underlying": "TSLA",
+      "strike": 400,
+      "isCall": false,
+      "qty": -10.0,
+      "settlePrice": 380.245,
+      "payoff": -197.55
+     },
+     {
+      "underlying": "NVDA",
+      "strike": 240,
+      "isCall": false,
+      "qty": -15.0,
+      "settlePrice": 225.57,
+      "payoff": -216.45
+     }
+    ],
+    "cash": 263.83,
+    "shortfall": 150.17
+   },
+   {
+    "expiry": 1790366400,
+    "net": -317.241626,
+    "legs": [
+     {
+      "underlying": "NVDA",
+      "strike": 215,
+      "isCall": true,
+      "qty": -30.0,
+      "settlePrice": 225.574721,
+      "payoff": -317.241626
+     }
+    ],
+    "settledAt": 1790366580,
+    "status": "deficit-cleared",
+    "paidCash": 120.0,
+    "bridged": 198,
+    "shortfall": 197.241626,
+    "deficitSale": {
+     "startedAt": 1790366580,
+     "bidAt": 1790367420,
+     "discount": 0.066667,
+     "spot": 225.574721,
+     "price": 210.536406,
+     "tokensSold": 0.940455,
+     "proceeds": 198
+    },
+    "clearedAt": 1790367420
+   }
+  ],
+  "1": [
+   {
+    "expiry": 1790971200,
+    "status": "open",
+    "net": 1218.495,
+    "legs": [
+     {
+      "underlying": "TSLA",
+      "strike": 350,
+      "isCall": false,
+      "qty": 15.0,
+      "settlePrice": 380.245,
+      "payoff": 0.0
+     },
+     {
+      "underlying": "NVDA",
+      "strike": 230,
+      "isCall": false,
+      "qty": -13.0,
+      "settlePrice": 225.57,
+      "payoff": -57.59
+     },
+     {
+      "underlying": "AAPL",
+      "strike": 330,
+      "isCall": true,
+      "qty": -1.0,
+      "settlePrice": 336.31,
+      "payoff": -6.31
+     },
+     {
+      "underlying": "AAPL",
+      "strike": 320,
+      "isCall": true,
+      "qty": 31.0,
+      "settlePrice": 336.31,
+      "payoff": 505.61
+     },
+     {
+      "underlying": "SPY",
+      "strike": 820,
+      "isCall": true,
+      "qty": 3.0,
+      "settlePrice": 768.43,
+      "payoff": 0.0
+     },
+     {
+      "underlying": "SPY",
+      "strike": 710,
+      "isCall": false,
+      "qty": -1.0,
+      "settlePrice": 768.43,
+      "payoff": -0.0
+     },
+     {
+      "underlying": "SPY",
+      "strike": 790,
+      "isCall": true,
+      "qty": -27.0,
+      "settlePrice": 768.43,
+      "payoff": -0.0
+     },
+     {
+      "underlying": "TSLA",
+      "strike": 380,
+      "isCall": false,
+      "qty": 24.0,
+      "settlePrice": 380.245,
+      "payoff": 0.0
+     },
+     {
+      "underlying": "SPY",
+      "strike": 740,
+      "isCall": false,
+      "qty": 28.0,
+      "settlePrice": 768.43,
+      "payoff": 0.0
+     },
+     {
+      "underlying": "TSLA",
+      "strike": 420,
+      "isCall": false,
+      "qty": 22.0,
+      "settlePrice": 380.245,
+      "payoff": 874.61
+     },
+     {
+      "underlying": "AAPL",
+      "strike": 325,
+      "isCall": true,
+      "qty": -21.0,
+      "settlePrice": 336.31,
+      "payoff": -237.51
+     },
+     {
+      "underlying": "AAPL",
+      "strike": 340,
+      "isCall": true,
+      "qty": -8.0,
+      "settlePrice": 336.31,
+      "payoff": -0.0
+     },
+     {
+      "underlying": "TSLA",
+      "strike": 420,
+      "isCall": true,
+      "qty": 10.0,
+      "settlePrice": 380.245,
+      "payoff": 0.0
+     },
+     {
+      "underlying": "TSLA",
+      "strike": 370,
+      "isCall": true,
+      "qty": -8.0,
+      "settlePrice": 380.245,
+      "payoff": -81.96
+     },
+     {
+      "underlying": "NVDA",
+      "strike": 205,
+      "isCall": false,
+      "qty": 11.0,
+      "settlePrice": 225.57,
+      "payoff": 0.0
+     },
+     {
+      "underlying": "NVDA",
+      "strike": 250,
+      "isCall": true,
+      "qty": 15.0,
+      "settlePrice": 225.57,
+      "payoff": 0.0
+     },
+     {
+      "underlying": "AAPL",
+      "strike": 365,
+      "isCall": false,
+      "qty": 20.0,
+      "settlePrice": 336.31,
+      "payoff": 573.8
+     },
+     {
+      "underlying": "AAPL",
+      "strike": 330,
+      "isCall": false,
+      "qty": -17.0,
+      "settlePrice": 336.31,
+      "payoff": -0.0
+     },
+     {
+      "underlying": "AAPL",
+      "strike": 305,
+      "isCall": false,
+      "qty": -4.0,
+      "settlePrice": 336.31,
+      "payoff": -0.0
+     },
+     {
+      "underlying": "TSLA",
+      "strike": 360,
+      "isCall": false,
+      "qty": -9.0,
+      "settlePrice": 380.245,
+      "payoff": -0.0
+     },
+     {
+      "underlying": "NVDA",
+      "strike": 200,
+      "isCall": false,
+      "qty": -25.0,
+      "settlePrice": 225.57,
+      "payoff": -0.0
+     },
+     {
+      "underlying": "AAPL",
+      "strike": 335,
+      "isCall": false,
+      "qty": -5.0,
+      "settlePrice": 336.31,
+      "payoff": -0.0
+     },
+     {
+      "underlying": "TSLA",
+      "strike": 340,
+      "isCall": false,
+      "qty": -8.0,
+      "settlePrice": 380.245,
+      "payoff": -0.0
+     },
+     {
+      "underlying": "AAPL",
+      "strike": 360,
+      "isCall": false,
+      "qty": -14.0,
+      "settlePrice": 336.31,
+      "payoff": -331.66
+     },
+     {
+      "underlying": "TSLA",
+      "strike": 340,
+      "isCall": true,
+      "qty": -25.0,
+      "settlePrice": 380.245,
+      "payoff": -1006.125
+     },
+     {
+      "underlying": "NVDA",
+      "strike": 245,
+      "isCall": true,
+      "qty": -3.0,
+      "settlePrice": 225.57,
+      "payoff": -0.0
+     },
+     {
+      "underlying": "NVDA",
+      "strike": 195,
+      "isCall": false,
+      "qty": -29.0,
+      "settlePrice": 225.57,
+      "payoff": -0.0
+     },
+     {
+      "underlying": "TSLA",
+      "strike": 380,
+      "isCall": true,
+      "qty": -48.0,
+      "settlePrice": 380.245,
+      "payoff": -11.76
+     },
+     {
+      "underlying": "SPY",
+      "strike": 730,
+      "isCall": false,
+      "qty": -6.0,
+      "settlePrice": 768.43,
+      "payoff": -0.0
+     },
+     {
+      "underlying": "TSLA",
+      "strike": 370,
+      "isCall": false,
+      "qty": 13.0,
+      "settlePrice": 380.245,
+      "payoff": 0.0
+     },
+     {
+      "underlying": "AAPL",
+      "strike": 350,
+      "isCall": false,
+      "qty": 20.0,
+      "settlePrice": 336.31,
+      "payoff": 273.8
+     },
+     {
+      "underlying": "SPY",
+      "strike": 710,
+      "isCall": true,
+      "qty": 8.0,
+      "settlePrice": 768.43,
+      "payoff": 467.44
+     },
+     {
+      "underlying": "NVDA",
+      "strike": 240,
+      "isCall": true,
+      "qty": 19.0,
+      "settlePrice": 225.57,
+      "payoff": 0.0
+     },
+     {
+      "underlying": "AAPL",
+      "strike": 340,
+      "isCall": false,
+      "qty": 4.0,
+      "settlePrice": 336.31,
+      "payoff": 14.76
+     },
+     {
+      "underlying": "NVDA",
+      "strike": 240,
+      "isCall": false,
+      "qty": 18.0,
+      "settlePrice": 225.57,
+      "payoff": 259.74
+     },
+     {
+      "underlying": "AAPL",
+      "strike": 315,
+      "isCall": false,
+      "qty": 10.0,
+      "settlePrice": 336.31,
+      "payoff": 0.0
+     },
+     {
+      "underlying": "SPY",
+      "strike": 770,
+      "isCall": false,
+      "qty": 16.0,
+      "settlePrice": 768.43,
+      "payoff": 25.12
+     },
+     {
+      "underlying": "SPY",
+      "strike": 730,
+      "isCall": true,
+      "qty": -28.0,
+      "settlePrice": 768.43,
+      "payoff": -1076.04
+     },
+     {
+      "underlying": "SPY",
+      "strike": 830,
+      "isCall": false,
+      "qty": -19.0,
+      "settlePrice": 768.43,
+      "payoff": -1169.83
+     },
+     {
+      "underlying": "SPY",
+      "strike": 830,
+      "isCall": true,
+      "qty": -17.0,
+      "settlePrice": 768.43,
+      "payoff": -0.0
+     },
+     {
+      "underlying": "NVDA",
+      "strike": 230,
+      "isCall": true,
+      "qty": 12.0,
+      "settlePrice": 225.57,
+      "payoff": 0.0
+     },
+     {
+      "underlying": "NVDA",
+      "strike": 220,
+      "isCall": true,
+      "qty": -18.0,
+      "settlePrice": 225.57,
+      "payoff": -100.26
+     },
+     {
+      "underlying": "AAPL",
+      "strike": 310,
+      "isCall": false,
+      "qty": -5.0,
+      "settlePrice": 336.31,
+      "payoff": -0.0
+     },
+     {
+      "underlying": "SPY",
+      "strike": 750,
+      "isCall": true,
+      "qty": 12.0,
+      "settlePrice": 768.43,
+      "payoff": 221.16
+     },
+     {
+      "underlying": "SPY",
+      "strike": 720,
+      "isCall": true,
+      "qty": 27.0,
+      "settlePrice": 768.43,
+      "payoff": 1307.61
+     },
+     {
+      "underlying": "NVDA",
+      "strike": 235,
+      "isCall": true,
+      "qty": 26.0,
+      "settlePrice": 225.57,
+      "payoff": 0.0
+     },
+     {
+      "underlying": "SPY",
+      "strike": 750,
+      "isCall": false,
+      "qty": -20.0,
+      "settlePrice": 768.43,
+      "payoff": -0.0
+     },
+     {
+      "underlying": "SPY",
+      "strike": 780,
+      "isCall": true,
+      "qty": 10.0,
+      "settlePrice": 768.43,
+      "payoff": 0.0
+     },
+     {
+      "underlying": "SPY",
+      "strike": 740,
+      "isCall": true,
+      "qty": 26.0,
+      "settlePrice": 768.43,
+      "payoff": 739.18
+     },
+     {
+      "underlying": "SPY",
+      "strike": 780,
+      "isCall": false,
+      "qty": 3.0,
+      "settlePrice": 768.43,
+      "payoff": 34.71
+     },
+     {
+      "underlying": "AAPL",
+      "strike": 320,
+      "isCall": false,
+      "qty": 2.0,
+      "settlePrice": 336.31,
+      "payoff": 0.0
+     }
+    ],
+    "cash": 250000.0
+   },
+   {
+    "expiry": 1790366400,
+    "net": 283.510039,
+    "legs": [
+     {
+      "underlying": "NVDA",
+      "strike": 235,
+      "isCall": true,
+      "qty": 20.0,
+      "settlePrice": 225.574721,
+      "payoff": 0.0
+     },
+     {
+      "underlying": "SPY",
+      "strike": 760,
+      "isCall": true,
+      "qty": -4.0,
+      "settlePrice": 768.432897,
+      "payoff": -33.731587
+     },
+     {
+      "underlying": "NVDA",
+      "strike": 215,
+      "isCall": true,
+      "qty": 30.0,
+      "settlePrice": 225.574721,
+      "payoff": 317.241626
+     },
+     {
+      "underlying": "NVDA",
+      "strike": 240,
+      "isCall": true,
+      "qty": 1592,
+      "settlePrice": 225.574721,
+      "payoff": 0.0
+     },
+     {
+      "underlying": "NVDA",
+      "strike": 210,
+      "isCall": false,
+      "qty": 1017,
+      "settlePrice": 225.574721,
+      "payoff": 0.0
+     },
+     {
+      "underlying": "TSLA",
+      "strike": 390,
+      "isCall": true,
+      "qty": 412,
+      "settlePrice": 380.245,
+      "payoff": 0.0
+     }
+    ],
+    "settledAt": 1790366580,
+    "status": "claimed",
+    "claimable": 283.510039,
+    "readyAt": 1790366640,
+    "claimedAt": 1790366760
+   },
+   {
+    "expiry": 1789761600,
+    "net": -74.472985,
+    "legs": [
+     {
+      "underlying": "NVDA",
+      "strike": 215,
+      "isCall": true,
+      "qty": -10.0,
+      "settlePrice": 222.447298,
+      "payoff": -74.472985
+     },
+     {
+      "underlying": "TSLA",
+      "strike": 360,
+      "isCall": false,
+      "qty": 6.0,
+      "settlePrice": 363.8,
+      "payoff": 0.0
+     },
+     {
+      "underlying": "NVDA",
+      "strike": 225,
+      "isCall": true,
+      "qty": 1592,
+      "settlePrice": 222.447298,
+      "payoff": 0.0
+     },
+     {
+      "underlying": "NVDA",
+      "strike": 200,
+      "isCall": false,
+      "qty": 1065,
+      "settlePrice": 222.447298,
+      "payoff": 0.0
+     },
+     {
+      "underlying": "TSLA",
+      "strike": 380,
+      "isCall": true,
+      "qty": 412,
+      "settlePrice": 363.8,
+      "payoff": 0.0
+     }
+    ],
+    "settledAt": 1789761780,
+    "status": "paid",
+    "paidCash": 74.472985
+   }
+  ]
+ }
+}

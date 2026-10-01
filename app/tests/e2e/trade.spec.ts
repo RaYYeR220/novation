@@ -26,13 +26,22 @@ test('trade: NVDA ticket shows margin before and after; the over-budget agent ti
 
   const ticket = ticketOf(page);
   await expect(ticket.getByRole('heading', { name: 'NVDA 225 call' })).toBeVisible();
+  // Weekly expiries are the NYSE Friday close.
+  await expect(ticket.getByText(/Expires Fri, Oct 2, 16:00 ET/)).toBeVisible();
+  await expect(page.getByRole('group', { name: 'Expiry', exact: true }).getByRole('radio')).toHaveCount(4);
+  await expect(page.getByRole('group', { name: 'Expiry', exact: true })).toContainText('Oct 2');
+  await expect(page.getByRole('group', { name: 'Expiry', exact: true })).toContainText('Oct 23');
   // Margin before and after: the table and both lanes of the meter.
-  await expect(imRow(page).getByRole('cell').nth(0)).toHaveText('656.25');
-  await expect(imRow(page).getByRole('cell').nth(1)).toHaveText('661.61');
-  await expect(imRow(page).getByRole('cell').nth(2)).toHaveText('+5.36');
-  await expect(ticket.getByRole('meter', { name: 'Now' })).toHaveAttribute('aria-valuetext', /initial margin 656\.25/);
-  await expect(ticket.getByRole('meter', { name: 'After' })).toHaveAttribute('aria-valuetext', /initial margin 661\.61/);
+  await expect(imRow(page).getByRole('cell').nth(0)).toHaveText('596.51');
+  await expect(imRow(page).getByRole('cell').nth(1)).toHaveText('600.93');
+  await expect(imRow(page).getByRole('cell').nth(2)).toHaveText('+4.42');
+  await expect(ticket.getByRole('meter', { name: 'Now' })).toHaveAttribute('aria-valuetext', /initial margin 596\.51/);
+  await expect(ticket.getByRole('meter', { name: /^After/ })).toHaveAttribute('aria-valuetext', /initial margin 600\.93/);
   await expect(ticket.getByRole('button', { name: 'Buy 1 NVDA 225C' })).toBeEnabled();
+  // This ticket is not in the kernel fixtures: every float figure says so.
+  await expect(ticket.getByText('Estimate', { exact: true })).toBeVisible();
+  await expect(ticket.getByText(/after −[\d,.]+ \(estimate\)/)).toBeVisible();
+  await expect(ticket.getByRole('columnheader', { name: /After\s*estimate/ })).toBeVisible();
   await page.screenshot({ path: 'test-results/trade-1440-ticket.png' });
 
   // Drive the over-budget ticket by hand: sell 60 of the 200 call through RFQ, signed by hedge-bot.
@@ -44,22 +53,26 @@ test('trade: NVDA ticket shows margin before and after; the over-budget agent ti
   const refusal = ticket.locator('[data-code="AgentRiskBudgetExceeded"]');
   await expect(refusal).toBeVisible();
   await expect(refusal).toHaveAttribute('role', 'alert');
-  await expect(refusal).toContainText('Worst case after this trade: 2,130.01 USDG against a 1,500.00 USDG budget');
-  await expect(refusal.getByRole('definition').first()).toContainText('2,130.01');
-  await expect(refusal).toContainText('630.01');
+  await expect(refusal).toContainText(
+    'Worst case after this trade: 1,762.72 USDG against a 1,500.00 USDG budget (596.51 now; this ticket adds 1,166.21)',
+  );
+  await expect(refusal.getByRole('definition').first()).toContainText('1,762.72');
+  await expect(refusal).toContainText('262.72');
   await expect(ticket.getByRole('button', { name: 'Sell 60 NVDA 200C' })).toBeDisabled();
-  // The kernel's exact after-state for this ticket.
-  await expect(imRow(page).getByRole('cell').nth(1)).toHaveText('1,741.60');
+  // The kernel's exact after-state and grid for this ticket: nothing is labelled an estimate.
+  await expect(imRow(page).getByRole('cell').nth(1)).toHaveText('1,762.72');
   await expect(ticket.getByText('Exact', { exact: true })).toBeVisible();
+  await expect(ticket.getByText(/\(estimate\)/)).toHaveCount(0);
   await refusal.scrollIntoViewIfNeeded();
   await page.screenshot({ path: 'test-results/trade-1440-refused.png' });
 
   // What would pass: the resize clears the same check.
-  const cut = refusal.getByRole('button', { name: /^Cut to \d+$/ });
+  // The largest size that clears every agent check: 19 contracts keeps the premium under the 500 cap.
+  const cut = refusal.getByRole('button', { name: 'Cut to 19' });
   await expect(cut).toBeVisible();
   await cut.click();
   await expect(refusal).toHaveCount(0);
-  await expect(ticket.getByRole('button', { name: /^Sell \d+ NVDA 200C$/ })).toBeEnabled();
+  await expect(ticket.getByRole('button', { name: 'Sell 19 NVDA 200C' })).toBeEnabled();
 
   // The owner signing the full 60 clears: the budget binds the agent, not the account.
   await ticket.getByLabel('Quantity').fill('60');
@@ -72,8 +85,8 @@ test('trade: the demo shortcut loads the refused agent ticket', async ({ page })
   await open(page, 1440, 900);
   await page.getByRole('button', { name: 'Load the refused agent ticket' }).first().click();
   const refusal = ticketOf(page).locator('[data-code="AgentRiskBudgetExceeded"]');
-  await expect(refusal).toContainText('2,130.01');
-  await expect(refusal).toContainText('this ticket adds 950.01');
+  await expect(refusal).toContainText('1,762.72');
+  await expect(refusal).toContainText('this ticket adds 1,166.21');
   await expect(ticketOf(page).getByRole('heading', { name: 'NVDA 200 call' })).toBeVisible();
 });
 
@@ -82,7 +95,7 @@ test('trade at 390px: the ticket is a bottom sheet and the page never scrolls si
   await page.getByRole('button', { name: /^Buy NVDA 225 call at ask/ }).click();
   const ticket = ticketOf(page);
   await expect(ticket.getByRole('heading', { name: 'NVDA 225 call' })).toBeFocused();
-  await expect(imRow(page).getByRole('cell').nth(1)).toHaveText('661.61');
+  await expect(imRow(page).getByRole('cell').nth(1)).toHaveText('600.93');
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow, 'no horizontal page scroll').toBeLessThanOrEqual(0);
   await page.screenshot({ path: 'test-results/trade-390-sheet.png' });
@@ -91,7 +104,7 @@ test('trade at 390px: the ticket is a bottom sheet and the page never scrolls si
   await page.keyboard.press('Escape');
   const handle = ticket.locator('button[aria-expanded]');
   await expect(handle).toHaveAttribute('aria-expanded', 'false');
-  await expect(handle).toContainText('Initial margin 656.25 to 661.61');
+  await expect(handle).toContainText('Initial margin 596.51 to 600.93');
   await page.screenshot({ path: 'test-results/trade-390.png' });
   await handle.click();
   await expect(handle).toHaveAttribute('aria-expanded', 'true');

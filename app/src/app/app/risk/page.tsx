@@ -1,8 +1,11 @@
 import type { Metadata } from 'next';
-import { SectionPending } from '@/components/app/section-pending';
+import { RiskView } from '@/components/risk/risk-view';
 
-export const metadata: Metadata = { title: 'Risk' };
+export const metadata: Metadata = {
+  title: 'Risk',
+  description: 'Sessions and halt reasons per underlying, the insurance fund, settlement pools, auctions and every refusal.',
+};
 
 export default function RiskPage() {
-  return <SectionPending title="Risk" body="Session board, insurance fund, auctions and the refusal feed arrive with the next build." />;
+  return <RiskView />;
 }

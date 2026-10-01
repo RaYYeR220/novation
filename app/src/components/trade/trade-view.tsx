@@ -129,7 +129,8 @@ export function TradeView() {
   const allSeries = chain.data?.series;
   const listed = useMemo(() => (allSeries ?? []).filter((s) => s.expiry === expiry), [allSeries, expiry]);
   const series = allSeries?.find((s) => s.id === pick);
-  const grants = agents.data ?? [];
+  // Only a grant that hasn't expired can sign; an expired one reverts NotAuthorized.
+  const grants = (agents.data ?? []).filter((g) => asOf === undefined || g.expiresAt > asOf);
   const grant = grants.find((g) => g.agent === signerPick);
   // An agent can only sign on the underlyings its grant allows; otherwise the owner signs.
   const signer = grant && series && !grant.allowed.includes(series.underlying) ? OWNER : grant ? signerPick : OWNER;
@@ -148,6 +149,7 @@ export function TradeView() {
           seriesId: series.id,
           qtyDelta: side === 'buy' ? settledQty : -settledQty,
           premium: Math.round(price * settledQty * 1e6) / 1e6,
+          venue,
           ...(signer !== OWNER ? { agent: signer } : {}),
         }
       : null;
@@ -269,7 +271,7 @@ export function TradeView() {
                 <div className="flex flex-wrap items-end justify-between gap-s4">
                   <MarketStrip u={t} />
                   {demo && DEMO_TICKET.agent && (
-                    <Button size="sm" variant="ghost" onClick={loadDemo}>
+                    <Button size="sm" variant="secondary" onClick={loadDemo}>
                       Load the refused agent ticket
                     </Button>
                   )}

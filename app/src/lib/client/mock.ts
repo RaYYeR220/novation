@@ -1,9 +1,16 @@
 import type {
-  AccountState, AgentGrant, GasRow, NovationClient, ProtocolStats, Quote, Refusal, ScenarioGrid, Series, Session, Underlying, Vault,
+  AccountExpiry, AccountState, AgentGrant, Auction, ExpiryPool, FeedRefusal, FeedStatus, GasRow, InsuranceFund, NewGrant,
+  NovationClient, OpenInterestRow, ProtocolStats, Quote, Refusal, ScenarioGrid, Series, Session, Underlying, Vault, VaultDetail,
+  Venue, WalletHoldings, WhatIfOptions,
 } from './types';
 import underlyingsJson from '../../fixtures/underlyings.json';
 import chainsJson from '../../fixtures/chains.json';
 import account7Json from '../../fixtures/account7.json';
+import account12Json from '../../fixtures/account12.json';
+import vaultDetailsJson from '../../fixtures/vault-details.json';
+import settlementJson from '../../fixtures/settlement.json';
+import riskJson from '../../fixtures/risk.json';
+import walletJson from '../../fixtures/wallet.json';
 import whatifsJson from '../../fixtures/whatifs.json';
 import marketMakerJson from '../../fixtures/market-maker.json';
 import vaultsJson from '../../fixtures/vaults.json';
@@ -19,12 +26,36 @@ type AccountData = Awaited<ReturnType<NovationClient['account']>>;
 /** tools/ref/gen_app_fixtures.py NOW: every fixture mark, grid and margin is priced at this second. */
 export const FIXTURE_AS_OF = 1790697600;
 const FEE_BPS = 5;
-const MM_RATIO = RISK.mmRatio;
-const account7 = account7Json as unknown as {
-  account: AccountData;
-  grids: Record<string, { cells: number[]; shockRange: Record<string, number> }>;
+/** How far a premium may sit from the canned ticket's and still be that ticket (USDG). */
+const PREMIUM_TOLERANCE = 0.01;
+type CannedTicket = {
+  id: number;
+  seriesId: number;
+  qtyDelta: number;
+  premium: number;
+  venue?: Venue;
+  agent?: string;
+  quote: Quote;
 };
-const marketMaker = marketMakerJson as unknown as AccountData & { grid: number[] };
+const MM_RATIO = RISK.mmRatio;
+type GridFixture = { cells: number[]; shockRange: Record<string, number>; im: number };
+type BookFixture = { account: AccountData; grids: Record<string, GridFixture> };
+const account7 = account7Json as unknown as BookFixture;
+const account12 = account12Json as unknown as BookFixture;
+const marketMaker = marketMakerJson as unknown as AccountData & { grids: Record<string, GridFixture> };
+/** Every demo book: account 7 (the book), 12 (the short book under liquidation) and 1 (the maker). */
+const BOOKS: Record<number, BookFixture> = {
+  [account7.account.id]: account7,
+  [account12.account.id]: account12,
+  [marketMaker.id]: {
+    account: { id: marketMaker.id, owner: marketMaker.owner, state: marketMaker.state, positions: marketMaker.positions, collateral: marketMaker.collateral },
+    grids: marketMaker.grids,
+  },
+};
+const settlement = settlementJson as unknown as { pools: ExpiryPool[]; accounts: Record<string, AccountExpiry[]> };
+const risk = riskJson as unknown as { feeds: FeedStatus[]; auctions: Auction[]; insurance: InsuranceFund; openInterest: OpenInterestRow[] };
+/** A demo transaction hash: a repeated byte, so it can't be mistaken for a real one. */
+const demoHash = (byte: string) => `0x${byte.repeat(32)}`;
 const clone = <T,>(v: T): T => structuredClone(v);
 const chains = chainsJson as unknown as Record<string, { expiries: number[]; series: ChainSeries[] }>;
 const seriesById = new Map<number, ChainSeries>(Object.values(chains).flatMap((c) => c.series.map((s) => [s.id, s] as const)));
@@ -46,43 +77,65 @@ export class MockClient implements NovationClient {
   }
 
   async account(id: number): Promise<AccountData> {
-    if (id === marketMaker.id) {
-      const { id: mid, owner, state, positions, collateral } = marketMaker;
-      return clone({ id: mid, owner, state, positions, collateral });
-    }
-    if (id !== account7.account.id) throw new Error(`unknown account ${id}`);
-    return clone(account7.account);
+    const b = BOOKS[id];
+    if (!b) throw new Error(`unknown account ${id}`);
+    return clone(b.account);
   }
 
-  /** Fixtures carry REGULAR, EXTENDED and WEEKEND grids for account 7; other sessions (HOLIDAY, HALTED) fall back to REGULAR and report `session: 'REGULAR'`. */
+  /** Fixtures carry REGULAR and WEEKEND grids for every demo book (account 7 and 12 also EXTENDED); other sessions fall back to REGULAR and report `session: 'REGULAR'`. */
   async scenarioGrid(id: number, session: Session = 'REGULAR'): Promise<ScenarioGrid> {
-    if (id === marketMaker.id) return { session: 'REGULAR', cells: clone(marketMaker.grid), shockRange: {} };
-    if (id !== account7.account.id) throw new Error(`unknown account ${id}`);
-    const exact = account7.grids[session];
-    const g = exact ?? account7.grids['REGULAR'];
+    const b = BOOKS[id];
+    if (!b) throw new Error(`unknown account ${id}`);
+    const exact = b.grids[session];
+    const g = exact ?? b.grids['REGULAR'];
     if (!g) throw new Error('missing grid');
-    return clone({ session: exact ? session : 'REGULAR', cells: g.cells, shockRange: g.shockRange });
+    return clone({ session: exact ? session : 'REGULAR', cells: g.cells, shockRange: g.shockRange, im: g.im });
   }
 
   /**
-   * Exact when the fixtures carry the ticket (computed by the integer kernel reference). Otherwise
-   * the float twin of the kernel (`lib/kernel.ts`) prices the book before and after, and the change
-   * is applied to the exact fixture state; such quotes are labelled `approx: true`. The after-trade
-   * grid is the exact fixture grid plus the twin's change, on both paths.
+   * Exact when the fixtures carry the ticket: same account, series, size and venue, and a premium
+   * within PREMIUM_TOLERANCE of the one the kernel reference priced. Margin, after-trade grid and
+   * refusal then come straight from tools/ref/gen_app_fixtures.py. The canned ticket is hedge-bot's;
+   * its agent refusal applies only when that agent signs.
    *
-   * The canned ticket is hedge-bot's: its budget refusal applies only when `agent` signs. For other
-   * tickets an agent is held to the generator's budget rule: used + growth of the correlated loss
-   * must stay within `maxWorstLoss`. The allowed-underlyings list is left to the caller.
+   * Any other ticket is an estimate (`approx: true`): the float twin of the kernel (`lib/kernel.ts`)
+   * prices the book before and after, and the change is applied to the exact fixture state and grid.
+   * Checks run in TradeLogic.trade order: allowed underlying, cash, margin (a pure reduction may stay
+   * under IM), then the agent's policy: post-trade lossIM within maxWorstLoss unless the side reduces
+   * risk, premium within maxPremiumPerTrade, and equity given up against the mark (fee aside) within
+   * the same cap.
    */
-  async whatIf(id: number, seriesId: number, qtyDelta: number, premium: number, agent?: string): Promise<Quote> {
+  async whatIf(id: number, seriesId: number, qtyDelta: number, premium: number, opts: WhatIfOptions = {}): Promise<Quote> {
     const series = seriesById.get(seriesId);
     if (!series) throw new Error(`unknown series ${seriesId}`);
     if (!Number.isFinite(qtyDelta) || qtyDelta === 0) throw new RangeError('qtyDelta must be a non-zero number');
+    const { agent, venue } = opts;
     const acct = await this.account(id);
     const grant = agent
       ? (await this.agents(id)).find((g) => g.agent.toLowerCase() === agent.toLowerCase())
       : undefined;
     if (agent && !grant) throw new Error(`${agent} holds no grant on account ${id}`);
+
+    const tickets = whatifsJson as unknown as CannedTicket[];
+    const hit = tickets.find(
+      (w) =>
+        w.id === id &&
+        w.seriesId === seriesId &&
+        w.qtyDelta === qtyDelta &&
+        (w.venue === undefined || w.venue === venue) &&
+        Math.abs(w.premium - premium) <= PREMIUM_TOLERANCE,
+    );
+    if (hit) {
+      const quote = clone(hit.quote);
+      const signedByIts = Boolean(agent && hit.agent && agent.toLowerCase() === hit.agent.toLowerCase());
+      if (quote.refusal?.code.startsWith('Agent') && !signedByIts) delete quote.refusal;
+      return { ...quote, approx: false };
+    }
+
+    const s = acct.state;
+    const held = acct.positions.find((p) => p.seriesId === seriesId)?.qty ?? 0;
+    const next = held + qtyDelta;
+    const opening = next !== 0 && (Math.abs(next) > Math.abs(held) || held > 0 !== next > 0);
 
     const us = await this.underlyings();
     const before = buildBook(acct.positions, acct.collateral, us);
@@ -93,15 +146,6 @@ export class MockClient implements NovationClient {
     const grid = (await this.scenarioGrid(id)).cells;
     const afterGrid = grid.map((c, i) => c + (ka.grid[i] as number) - (kb.grid[i] as number));
 
-    const tickets = whatifsJson as unknown as { id: number; seriesId: number; qtyDelta: number; premium: number; quote: Quote }[];
-    const hit = tickets.find((w) => w.id === id && w.seriesId === seriesId && w.qtyDelta === qtyDelta);
-    if (hit) {
-      const quote = clone(hit.quote);
-      if (!grant && quote.refusal?.code === 'AgentRiskBudgetExceeded') delete quote.refusal;
-      return { ...quote, afterGrid, approx: false };
-    }
-
-    const s = acct.state;
     // premium is a positive magnitude; qtyDelta sign gives direction (buy pays, sell receives).
     const sign = qtyDelta < 0 ? 1 : -1;
     const fee = premium * (FEE_BPS / 1e4);
@@ -117,29 +161,38 @@ export class MockClient implements NovationClient {
       im,
       mm: im * MM_RATIO,
       worstScenario: ka.worstScenario,
-      deficit: Math.max(0, im - equity),
+      deficit: s.deficit,
       healthy: equity >= im,
       liquidatable: equity < im * MM_RATIO,
     };
-    // Spec 5.3: a trade that lowers lossIM and grows no series clears even below initial margin.
-    const held = acct.positions.find((p) => p.seriesId === seriesId)?.qty ?? 0;
-    const reducing = ka.lossIM <= kb.lossIM && Math.abs(held + qtyDelta) <= Math.abs(held);
+
+    const pureReduction = !opening && im <= s.im && equity + fee >= s.equity;
     let refusal: Refusal | undefined;
-    if (cash < 0) refusal = { code: 'InsufficientCash', message: 'Cash does not cover the premium and fee.', numbers: { cash, premium, fee } };
-    else if (!afterState.healthy && !reducing)
+    if (grant && !grant.allowed.includes(series.underlying))
+      refusal = { code: 'AgentUnderlyingNotAllowed', message: `The agent may not trade ${series.underlying}.` };
+    else if (cash < 0)
+      refusal = { code: 'InsufficientCash', message: 'Cash does not cover the premium and fee.', numbers: { cash, premium, fee } };
+    else if (!afterState.healthy && !pureReduction)
       refusal = { code: 'InsufficientMargin', message: 'Initial margin after the trade exceeds equity.', numbers: { im, equity } };
     else if (grant) {
-      const projected = grant.used + Math.max(0, ka.lossCorr - kb.lossCorr);
-      if (projected > grant.maxWorstLoss) {
+      const loss = s.equity - (equity + fee);
+      if (im > grant.maxWorstLoss && (opening || im > s.im)) {
         refusal = {
           code: 'AgentRiskBudgetExceeded',
           message: "Worst-case loss after this trade exceeds the agent's risk budget.",
-          numbers: {
-            worstLoss: Math.round(projected * 100) / 100,
-            budget: grant.maxWorstLoss,
-            used: grant.used,
-            remaining: grant.maxWorstLoss - grant.used,
-          },
+          numbers: { worstLoss: im, budget: grant.maxWorstLoss, used: s.im, remaining: grant.maxWorstLoss - s.im },
+        };
+      } else if (premium > grant.maxPremiumPerTrade) {
+        refusal = {
+          code: 'AgentPremiumExceeded',
+          message: "Premium exceeds the agent's per-trade cap.",
+          numbers: { premium, cap: grant.maxPremiumPerTrade },
+        };
+      } else if (loss > grant.maxPremiumPerTrade) {
+        refusal = {
+          code: 'AgentValueDrainExceeded',
+          message: "The trade gives up more value than the agent's cap.",
+          numbers: { loss, cap: grant.maxPremiumPerTrade },
         };
       }
     }
@@ -150,8 +203,32 @@ export class MockClient implements NovationClient {
     return clone(vaultsJson as unknown as Vault[]);
   }
 
+  /** Grants granted or revoked in this session, over the fixtures. Nothing is sent to a chain. */
+  private grants = new Map<number, AgentGrant[]>();
+
   async agents(id: number): Promise<AgentGrant[]> {
+    const local = this.grants.get(id);
+    if (local) return clone(local);
     return clone((agentsJson as unknown as Record<string, AgentGrant[]>)[String(id)] ?? []);
+  }
+
+  /** Mirrors Clearinghouse.grantAgent: owner only, a real agent address that isn't the owner, an expiry in the future. */
+  async grantAgent(id: number, g: NewGrant): Promise<string> {
+    const acct = await this.account(id);
+    if (!/^0x[0-9a-fA-F]{40}$/.test(g.agent) || /^0x0{40}$/.test(g.agent)) throw new Error('InvalidAgent');
+    if (g.agent.toLowerCase() === acct.owner.toLowerCase()) throw new Error('InvalidAgent');
+    if (g.expiresAt <= FIXTURE_AS_OF) throw new Error('InvalidExpiry');
+    const list = (await this.agents(id)).filter((x) => x.agent.toLowerCase() !== g.agent.toLowerCase());
+    list.push({ ...g, used: acct.state.im });
+    this.grants.set(id, list);
+    return demoHash('a7');
+  }
+
+  /** Mirrors Clearinghouse.revokeAgent: effective at once. */
+  async revokeAgent(id: number, agent: string): Promise<string> {
+    const list = (await this.agents(id)).filter((x) => x.agent.toLowerCase() !== agent.toLowerCase());
+    this.grants.set(id, list);
+    return demoHash('a8');
   }
 
   async protocol(): Promise<ProtocolStats> {
@@ -162,7 +239,43 @@ export class MockClient implements NovationClient {
     return clone(gasJson.rows);
   }
 
-  async refusalsFeed() {
-    return clone(refusalsJson as unknown as Awaited<ReturnType<NovationClient['refusalsFeed']>>);
+  async refusalsFeed(): Promise<FeedRefusal[]> {
+    return clone(refusalsJson as unknown as FeedRefusal[]);
+  }
+
+  async vault(address: string): Promise<VaultDetail> {
+    const v = (vaultDetailsJson as unknown as Record<string, VaultDetail>)[address.toLowerCase()];
+    if (!v) throw new Error(`unknown vault ${address}`);
+    return clone(v);
+  }
+
+  async wallet(owner: string): Promise<WalletHoldings> {
+    const w = walletJson as unknown as WalletHoldings;
+    if (owner.toLowerCase() !== w.owner.toLowerCase()) return { owner, tokens: {}, vaults: [] };
+    return clone(w);
+  }
+
+  async expiries(id: number): Promise<AccountExpiry[]> {
+    return clone(settlement.accounts[String(id)] ?? []);
+  }
+
+  async pools(): Promise<ExpiryPool[]> {
+    return clone(settlement.pools);
+  }
+
+  async feeds(): Promise<FeedStatus[]> {
+    return clone(risk.feeds);
+  }
+
+  async auctions(): Promise<Auction[]> {
+    return clone(risk.auctions);
+  }
+
+  async insurance(): Promise<InsuranceFund> {
+    return clone(risk.insurance);
+  }
+
+  async openInterest(): Promise<OpenInterestRow[]> {
+    return clone(risk.openInterest);
   }
 }

@@ -47,7 +47,7 @@ test('/system keyboard: segmented switch, tabs and dialog', async ({ page }) => 
   await live.getByRole('radio', { name: 'Regular' }).focus();
   await page.keyboard.press('ArrowRight');
   await expect(live.getByRole('radio', { name: 'Weekend' })).toBeChecked();
-  await expect(page.getByText(/Weekend initial margin, account 7/)).toContainText('1,350.99');
+  await expect(page.getByText(/Weekend initial margin, account 7/)).toContainText('1,373.29');
 
   const tabs = page.getByRole('tablist', { name: 'Account 7' });
   await tabs.getByRole('tab', { name: /Positions/ }).focus();

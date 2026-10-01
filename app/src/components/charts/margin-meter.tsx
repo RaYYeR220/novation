@@ -15,6 +15,8 @@ export interface MarginMeterProps {
   after?: AccountState;
   /** A new quote is computing; the last one stays on screen, dimmed. */
   pending?: boolean;
+  /** The after figures are a float estimate, not the kernel's own output. */
+  estimate?: boolean;
   /** Replaces the status line under the ruler. */
   status?: ReactNode;
   unit?: string;
@@ -28,6 +30,7 @@ const GLIDE = 'transition-[left,width] duration-(--duration-slow) ease-out';
 
 function Lane({
   name,
+  note,
   state,
   top,
   glide,
@@ -35,6 +38,8 @@ function Lane({
   labelId,
 }: {
   name: string;
+  /** A second line under the name, e.g. "estimate". */
+  note?: string;
   state: AccountState;
   top: number;
   glide: boolean;
@@ -51,9 +56,10 @@ function Lane({
   const hi = band ? toPct(Math.max(band.from, band.to), top) : 0;
   const mid = (lo + hi) / 2;
   return (
-    <div className="grid grid-cols-[44px_minmax(0,1fr)] items-end gap-s3">
-      <span id={labelId} className="pb-[9px] text-t12 text-navy-200">
+    <div className="grid grid-cols-[56px_minmax(0,1fr)] items-end gap-s3">
+      <span id={labelId} className="grid pb-[9px] text-t12 leading-tight text-navy-200">
         {name}
+        {note && <span className="text-navy-200/80">{note}</span>}
       </span>
       <div
         role="meter"
@@ -139,7 +145,7 @@ function Change({ v, good }: { v: number | undefined; good: 'up' | 'down' }) {
  * The table gives the exact figures; the ruler shows where the ticket moves the datums, with the
  * margin it adds washed in cyan. The after lane glides from the current state when a quote lands.
  */
-export function MarginMeter({ now, after, pending = false, status, unit = 'USDG', className }: MarginMeterProps) {
+export function MarginMeter({ now, after, pending = false, estimate = false, status, unit = 'USDG', className }: MarginMeterProps) {
   const id = useId();
   // The lanes take the new state one frame late, so the after lane always has a start to glide from.
   const [lane, setLane] = useState<AccountState | undefined>(undefined);
@@ -214,7 +220,7 @@ export function MarginMeter({ now, after, pending = false, status, unit = 'USDG'
               Now
             </th>
             <th scope="col" className="pb-s2 text-right font-normal">
-              After
+              After{after && estimate && <span className="block text-navy-200/80">estimate</span>}
             </th>
             <th scope="col" className="pb-s2 text-right font-normal">
               Change
@@ -244,6 +250,7 @@ export function MarginMeter({ now, after, pending = false, status, unit = 'USDG'
         <div className={cn('transition-opacity duration-(--duration-fast)', !after && 'opacity-40')}>
           <Lane
             name="After"
+            note={after && estimate ? 'estimate' : undefined}
             state={lane ?? now}
             top={top}
             glide
@@ -252,7 +259,7 @@ export function MarginMeter({ now, after, pending = false, status, unit = 'USDG'
           />
         </div>
         {/* axis: five round stops on the shared ruler */}
-        <div aria-hidden="true" className="grid grid-cols-[44px_minmax(0,1fr)] gap-s3">
+        <div aria-hidden="true" className="grid grid-cols-[56px_minmax(0,1fr)] gap-s3">
           <span />
           <div className="relative h-4 border-t border-navy-700">
             {[0, 0.25, 0.5, 0.75, 1].map((f) => (

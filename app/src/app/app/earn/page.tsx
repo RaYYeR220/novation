@@ -1,8 +1,11 @@
 import type { Metadata } from 'next';
-import { SectionPending } from '@/components/app/section-pending';
+import { EarnView } from '@/components/earn/earn-view';
 
-export const metadata: Metadata = { title: 'Earn' };
+export const metadata: Metadata = {
+  title: 'Earn',
+  description: 'Covered-call and put-write vaults: NAV, strategy rules, deposits and redemptions at the live NAV.',
+};
 
 export default function EarnPage() {
-  return <SectionPending title="Earn" body="Covered-call and put-write vaults, their NAV and deposits, arrive with the next build." />;
+  return <EarnView />;
 }

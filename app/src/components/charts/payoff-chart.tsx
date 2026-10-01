@@ -290,6 +290,7 @@ export function PayoffChart({
             ? `No breakeven between ${fmtNumber(xmin, 0)} and ${fmtNumber(xmax, 0)}.`
             : `Breakeven at ${joinPrices(bes)}.`}{' '}
           P&amp;L in {unit} against today&apos;s marks.
+          {main.legs.some((l) => l.expiry > horizon) && ' Legs that expire later are an estimate: Black-Scholes at mark vol.'}
         </p>
         <button
           type="button"

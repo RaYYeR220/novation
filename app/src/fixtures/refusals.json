@@ -1,32 +1,62 @@
 [
  {
   "code": "AgentRiskBudgetExceeded",
-  "message": "Worst-case loss 2130.01 exceeds the risk budget of 1500.00.",
+  "message": "Worst-case loss 1762.72 exceeds the risk budget of 1500.00.",
   "numbers": {
-   "worstLoss": 2130.01,
+   "worstLoss": 1762.715506,
    "budget": 1500.0,
-   "used": 1180.0,
-   "remaining": 320.0
+   "used": 596.506189,
+   "remaining": 903.493811
   },
   "txHash": "0x7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c",
   "at": 1790694000,
-  "account": 7
+  "account": 7,
+  "agent": "0xb0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0",
+  "detail": "Sell 60 NVDA 200 calls through RFQ at 25.59"
+ },
+ {
+  "code": "AgentPremiumExceeded",
+  "message": "Premium exceeds the agent's per-trade cap.",
+  "numbers": {
+   "premium": 580.36725,
+   "cap": 500.0
+  },
+  "at": 1790692200,
+  "txHash": "0x5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+  "account": 7,
+  "agent": "0xb0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0",
+  "detail": "Buy 50 NVDA 215 calls at 11.61"
  },
  {
   "code": "InsufficientMargin",
-  "message": "Initial margin after trade exceeds equity.",
+  "message": "Initial margin after the trade exceeds equity.",
   "numbers": {
-   "im": 3120.5,
-   "equity": 2890.0
+   "im": 1288.411593,
+   "equity": 732.744147
   },
   "at": 1790690400,
   "txHash": "0x3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e",
-  "account": 12
+  "account": 12,
+  "detail": "Sell 5 TSLA 380 puts at 8.06"
+ },
+ {
+  "code": "VaultNotLive",
+  "message": "The vault is not live while its underlying is halted.",
+  "at": 1788967830,
+  "txHash": "0x9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d9d",
+  "detail": "Deposit 10 NVDA into nccNVDA",
+  "vault": "0xa100000000000000000000000000000000000000",
+  "haltReason": "multiplier",
+  "effectiveAt": 1788998430
  },
  {
   "code": "OpeningNotAllowed",
-  "message": "Opening trades are closed while the session is halted.",
-  "at": 1790611200,
-  "account": 31
+  "message": "Opening trades are closed while the underlying is halted.",
+  "at": 1788962730,
+  "txHash": "0x2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
+  "account": 1,
+  "detail": "Buy 20 NVDA 230 calls",
+  "haltReason": "multiplier",
+  "effectiveAt": 1788998430
  }
 ]
