@@ -10,6 +10,7 @@ import { createWalletClient, http, maxUint256, type Address, type WalletClient }
 import { privateKeyToAccount, type PrivateKeyAccount } from 'viem/accounts';
 import {
   bsQuote,
+  fromWad,
   getAccountState,
   getMarginAfter,
   getPositionsRaw,
@@ -114,7 +115,7 @@ d('RFQ maker on a local chain', () => {
 
     maker = new Maker({ ctx: L.ctx, signer: makerW.account, makerId, marketCacheMs: 0 });
     await maker.assertAuthorized();
-    handler = createRfqHandler({ maker });
+    handler = createRfqHandler({ maker, rateLimit: false });
   });
 
   it("prices with the kernel's own Black-Scholes, integer for integer", async () => {
@@ -144,10 +145,12 @@ d('RFQ maker on a local chain', () => {
       const { quote, signature } = fromJson(j);
       expect(quote.signer).toBe(makerW.account.address);
       expect(quote.makerId).toBe(makerId);
-      // 60 s from when it was made (chain time, or the wall clock when the chain is behind it)
+      // GET quotes are indicative: the short TTL (15 s by default) from when they were made (chain
+      // time, or the wall clock when the chain is behind it)
+      expect(j.firm).toBe(false);
       const madeBy = Math.max(await chainNow(), Math.floor(Date.now() / 1000));
-      expect(Number(quote.deadline) - madeBy).toBeLessThanOrEqual(60);
-      expect(Number(quote.deadline) - madeBy).toBeGreaterThan(50);
+      expect(Number(quote.deadline) - madeBy).toBeLessThanOrEqual(15);
+      expect(Number(quote.deadline) - madeBy).toBeGreaterThan(5);
       expect(await verifyQuote(quote, signature, domain, L.client)).toBe(true);
       expect(await getQuoteHashOnChain(L.ctx, quote)).toBe(j.hash);
     }
@@ -157,7 +160,9 @@ d('RFQ maker on a local chain', () => {
     const r = await post(handler, { series: call.id, side: 'buy', qty: '2' });
     expect(r.status).toBe(200);
     const j = (await r.json()) as QuoteJson;
+    expect(j.firm).toBe(true);
     const { quote, signature } = fromJson(j);
+    expect(Number(quote.deadline) - Math.max(await chainNow(), Math.floor(Date.now() / 1000))).toBeGreaterThan(50);
     const makerBefore = await getAccountState(L.ctx, makerId);
 
     const fill = await simulateRfqFill(L.ctx, takerW.account, quote, signature, takerId, 2n * WAD);
@@ -205,7 +210,7 @@ d('RFQ maker on a local chain', () => {
 
   it('never issues a quote that would push the maker below initial margin', async () => {
     const poor = new Maker({ ctx: L.ctx, signer: poorW.account, makerId: poorId, marketCacheMs: 0, pricing: { maxQtyPerQuote: 100n * WAD } });
-    const h = createRfqHandler({ maker: poor });
+    const h = createRfqHandler({ maker: poor, rateLimit: false });
     const r = await post(h, { series: call.id, side: 'buy', qty: '20' });
     expect(r.status).toBe(422);
     const text = await r.text();
@@ -243,6 +248,55 @@ d('RFQ maker on a local chain', () => {
     expect(r.ok ? 'quoted' : r.refusal.code).toBe('Halted');
     const g = await get(handler, `/quotes?series=${tsla.id}`);
     expect(g.status).toBe(422);
+  });
+
+  it("prices a live quote's margin with the kernel: its standalone IM is what the account would need", async () => {
+    const fresh = actor('fresh maker');
+    const freshId = await account(fresh, 1_000, 1_000);
+    const m = new Maker({ ctx: L.ctx, signer: fresh.account, makerId: freshId, marketCacheMs: 0 });
+    const im = await m.standaloneIm(call.id, -WAD);
+    const after = await getMarginAfter(L.ctx, freshId, call.id, -WAD, 0n);
+    expect(im).toBeGreaterThan(0n);
+    expect(Math.abs(fromWad(im) - fromWad(after.im)) / fromWad(after.im)).toBeLessThan(1e-3);
+  });
+
+  it('counts live quotes on other series in the margin check', async () => {
+    // a second call on the same expiry, further out of the money than the first
+    const now = await chainNow();
+    const other = (await listSeries(L.ctx, { underlying: NVDA, liveAt: now + 86400 }))
+      .filter((s) => s.isCall && s.expiry === call.expiry && s.strike > call.strike)
+      .sort((a, b) => (a.strike < b.strike ? -1 : 1))[0]!;
+    const probe = new Maker({ ctx: L.ctx, signer: makerW.account, makerId, marketCacheMs: 0 });
+    const imX = await probe.standaloneIm(call.id, -WAD);
+    const imY = await probe.standaloneIm(other.id, -WAD);
+    expect(imY).toBeGreaterThan(0n);
+    expect(imX * 2n).toBeGreaterThanOrEqual(imY);
+
+    // enough for either quote on its own (buffer 1.2), not for both together
+    const deposit = Math.ceil(fromWad((12n * imX) / 10n + (6n * imY) / 10n));
+    const mid = actor('mid maker');
+    const midId = await account(mid, deposit, deposit);
+    const m = new Maker({ ctx: L.ctx, signer: mid.account, makerId: midId, marketCacheMs: 0 });
+    const x = await m.quote({ seriesId: call.id, side: 'buy', qty: WAD }, { firm: true });
+    expect(x.ok).toBe(true);
+    const y = await m.quote({ seriesId: other.id, side: 'buy', qty: WAD }, { firm: true });
+    expect(y.ok ? 'quoted' : y.refusal.code).toBe('MakerMargin');
+    // without the live quote on the first series the second one fits
+    const alone = new Maker({ ctx: L.ctx, signer: mid.account, makerId: midId, marketCacheMs: 0 });
+    const y2 = await alone.quote({ seriesId: other.id, side: 'buy', qty: WAD }, { firm: true });
+    expect(y2.ok).toBe(true);
+  });
+
+  it('caps the live quotes one client may hold', async () => {
+    const m = new Maker({ ctx: L.ctx, signer: makerW.account, makerId, marketCacheMs: 0, maxOutstandingPerClient: 2 });
+    const h = createRfqHandler({ maker: m, rateLimit: false });
+    const ask = (ip: string) => h(new Request(`http://maker.local/quotes?series=${call.id}&side=buy`, { headers: { 'x-real-ip': ip } }));
+    expect((await ask('203.0.113.10')).status).toBe(200);
+    expect((await ask('203.0.113.10')).status).toBe(200);
+    const third = await ask('203.0.113.10');
+    expect(third.status).toBe(429);
+    expect(((await third.json()) as { refusals: { code: string }[] }).refusals[0]!.code).toBe('ClientLimit');
+    expect((await ask('203.0.113.11')).status).toBe(200);
   });
 
   it('refuses an unknown series', async () => {

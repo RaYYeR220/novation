@@ -16,6 +16,7 @@ import {
   simulateMint,
   type Novation,
 } from '@novation/sdk';
+import { DEMO_CHAIN_ID } from '../src/config';
 import { deriveKey } from '../src/keys';
 
 export interface Actor {
@@ -35,8 +36,12 @@ export function actor(n: Novation, key: `0x${string}`): Actor {
   return { account, wallet: createWalletClient({ account, chain: n.client.chain, transport: http(url) }) };
 }
 
-/** The deployer and an actor derived from its key with `label`. */
+/**
+ * The deployer and an actor derived from its key with `label`. A testnet demo convenience only:
+ * whoever holds the deployer key controls the derived accounts, so it is refused on other chains.
+ */
 export function deployerAnd(n: Novation, label: string, env: NodeJS.ProcessEnv = process.env): { deployer: Actor; derived: Actor } {
+  if (n.deployment.chainId !== DEMO_CHAIN_ID) throw new Error(`derived ${label} keys are for Robinhood Chain testnet only, not chain ${n.deployment.chainId}`);
   const key = env.DEPLOYER_PRIVATE_KEY;
   if (!key) throw new Error('DEPLOYER_PRIVATE_KEY is not set (see .env.example)');
   const deployer = actor(n, (key.startsWith('0x') ? key : `0x${key}`) as `0x${string}`);

@@ -51,8 +51,10 @@ export interface PricingConfig {
   maxPriceAge?: number;
   /** After the fill the maker must keep equity >= IM * (1 + marginBuffer) (WAD). */
   marginBuffer: bigint;
-  /** Quote lifetime (seconds). */
+  /** Lifetime of a firm quote (POST /quote-request), seconds. */
   ttl: number;
+  /** Lifetime of an indicative quote (GET /quotes), seconds: shorter, so it holds inventory briefly. */
+  indicativeTtl: number;
 }
 
 export const DEFAULT_PRICING: PricingConfig = {
@@ -67,7 +69,42 @@ export const DEFAULT_PRICING: PricingConfig = {
   minTimeToExpiry: 15 * 60,
   marginBuffer: 2n * 10n ** 17n,
   ttl: 60,
+  indicativeTtl: 15,
 };
+
+/** The longest quote lifetime the config accepts (seconds). */
+export const MAX_TTL = 300;
+
+/**
+ * Throws unless every setting is in range: spreads, slopes, session adds and the margin buffer
+ * non-negative and bounded, the price spread below 100%, sizes positive, the default size within
+ * the per-quote cap, lifetimes between 1 s and MAX_TTL. Returns the config.
+ */
+export function validatePricing(c: PricingConfig): PricingConfig {
+  const bad = (what: string): never => {
+    throw new RangeError(`pricing config: ${what}`);
+  };
+  const within = (name: string, v: bigint, max: bigint) => {
+    if (v < 0n || v > max) bad(`${name} must be between 0 and ${fmt(max)}, got ${fmt(v)}`);
+  };
+  within('volSpread', c.volSpread, 2n * WAD);
+  if (c.priceSpread < 0n || c.priceSpread >= WAD / 2n) bad(`priceSpread must be at least 0 and below 0.5, got ${fmt(c.priceSpread)}`);
+  within('skewSlope', c.skewSlope, 10n * WAD);
+  within('inventorySlope', c.inventorySlope, 10n * WAD);
+  for (const [k, v] of Object.entries(c.sessionVolAdd)) within(`sessionVolAdd.${k}`, v, 2n * WAD);
+  within('marginBuffer', c.marginBuffer, 10n * WAD);
+  if (c.maxQtyPerQuote <= 0n) bad('maxQtyPerQuote must be positive');
+  if (c.maxInventoryPerSeries <= 0n) bad('maxInventoryPerSeries must be positive');
+  if (c.defaultQty <= 0n || c.defaultQty > c.maxQtyPerQuote) bad('defaultQty must be positive and at most maxQtyPerQuote');
+  const secs = (name: string, v: number, min: number, max: number) => {
+    if (!Number.isInteger(v) || v < min || v > max) bad(`${name} must be a whole number of seconds from ${min} to ${max}, got ${v}`);
+  };
+  secs('ttl', c.ttl, 1, MAX_TTL);
+  secs('indicativeTtl', c.indicativeTtl, 1, c.ttl);
+  secs('minTimeToExpiry', c.minTimeToExpiry, 0, 30 * 86400);
+  if (c.maxPriceAge !== undefined) secs('maxPriceAge', c.maxPriceAge, 1, 30 * 86400);
+  return c;
+}
 
 /** What the pricer needs to know about the underlying, read at one block. */
 export interface MarketView {
@@ -106,11 +143,15 @@ export type RefusalCode =
   | 'NoBid'
   | 'MakerMargin'
   | 'MakerCash'
-  | 'Unavailable';
+  | 'Unavailable'
+  | 'Busy'
+  | 'ClientLimit';
 
 export interface QuoteRefusal {
   code: RefusalCode;
   message: string;
+  /** Internal detail for the operator's logs; never sent to the client. */
+  detail?: string;
 }
 
 export const refuse = (code: RefusalCode, message: string): QuoteRefusal => ({ code, message });
@@ -185,6 +226,7 @@ export function moneyness(strike: bigint, spot: bigint): bigint {
 }
 
 const mulWad = (a: bigint, b: bigint) => (a * b) / WAD;
+const nonNeg = (x: bigint) => (x < 0n ? 0n : x);
 const ceilTo = (x: bigint, tick: bigint) => ((x + tick - 1n) / tick) * tick;
 const floorTo = (x: bigint, tick: bigint) => (x / tick) * tick;
 
@@ -212,7 +254,7 @@ export function priceSide(args: {
   const tau = BigInt(s.expiry - m.now);
   const vol = m.markVol;
   const mark = bsPrice(m.spot, s.strike, tau, vol, m.rate, s.isCall);
-  const volMid = mulWad(vol, WAD + mulWad(cfg.skewSlope, moneyness(s.strike, m.spot)));
+  const volMid = nonNeg(mulWad(vol, WAD + mulWad(cfg.skewSlope, moneyness(s.strike, m.spot))));
   const after = positionAfter(side, qty, position, reserved);
   const use = (x: bigint) => {
     if (cfg.maxInventoryPerSeries === 0n || x <= 0n) return 0n;
@@ -221,20 +263,27 @@ export function priceSide(args: {
   };
   const widen = cfg.sessionVolAdd[session] + cfg.volSpread;
 
+  // the clamps to the mark run before and after the price spread, so even a config that skipped
+  // validation can't ask below the mark or bid above it (or below zero)
   if (side === 'buy') {
-    const sideVol = mulWad(volMid, WAD + mulWad(cfg.inventorySlope, use(-after))) + widen;
+    const sideVol = nonNeg(mulWad(volMid, WAD + mulWad(cfg.inventorySlope, use(-after))) + widen);
     let px = bsPrice(m.spot, s.strike, tau, sideVol, m.rate, s.isCall);
     if (px < mark) px = mark;
-    const price = ceilTo(mulWadUp(px, WAD + cfg.priceSpread), PRICE_TICK);
-    return { ok: true, quote: { side, price: price === 0n ? PRICE_TICK : price, qty, vol: sideVol, mark } };
+    let price = ceilTo(mulWadUp(px, nonNeg(WAD + cfg.priceSpread)), PRICE_TICK);
+    const floor = ceilTo(mark, PRICE_TICK);
+    if (price < floor) price = floor;
+    if (price < PRICE_TICK) price = PRICE_TICK;
+    return { ok: true, quote: { side, price, qty, vol: sideVol, mark } };
   }
 
   const cut = mulWad(volMid, mulWad(cfg.inventorySlope, use(after))) + widen;
   const sideVol = volMid > cut ? volMid - cut : 0n;
   let px = sideVol === 0n ? 0n : bsPrice(m.spot, s.strike, tau, sideVol, m.rate, s.isCall);
   if (px > mark) px = mark;
-  const price = floorTo(mulWad(px, WAD - cfg.priceSpread), PRICE_TICK);
-  if (price === 0n) return { ok: false, refusal: refuse('NoBid', 'The option is worth less than a tick at the bid.') };
+  let price = floorTo(mulWad(px, nonNeg(WAD - cfg.priceSpread)), PRICE_TICK);
+  const cap = floorTo(mark, PRICE_TICK);
+  if (price > cap) price = cap;
+  if (price <= 0n) return { ok: false, refusal: refuse('NoBid', 'The option is worth less than a tick at the bid.') };
   return { ok: true, quote: { side, price, qty, vol: sideVol, mark } };
 }
 
@@ -243,9 +292,13 @@ export function makerDelta(side: Side, qty: bigint, premium: bigint): { qtyDelta
   return side === 'buy' ? { qtyDelta: -qty, cashDelta: premium } : { qtyDelta: qty, cashDelta: -premium };
 }
 
-/** Null when the maker's post-fill state keeps equity >= IM * (1 + buffer); else the refusal. */
-export function checkMakerMargin(after: Pick<AccountState, 'equity' | 'im'>, buffer: bigint): QuoteRefusal | null {
-  const need = after.im + (after.im * buffer + WAD - 1n) / WAD;
+/**
+ * Null when the maker's post-fill state keeps equity >= (IM + extraIm) * (1 + buffer); else the
+ * refusal. `extraIm` is the margin the maker's other live quotes could add if they fill too.
+ */
+export function checkMakerMargin(after: Pick<AccountState, 'equity' | 'im'>, buffer: bigint, extraIm = 0n): QuoteRefusal | null {
+  const base = after.im + (extraIm > 0n ? extraIm : 0n);
+  const need = base + (base * (buffer > 0n ? buffer : 0n) + WAD - 1n) / WAD;
   if (after.equity >= need) return null;
   return refuse('MakerMargin', `The fill would leave the maker with ${fmt(after.equity)} equity against ${fmt(need)} required.`);
 }

@@ -6,10 +6,8 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { fromWad } from '@novation/sdk';
-import { makerFromEnv, type Env } from './config';
-import { createRfqHandler } from './handler';
-
-const MAX_BODY = 64 * 1024;
+import { makerFromEnv, rateLimitFromEnv, type Env } from './config';
+import { createRfqHandler, MAX_BODY_BYTES } from './handler';
 
 /** Serves a fetch-style handler over node:http. */
 export function serve(handler: (req: Request) => Promise<Response>, opts: { port: number; host?: string }): Promise<Server> {
@@ -19,7 +17,7 @@ export function serve(handler: (req: Request) => Promise<Response>, opts: { port
       let size = 0;
       for await (const c of req) {
         size += (c as Buffer).length;
-        if (size > MAX_BODY) {
+        if (size > MAX_BODY_BYTES) {
           res.writeHead(413, { 'content-type': 'application/json' }).end('{"error":{"code":"BadRequest","message":"body too large"}}');
           return;
         }
@@ -27,6 +25,8 @@ export function serve(handler: (req: Request) => Promise<Response>, opts: { port
       }
       const headers = new Headers();
       for (const [k, v] of Object.entries(req.headers)) if (typeof v === 'string') headers.set(k, v);
+      // the peer's address, not anything the client wrote: the handler keys its rate limit on it
+      headers.set('x-real-ip', req.socket.remoteAddress ?? 'unknown');
       const body = req.method !== 'GET' && req.method !== 'HEAD' && chunks.length > 0 ? Buffer.concat(chunks) : undefined;
       const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
       const response = await handler(new Request(url, { method: req.method, headers, body }));
@@ -51,6 +51,7 @@ export async function main(env: Env = process.env): Promise<Server> {
   const handler = createRfqHandler({
     maker,
     cors: env.MM_CORS || undefined,
+    rateLimit: rateLimitFromEnv(env),
     onEvent: (e) => console.log(JSON.stringify({ t: new Date().toISOString(), ...e })),
   });
   const port = Number(env.MM_PORT || 8787);
