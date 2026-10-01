@@ -1,0 +1,9 @@
+contracts/out
+contracts/cache
+contracts/broadcast
+kernel/target
+target
+**/node_modules
+**/.next
+app/test-results
+app/playwright-report
