@@ -298,6 +298,44 @@ contract AuctionHouseTest is Fixture {
         ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
     }
 
+    /// An auction whose account recovers without a bid on Friday evening would still run on Sunday
+    /// (its clock counts market time) and hand a new fall its old discount. Anyone can end it while
+    /// the account isn't liquidatable, and the next fall starts a fresh ramp.
+    function test_recoveredAuctionCanBeEnded() public {
+        uint256 sun2000 = 1_790_553_600; // 2026-09-27 20:00 EDT
+        (uint256 a,) = _shortPuts(520 * USDG);
+        _fund(carol, 10_000 * USDG, 0);
+        vm.prank(dave);
+        vm.expectRevert(AuctionHouse.AuctionNotActive.selector);
+        ah.endLiquidation(a);
+
+        vm.warp(FRI_1940_EDT);
+        _setPrice(address(nvda), 150e18);
+        ah.startLiquidation(a);
+        vm.prank(dave);
+        vm.expectRevert(AuctionHouse.StillLiquidatable.selector);
+        ah.endLiquidation(a);
+
+        vm.warp(FRI_1940_EDT + 900); // 19:55: the price recovers, nobody bid
+        _setPrice(address(nvda), 175e18);
+        assertFalse(ch.accountState(a).liquidatable);
+        (, bool active) = ah.liquidationDiscount(a);
+        assertTrue(active); // left alone, it would still run on Sunday
+        vm.expectEmit(true, true, true, true, address(ah));
+        emit IAuctionHouse.LiquidationEnded(a);
+        vm.prank(dave);
+        ah.endLiquidation(a);
+        assertEq(ah.liquidationStartedAt(a), 0);
+        _assertDiscount(a, 0, false);
+
+        // Sunday evening it falls again: a fresh auction, from the start discount
+        vm.warp(sun2000 + 60);
+        _setPrice(address(nvda), 150e18);
+        assertTrue(ch.accountState(a).liquidatable);
+        ah.startLiquidation(a);
+        _assertDiscount(a, 0.02e18, true);
+    }
+
     /// The discount clock counts market time: an auction caught by the weekend resumes at the
     /// discount it had when the window reopens, and a deficit sale started on the weekend opens at
     /// the start discount.

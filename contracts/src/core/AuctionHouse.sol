@@ -45,7 +45,8 @@ import {Session, WAD} from "../types/Types.sol";
 /// EXTENDED by the calendar), not weekends or holidays. An auction that runs into a closed session
 /// resumes at the discount it had when the window reopens, and a deficit sale started over a
 /// weekend (expiry settlement often happens then) opens at startDiscount. A liquidation's
-/// auctionDuration is market time too, so it doesn't run out over a weekend.
+/// auctionDuration is market time too, so it doesn't run out over a weekend; one whose account
+/// recovers without a bid is ended by anyone (endLiquidation), so a later fall starts afresh.
 ///
 /// Known limit: halts inside the window (a stale or implausible feed, a paused token, a corporate
 /// action) still run the clock, because the auction house can't see them after the fact: an
@@ -71,6 +72,7 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
     error ExceedsCollateral();
     error ExceedsDeficit();
     error BidRaisesRisk(uint256 imAfter, uint256 imBefore);
+    error StillLiquidatable();
 
     /// @dev Settlement differences this small are rounding of the marks (a few wei per position),
     /// not lots: they are dropped so that an account without cash can still be taken over.
@@ -171,6 +173,18 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
             delete liquidationStartedAt[id];
             emit LiquidationEnded(id);
         }
+    }
+
+    /// @notice Permissionless: ends the liquidation of an account that is no longer liquidatable
+    /// (it recovered without a bid, say on a price move). Its clock counts market time only, so an
+    /// auction left open on Friday evening would otherwise still run on Sunday; if the account fell
+    /// again it would inherit the old discount and nobody could start a fresh ramp. Works in any
+    /// session: it only reads margin.
+    function endLiquidation(uint256 id) external nonReentrant {
+        if (liquidationStartedAt[id] == 0) revert AuctionNotActive();
+        if (ch.accountState(id).liquidatable) revert StillLiquidatable();
+        delete liquidationStartedAt[id];
+        emit LiquidationEnded(id);
     }
 
     /// @return discountWad the current discount (0 if never started, maxDiscount once over)
