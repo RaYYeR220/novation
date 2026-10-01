@@ -1,10 +1,10 @@
 {
   "chainId": 46630,
   "kernel": {
-    "address": "0x6d07e246eb757A1F97E3cdB7d1881ee5De27ceaA",
+    "address": "0xAeE1D4F45AF43a9C4d52ADa65d423b1c0e67f0fd",
     "type": "stylus",
-    "codehash": "0xf46d723e12cd3a13b314d991ac137789fcc7a431d1c664b6448c4b22d7d84e40",
-    "wasmSha256": "06466b69755c093658d433239d7284ce208497887e6715ebaf61c00565bb9f27"
+    "codehash": "0xa34c0177edcade5da15ac0fe4aeddb59161e76165303686f66a9eeaed27a5c8d",
+    "wasmSha256": "ed1fdde1c826c81c39ef6e4e72336c24f098ef581346691e7b7d735bb2487096"
   },
   "kernelReference": "0xB7d9232c8ff46b4950d85ed639908c86C08750C6",
   "tokens": {
@@ -19,5 +19,11 @@
     "NVDA": "0x8E465F19Ff52DACB53B9dE3A8C42912001A664e5",
     "SPY": "0x78d6096c09253cc7B30D324D06f8BA25C8A4265C",
     "TSLA": "0x3c57717cb77CD28e27bc57e67FB4b0DE73937d80"
+  },
+  "kernelPrevious": {
+    "address": "0x6d07e246eb757A1F97E3cdB7d1881ee5De27ceaA",
+    "type": "stylus",
+    "codehash": "0xf46d723e12cd3a13b314d991ac137789fcc7a431d1c664b6448c4b22d7d84e40",
+    "wasmSha256": "06466b69755c093658d433239d7284ce208497887e6715ebaf61c00565bb9f27"
   }
 }

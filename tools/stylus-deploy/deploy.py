@@ -79,15 +79,16 @@ def check_size(src):
     return code, ok
 
 
-def send(url, acct, to, data, value=0):
+def send(url, acct, to, data, value=0, gas=None):
     chain_id = int(rpc(url, "eth_chainId", []), 16)
     nonce = int(rpc(url, "eth_getTransactionCount", [acct.address, "pending"]), 16)
     base = int(rpc(url, "eth_gasPrice", []), 16)
     call = {"from": acct.address, "data": data, "value": hex(value)}
     if to:
         call["to"] = to
-    est = int(rpc(url, "eth_estimateGas", [call]), 16)
-    gas = int(est * 1.25) + 50_000
+    if gas is None:
+        est = int(rpc(url, "eth_estimateGas", [call]), 16)
+        gas = int(est * 1.25) + 50_000
     tx = {"chainId": chain_id, "nonce": nonce, "gas": gas, "maxFeePerGas": base * 3, "maxPriorityFeePerGas": 0,
           "data": data, "value": value, "type": 2}
     if to:
@@ -106,7 +107,7 @@ def send(url, acct, to, data, value=0):
     raise RuntimeError(f"no receipt for {h}")
 
 
-def deploy(src, url):
+def deploy(src, url, fallback_fee=None, activate_gas=None):
     load_env()
     key = os.environ.get("DEPLOYER_PRIVATE_KEY")
     if not key:
@@ -122,19 +123,30 @@ def deploy(src, url):
 
     sel = keccak(text="activateProgram(address)")[:4]
     rnd, sender = "0x" + secrets.token_hex(20), "0x" + secrets.token_hex(20)
-    dry = rpc(url, "eth_call", [{"from": sender, "to": ARBWASM, "data": "0x" + (sel + encode(["address"], [rnd])).hex(),
-                                 "value": hex(10**18)}, "latest",
-                                {sender: {"balance": hex(2**200)}, rnd: {"code": "0x" + code.hex()}}])
-    ver, fee = decode(["uint16", "uint256"], bytes.fromhex(dry[2:]))
-    print(f"dry-run activation OK: version {ver}, dataFee {fee} wei")
+    try:
+        dry = rpc(url, "eth_call", [{"from": sender, "to": ARBWASM,
+                                     "data": "0x" + (sel + encode(["address"], [rnd])).hex(), "value": hex(10**18)},
+                                    "latest", {sender: {"balance": hex(2**200)}, rnd: {"code": "0x" + code.hex()}}])
+        ver, fee = decode(["uint16", "uint256"], bytes.fromhex(dry[2:]))
+        print(f"dry-run activation OK: version {ver}, dataFee {fee} wei")
+    except RuntimeError as e:
+        # some RPCs refuse activation inside eth_call; ArbWasm refunds whatever exceeds the data fee
+        if not fallback_fee:
+            raise
+        print(f"dry-run refused ({e}); sending {fallback_fee} wei, the excess is refunded")
+        fee = int(fallback_fee / 1.2)
 
     total = 0
     h, rc, used, cost = send(url, acct, None, "0x" + initcode_for(code).hex())
     addr = to_checksum_address(rc["contractAddress"])
     total += cost
     print(f"CREATE tx {h} gasUsed {used} -> {addr}")
-    h2, _, used2, cost2 = send(url, acct, ARBWASM, "0x" + (sel + encode(["address"], [addr])).hex(), value=int(fee * 1.2))
-    total += cost2
+    value = int(fee * 1.2)
+    bal0 = int(rpc(url, "eth_getBalance", [acct.address, "latest"]), 16)
+    h2, rc2, used2, _ = send(url, acct, ARBWASM, "0x" + (sel + encode(["address"], [addr])).hex(), value=value,
+                             gas=activate_gas)
+    bal1 = int(rpc(url, "eth_getBalance", [acct.address, rc2["blockNumber"]]), 16)
+    total += bal0 - bal1  # gas plus the data fee actually kept (the excess value is refunded)
     print(f"activate tx {h2} gasUsed {used2}")
     print(f"total spent {total / 1e18:.8f} ETH (incl. data fee)")
 
@@ -143,6 +155,9 @@ def deploy(src, url):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     dep = json.load(open(path)) if os.path.exists(path) else {}
     dep["chainId"] = chain_id
+    prev = dep.get("kernel")
+    if prev and prev.get("address") != addr:
+        dep["kernelPrevious"] = prev
     dep["kernel"] = {"address": addr, "type": "stylus", "codehash": codehash, "wasmSha256": wasm_sha}
     json.dump(dep, open(path, "w"), indent=2)
     print("wrote", path)
@@ -154,13 +169,15 @@ def main():
     ap.add_argument("--check-size", metavar="WASM")
     ap.add_argument("--deploy", metavar="WASM")
     ap.add_argument("--rpc")
+    ap.add_argument("--fallback-fee-wei", type=int, help="activation value if the RPC refuses the eth_call dry-run")
+    ap.add_argument("--activate-gas", type=int, help="manual gas limit for activateProgram")
     a = ap.parse_args()
     if a.check_size:
         check_size(a.check_size)
     elif a.deploy:
         if not a.rpc:
             sys.exit("--rpc required")
-        deploy(a.deploy, a.rpc)
+        deploy(a.deploy, a.rpc, a.fallback_fee_wei, a.activate_gas)
     else:
         ap.print_help()
 
