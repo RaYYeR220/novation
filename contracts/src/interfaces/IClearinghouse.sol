@@ -62,6 +62,7 @@ interface IClearinghouse {
     function settleAccount(uint256 id, uint64 expiry) external;
     function claim(uint256 id, uint64 expiry) external;
     function socializeRemainder(uint256 id, uint64 expiry) external;
+    function repayDeficit(uint256 id) external;
     // auction-house hooks
     function transferFraction(uint256 fromId, uint256 toId, uint256 fractionWad) external;
     function transferCash(uint256 fromId, uint256 toId, uint256 amountWad) external;

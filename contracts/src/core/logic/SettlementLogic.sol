@@ -3,27 +3,34 @@ pragma solidity 0.8.30;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {CHS, CHStorage, CHErrors, Deps} from "../ClearinghouseStorage.sol";
+import {MarginLogic} from "./MarginLogic.sol";
+import {Payoff} from "./Payoff.sol";
 import {IClearinghouse} from "../../interfaces/IClearinghouse.sol";
 import {IAuctionHouse} from "../../interfaces/IAuctionHouse.sol";
-import {FixedPointMath as F} from "../../libraries/FixedPointMath.sol";
 import {Position, Series, WAD} from "../../types/Types.sol";
 
 /// @notice Expiry settlement through one pool per expiry, and the default waterfall behind it.
 /// Linked into the Clearinghouse and run against its storage.
 ///
 /// Net payers pay into pool[E] from their cash; whatever they can't pay is bridged by the
-/// InsuranceFund, and the rest is pending[E] until the deficit sale (or socialization) fills it.
+/// InsuranceFund (defBridged, owed to the fund), and the rest is pending[E] (defPending, owed to
+/// the pool) until a deficit sale, the account's own later cash or a socialization fills it.
 /// Net receivers get a claim on pool[E], payable once no short of E is left unsettled and nothing
-/// is pending. Longs round down and shorts round up, per position, so the pool always covers every
-/// claim and nobody is ever paid with someone else's cash.
+/// is pending. Longs round down and shorts round up, per position (Payoff), so the pool always
+/// covers every claim and nobody is ever paid with someone else's cash.
+///
+/// An account's deficit (Account.deficitTotal) is the sum of its per-expiry parts plus its
+/// socializedDebt: what it still owes after a socialization. A socialization takes the pool's
+/// part out of everyone's cash, but the defaulter keeps owing it (and the fund's written-off
+/// bridge) until its own cash repays the InsuranceFund. While anything is owed the account can't
+/// withdraw or open positions, and the debt counts against its equity.
 ///
 /// Solvency: USDG held >= floor(totalCashNorm * cashIndex / 1e18) + sum of pools. Every path
-/// below moves value between cash and a pool in the direction that keeps this true.
+/// below moves value between cash, a pool and the InsuranceFund in the direction that keeps this
+/// true.
 library SettlementLogic {
     using SafeERC20 for IERC20;
-    using SafeCast for uint256;
 
     /// @notice An impaired pool paid `paidWad` for a claim of `claimWad`: the difference is the
     /// claimant's realized loss.
@@ -58,7 +65,7 @@ library SettlementLogic {
                 us[nu] = s.underlying;
                 prices[nu++] = price;
             }
-            net += _payoff(s, prices[k], p.qty);
+            net += Payoff.settled(s, prices[k], p.qty);
             sids[m] = p.seriesId;
             qtys[m] = p.qty;
             series[m++] = s;
@@ -94,6 +101,7 @@ library SettlementLogic {
             // well-funded fund leaves nothing pending. The account owes the fund what it bridged.
             bridged = d.insurance.cover(_ceilToUnit(short, d.usdgScale));
             unfunded = bridged >= short ? 0 : short - bridged;
+            if ($.defPending[id][expiry] + $.defBridged[id][expiry] == 0) $.deficitExpiries[id].push(expiry);
             $.pool[expiry] += bridged;
             $.pending[expiry] += unfunded;
             $.defBridged[id][expiry] += bridged;
@@ -110,7 +118,7 @@ library SettlementLogic {
     /// expiry is settled and nothing is pending; a pool marked impaired pays pro rata (never more
     /// than the claim) and the shortfall is the claimant's realized loss (ClaimHaircut). Nothing
     /// to claim is a no-op.
-    function claim(Deps memory, uint256 id, uint64 expiry) external {
+    function claim(uint256 id, uint64 expiry) external {
         CHStorage storage $ = CHS.s();
         uint256 amt = $.claimable[id][expiry];
         if (amt == 0) return;
@@ -139,30 +147,88 @@ library SettlementLogic {
     /// @notice Applies the cash of `id` (the bidder's payment has just been credited to it) to
     /// its `expiry` deficit: the pool's pending part first, then the InsuranceFund's bridge.
     function applyDeficitProceeds(Deps memory d, uint256 id, uint64 expiry) external {
-        (, uint256 toIns) = _applyCash(d, id, expiry);
-        _repayInsurance(d, toIns);
+        (, uint256 toFund) = _applyCash(d, id, expiry);
+        _payFund(d, toFund, toFund);
+    }
+
+    /// @notice Spends the account's own cash on everything it owes, in order: the pools' pending
+    /// parts (every expiry it owes on), then the InsuranceFund's bridges, then its residual
+    /// socialized debt (to the fund too; the cash index never goes back up). Permissionless and
+    /// equity-neutral: cash and debt fall by the same amount (up to a wei of debit rounding per
+    /// step below index 1e18). The fund is paid in whole USDG units; the sub-unit rest stays as
+    /// cash. Emits DeficitReduced per expiry, and with expiry 0 for the socialized debt.
+    ///
+    /// The expiries come from a per-account list (deficitExpiries) that holds only expiries with
+    /// something still owed. It stays short: an account in deficit can't open positions, so new
+    /// per-expiry deficits only come from positions it already held (a handful of listed weeks).
+    function repayDeficit(Deps memory d, uint256 id) external {
+        CHStorage storage $ = CHS.s();
+        uint64[] storage xs = $.deficitExpiries[id];
+        uint256 n = xs.length;
+        uint256 unit = d.usdgScale;
+
+        uint256[] memory toPool = new uint256[](n);
+        for (uint256 i = 0; i < n; ++i) {
+            toPool[i] = _toPool($, id, xs[i]);
+        }
+        uint256[] memory toFund = new uint256[](n);
+        uint256 recovered;
+        for (uint256 i = 0; i < n; ++i) {
+            toFund[i] = _toFund($, id, xs[i], unit);
+            recovered += toFund[i];
+        }
+        uint256 social = _toSocial($, id, unit);
+
+        for (uint256 i = 0; i < n; ++i) {
+            if (toPool[i] + toFund[i] != 0) {
+                emit IClearinghouse.DeficitReduced(id, xs[i], toPool[i], toFund[i]);
+            }
+        }
+        if (social != 0) emit IClearinghouse.DeficitReduced(id, 0, 0, social);
+        // drop the expiries now fully repaid; walking backwards, the entry swapped in from the end
+        // has already been checked
+        for (uint256 i = n; i > 0; --i) {
+            uint64 e = xs[i - 1];
+            if ($.defPending[id][e] == 0 && $.defBridged[id][e] == 0) {
+                xs[i - 1] = xs[xs.length - 1];
+                xs.pop();
+            }
+        }
+
+        _payFund(d, recovered + social, recovered);
     }
 
     /// @notice Spreads the pending deficit of an emptied account over all cash through the cash
-    /// index. Permissionless. The account must hold no positions and no collateral; any cash that
-    /// reached it repays the deficit first (so dust sent to it can't block this).
-    /// If all the cash in the system can't cover it, the index drops to 1 (not 0, so credit keeps
-    /// working), whatever cash there was goes to the pool and the pool is marked impaired: its
-    /// claims are then paid pro rata. The InsuranceFund's bridge to this account is written off.
+    /// index. Permissionless. The account must hold no positions, and no collateral worth more
+    /// than globals.dustEquity at spot (collateral the hub can't price counts as 0; dust stays on
+    /// the account). Any cash that reached it repays the deficit first.
+    ///
+    /// The defaulter is not let off: the socialized amount and the fund's bridge (written off in
+    /// the fund's books) become its socializedDebt, still part of its deficit. It keeps blocking
+    /// withdrawals and opening and is repaid to the fund from any cash the account gets later, a
+    /// pending claim included (repayDeficit).
+    ///
+    /// If all the cash in the system can't cover the remainder, the index drops to 1 (not 0, so
+    /// credit keeps working), whatever cash there was goes to the pool and the pool is marked
+    /// impaired: its claims are then paid pro rata. After that first impairment the index stays
+    /// pinned at 1 and cash can't be cut any further, so a later shortfall impairs only its own
+    /// pool. LossSocialized reports what actually reached the pool.
     function socializeRemainder(Deps memory d, uint256 id, uint64 expiry) external {
         CHStorage storage $ = CHS.s();
         if ($.defPending[id][expiry] == 0) revert CHErrors.NothingToSocialize();
-        if ($.positions[id].length != 0 || $.collateralTokens[id].length != 0) {
-            revert CHErrors.AccountNotEmpty(id);
-        }
+        if ($.positions[id].length != 0) revert CHErrors.AccountNotEmpty(id);
+        if (
+            $.collateralTokens[id].length != 0
+                && MarginLogic.collateralValue(d, id) > int256(uint256(d.params.globals().dustEquity))
+        ) revert CHErrors.AccountNotEmpty(id);
 
-        (, uint256 toIns) = _applyCash(d, id, expiry);
+        (, uint256 toFund) = _applyCash(d, id, expiry);
         uint256 rem = $.defPending[id][expiry];
         if (rem == 0) {
-            _repayInsurance(d, toIns);
+            _payFund(d, toFund, toFund);
             return;
         }
-        // rem != 0 means all of the account's cash went to the pool, so toIns == 0 here
+        // rem != 0 means all of the account's cash went to the pool, so toFund == 0 here
 
         uint256 index = $.cashIndex;
         uint256 norm = $.totalCashNorm;
@@ -177,61 +243,88 @@ library SettlementLogic {
             $.impaired[expiry] = true;
         }
 
+        // the expiry's books are cleared; the account's deficit total is unchanged
         uint256 bridged = $.defBridged[id][expiry];
         $.cashIndex = newIndex;
         $.pool[expiry] += toPool;
         $.pending[expiry] -= rem;
         $.defPending[id][expiry] = 0;
         $.defBridged[id][expiry] = 0;
-        $.accounts[id].deficitTotal -= rem + bridged;
+        $.socializedDebt[id] += rem + bridged;
+        _untrack($, id, expiry);
 
-        emit IClearinghouse.LossSocialized(expiry, rem, newIndex);
+        emit IClearinghouse.LossSocialized(expiry, toPool, newIndex);
         if (bridged != 0) d.insurance.notifyWrittenOff(bridged);
     }
 
     // ---------------------------------------------------------------- private
 
-    /// @dev Cash of `id` to its `expiry` deficit: pending first, then the fund's bridge in whole
-    /// USDG units (the sub-unit rest stays in the account). Effects only; the caller pays the
-    /// fund with _repayInsurance.
-    function _applyCash(Deps memory d, uint256 id, uint64 expiry) private returns (uint256 toPending, uint256 toIns) {
+    /// @dev Cash of `id` to its `expiry` deficit: pending first, then the fund's bridge. Effects
+    /// only; the caller pays the fund with _payFund.
+    function _applyCash(Deps memory d, uint256 id, uint64 expiry) private returns (uint256 toPending, uint256 toFund) {
         CHStorage storage $ = CHS.s();
+        toPending = _toPool($, id, expiry);
+        toFund = _toFund($, id, expiry, d.usdgScale);
+        if (toPending + toFund == 0) return (0, 0);
+        emit IClearinghouse.DeficitReduced(id, expiry, toPending, toFund);
+        if ($.defPending[id][expiry] == 0 && $.defBridged[id][expiry] == 0) _untrack($, id, expiry);
+    }
+
+    /// @dev Up to the account's cash to the pool's pending part of `expiry`.
+    function _toPool(CHStorage storage $, uint256 id, uint64 expiry) private returns (uint256 amt) {
+        uint256 owed = $.defPending[id][expiry];
         uint256 cash = CHS.cashOf(id);
-        uint256 owedPool = $.defPending[id][expiry];
-        toPending = cash < owedPool ? cash : owedPool;
-        if (toPending != 0) {
-            CHS.debit(id, toPending);
-            $.pool[expiry] += toPending;
-            $.pending[expiry] -= toPending;
-            $.defPending[id][expiry] = owedPool - toPending;
-            cash = CHS.cashOf(id);
-        }
-
-        uint256 owedIns = $.defBridged[id][expiry];
-        toIns = cash < owedIns ? cash : owedIns;
-        toIns -= toIns % d.usdgScale;
-        if (toIns != 0) {
-            CHS.debit(id, toIns);
-            $.defBridged[id][expiry] = owedIns - toIns;
-        }
-
-        if (toPending + toIns == 0) return (0, 0);
-        $.accounts[id].deficitTotal -= toPending + toIns;
-        emit IClearinghouse.DeficitReduced(id, expiry, toPending, toIns);
+        amt = cash < owed ? cash : owed;
+        if (amt == 0) return 0;
+        CHS.debit(id, amt);
+        $.pool[expiry] += amt;
+        $.pending[expiry] -= amt;
+        $.defPending[id][expiry] = owed - amt;
+        $.accounts[id].deficitTotal -= amt;
     }
 
-    function _repayInsurance(Deps memory d, uint256 toIns) private {
-        if (toIns == 0) return;
-        IERC20(d.usdg).safeTransfer(address(d.insurance), toIns / d.usdgScale);
-        d.insurance.notifyRecovered(toIns);
+    /// @dev Up to the account's cash, in whole USDG units, to the fund's bridge on `expiry`.
+    function _toFund(CHStorage storage $, uint256 id, uint64 expiry, uint256 unit) private returns (uint256 amt) {
+        uint256 owed = $.defBridged[id][expiry];
+        uint256 cash = CHS.cashOf(id);
+        amt = cash < owed ? cash : owed;
+        amt -= amt % unit;
+        if (amt == 0) return 0;
+        CHS.debit(id, amt);
+        $.defBridged[id][expiry] = owed - amt;
+        $.accounts[id].deficitTotal -= amt;
     }
 
-    /// @dev Long: +floor(qty * payoff); short: -ceil(|qty| * payoff).
-    function _payoff(Series memory s, uint256 price, int256 qty) private pure returns (int256) {
-        uint256 k = s.strike;
-        uint256 payoff = s.isCall ? (price > k ? price - k : 0) : (k > price ? k - price : 0);
-        if (qty > 0) return (uint256(qty) * payoff / WAD).toInt256();
-        return -F.mulWadUp(uint256(-qty), payoff).toInt256();
+    /// @dev Up to the account's cash, in whole USDG units, to its residual socialized debt.
+    function _toSocial(CHStorage storage $, uint256 id, uint256 unit) private returns (uint256 amt) {
+        uint256 owed = $.socializedDebt[id];
+        uint256 cash = CHS.cashOf(id);
+        amt = cash < owed ? cash : owed;
+        amt -= amt % unit;
+        if (amt == 0) return 0;
+        CHS.debit(id, amt);
+        $.socializedDebt[id] = owed - amt;
+        $.accounts[id].deficitTotal -= amt;
+    }
+
+    /// @dev Sends `amount` (whole units) to the InsuranceFund; `recovered` of it repays bridges
+    /// the fund still carries as outstanding.
+    function _payFund(Deps memory d, uint256 amount, uint256 recovered) private {
+        if (amount == 0) return;
+        IERC20(d.usdg).safeTransfer(address(d.insurance), amount / d.usdgScale);
+        if (recovered != 0) d.insurance.notifyRecovered(recovered);
+    }
+
+    function _untrack(CHStorage storage $, uint256 id, uint64 expiry) private {
+        uint64[] storage xs = $.deficitExpiries[id];
+        uint256 n = xs.length;
+        for (uint256 i = 0; i < n; ++i) {
+            if (xs[i] == expiry) {
+                xs[i] = xs[n - 1];
+                xs.pop();
+                return;
+            }
+        }
     }
 
     function _ceilToUnit(uint256 wad, uint256 unit) private pure returns (uint256) {

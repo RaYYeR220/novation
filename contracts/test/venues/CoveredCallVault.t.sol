@@ -512,11 +512,16 @@ contract CoveredCallVaultTest is VaultFixture {
         address attacker = _user("attacker");
         uint256 aShares = _vaultDeposit(vault, attacker, 1);
         assertEq(aShares, 1e6);
-        // anyone may fund any clearinghouse account: donate straight into the vault's
-        _deposit(attacker, vid, address(nvda), 100e18);
+        // stock can't be donated into the vault's clearinghouse account (owner-only deposits)
+        nvda.mint(attacker, 100e18);
+        vm.startPrank(attacker);
+        nvda.approve(address(ch), 100e18);
+        vm.expectRevert(CHErrors.DepositNotAllowed.selector);
+        ch.deposit(vid, address(nvda), 100e18);
+        vm.stopPrank();
         // a transfer to the vault contract itself is not NAV at all
         nvda.mint(address(vault), 50e18);
-        assertEq(vault.totalAssets(), 100e18 + 1);
+        assertEq(vault.totalAssets(), 1);
 
         uint256 vShares = _vaultDeposit(vault, alice, 10e18);
         assertGt(vShares, 0);
