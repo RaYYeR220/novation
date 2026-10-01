@@ -5,7 +5,7 @@ import { decodeRevertData, getDeployment, novationErrorsAbi, WAD } from '@novati
 import { encodeErrorResult } from 'viem';
 import { generatePrivateKey } from 'viem/accounts';
 import { ConfigError, createServer, createSession, DEFAULT_REFUSAL_GAS, loadConfig, READ_TOOLS, refusalLine, refusalView, TRADE_TOOLS, tools } from '../../src/index';
-import { num, scenarioOf, seriesLabel, ToolInputError, wadOf } from '../../src/format';
+import { amountOf, num, qtyOf, scenarioOf, seriesLabel, ToolInputError, wadOf } from '../../src/format';
 
 const KEY = '0x' + '11'.repeat(32);
 
@@ -16,6 +16,7 @@ describe('config', () => {
     expect(c.agentKey).toBeUndefined();
     expect(c.account).toBeUndefined();
     expect(c.refusalGas).toBe(DEFAULT_REFUSAL_GAS);
+    expect(c.allowForcedSend).toBe(false);
     expect(c.deployment.clearinghouse).toBe(getDeployment(46630).clearinghouse);
   });
 
@@ -25,6 +26,8 @@ describe('config', () => {
     expect(c.account).toBe(42n);
     expect(c.refusalGas).toBe(3_000_000n);
     expect(c.rpcUrl).toBe('http://localhost:1');
+    expect(loadConfig({ NOVATION_ALLOW_FORCED_SEND: '1' }).allowForcedSend).toBe(true);
+    expect(loadConfig({ NOVATION_ALLOW_FORCED_SEND: '0' }).allowForcedSend).toBe(false);
   });
 
   it('rejects malformed settings', () => {
@@ -32,6 +35,7 @@ describe('config', () => {
     expect(() => loadConfig({ NOVATION_ACCOUNT: 'seven' })).toThrow(/subaccount id/);
     expect(() => loadConfig({ NOVATION_CHAIN_ID: '1' })).toThrow(/no Novation deployment/);
     expect(() => loadConfig({ NOVATION_DEPLOYMENT: '/nonexistent/31337.json' })).toThrow(/cannot read/);
+    expect(() => loadConfig({ NOVATION_ALLOW_FORCED_SEND: 'yes' })).toThrow(/1 or 0/);
   });
 });
 
@@ -42,6 +46,19 @@ describe('formatting', () => {
     expect(wadOf('-3', 'qty')).toBe(-3n * WAD);
     expect(() => wadOf('1e3', 'qty')).toThrow(ToolInputError);
     expect(() => wadOf('abc', 'qty')).toThrow(/decimal/);
+    expect(() => wadOf('1.1234567890123456789', 'qty')).toThrow(/18 decimals/);
+  });
+
+  it('caps quantities and amounts', () => {
+    expect(qtyOf('1000000', 'qty')).toBe(1_000_000n * WAD);
+    expect(() => qtyOf('1000000.000000000000000001', 'qty')).toThrow(/capped at 1000000 contracts/);
+    expect(() => qtyOf(0, 'qty')).toThrow(/non-zero/);
+    expect(() => qtyOf(-1, 'qty')).toThrow(/positive/);
+    expect(qtyOf(-2, 'qty', true)).toBe(-2n * WAD);
+    expect(() => qtyOf(-2_000_000, 'qty', true)).toThrow(/capped/);
+    expect(amountOf(0, 'premium')).toBe(0n);
+    expect(() => amountOf(-1, 'premium')).toThrow(/negative/);
+    expect(() => amountOf('1000000001', 'premium')).toThrow(/capped at 1000000000 USDG/);
   });
 
   it('labels series and decodes the scenario layout', () => {
@@ -82,46 +99,51 @@ describe('formatting', () => {
       nonce: 99n,
     });
     expect(() => tools.parseQuote({ ...({} as tools.QuoteJson), signer: 'nobody' })).toThrow(/signer/);
+    const ok = { signer: '0x4108064852c95135844be338fc8bcbdf91c41acf', makerId: 1, seriesId: 1, makerSells: true, maxQty: 1, price: 1, deadline: 1, nonce: 1 };
+    expect(() => tools.parseQuote({ ...ok, seriesId: String(2 ** 32) })).toThrow(/uint32/);
+    expect(() => tools.parseQuote({ ...ok, deadline: (2n ** 64n).toString() })).toThrow(/uint64/);
+    expect(() => tools.parseQuote({ ...ok, nonce: '1'.repeat(79) })).toThrow(/integer/);
   });
 });
 
 describe('server', () => {
-  async function connect(agentKey?: `0x${string}`) {
+  const session = (agentKey?: `0x${string}`) =>
     // no network: listing tools and validating arguments never touch the RPC
-    const s = createSession({ deployment: getDeployment(46630), rpcUrl: 'http://127.0.0.1:9', agentKey, account: agentKey ? 1n : undefined });
-    const server = createServer(s);
+    createSession({ deployment: getDeployment(46630), rpcUrl: 'http://127.0.0.1:9', agentKey, account: agentKey ? 1n : undefined });
+
+  async function connect() {
+    const server = createServer(session());
     const [a, b] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: 'unit', version: '0' });
     await Promise.all([server.connect(a), client.connect(b)]);
     return client;
   }
 
-  it('offers only read tools without an agent key', async () => {
+  it('offers only read tools without an agent key, every one with a description', async () => {
     const c = await connect();
-    expect((await c.listTools()).tools.map((t) => t.name).sort()).toEqual([...READ_TOOLS].sort());
+    const list = (await c.listTools()).tools;
+    expect(list.map((t) => t.name).sort()).toEqual([...READ_TOOLS].sort());
+    expect(list.every((t) => (t.description ?? '').length > 40 && t.annotations?.readOnlyHint === true)).toBe(true);
     const r = await c.callTool({ name: 'risk_budget', arguments: {} });
     expect(r.isError).toBe(true);
     expect((r.content as { text: string }[])[0]!.text).toMatch(/pass an account id/);
   });
 
-  it('adds the trading tools with an agent key, with send_even_if_refused off by default', async () => {
-    const c = await connect(generatePrivateKey());
-    const list = (await c.listTools()).tools;
-    expect(list.map((t) => t.name).sort()).toEqual([...READ_TOOLS, ...TRADE_TOOLS].sort());
-    const buy = list.find((t) => t.name === 'buy_from_vault')!;
-    expect(buy.annotations?.readOnlyHint).toBe(false);
-    const force = (buy.inputSchema.properties as Record<string, { default?: unknown; type?: string }>).send_even_if_refused!;
-    expect(force.type).toBe('boolean');
-    expect(force.default).toBe(false);
-    expect(buy.inputSchema.required).toEqual(['series_id', 'qty']);
-    // schema validation happens before any handler runs
-    const bad = await c.callTool({ name: 'buy_from_vault', arguments: { series_id: -1, qty: 1 } });
-    expect(bad.isError).toBe(true);
+  it('refuses to serve an agent key that was never verified on-chain', () => {
+    expect(() => createServer(session(generatePrivateKey()))).toThrow(/verifyAgent/);
   });
 
-  it('never exposes owner-only operations', async () => {
-    const c = await connect(generatePrivateKey());
-    const names = (await c.listTools()).tools.map((t) => t.name).join(' ');
-    expect(names).not.toMatch(/withdraw|deposit|grant|revoke/);
+  it('rejects out-of-range arguments in the schema, before any handler runs', async () => {
+    const c = await connect();
+    for (const args of [{ series_id: 5, qty: 2_000_000 }, { series_id: 5, qty: '1.1234567890123456789' }, { series_id: -1 }, { series_id: 2 ** 32 }]) {
+      const r = await c.callTool({ name: 'quote', arguments: args });
+      expect(r.isError).toBe(true);
+    }
+    const w = await c.callTool({ name: 'what_if_margin', arguments: { series_id: 5, qty: 1, premium: 2_000_000_000 } });
+    expect(w.isError).toBe(true);
+  });
+
+  it('never names owner-only operations', () => {
+    expect([...READ_TOOLS, ...TRADE_TOOLS].join(' ')).not.toMatch(/withdraw|deposit|grant|revoke/);
   });
 });

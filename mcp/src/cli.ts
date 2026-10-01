@@ -15,7 +15,8 @@ async function main() {
     const p = v.policy;
     log(
       `agent ${v.agent} trades subaccount ${v.accountId} (owner ${v.owner}) on chain ${cfg.chainId}: ` +
-        `budget ${fromWad(p.maxWorstLoss)} USDG, premium cap ${fromWad(p.maxPremiumPerTrade)} USDG, policy expires ${new Date(p.expiresAt * 1000).toISOString()}`,
+        `budget ${fromWad(p.maxWorstLoss)} USDG, premium cap ${fromWad(p.maxPremiumPerTrade)} USDG, policy expires ${new Date(p.expiresAt * 1000).toISOString()}; ` +
+        `send_even_if_refused ${s.allowForcedSend ? 'enabled' : 'off'}`,
     );
   } else {
     log(`read-only mode on chain ${cfg.chainId} (no NOVATION_AGENT_KEY): trading tools are off`);

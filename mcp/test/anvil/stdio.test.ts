@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { inject } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { getSpot, getUnderlyingParams, whatIfTrade, WAD } from '@novation/sdk';
 import { READ_TOOLS, tools, TRADE_TOOLS } from '../../src/index';
 import { AGENT, AGENT_KEY, blockTime, fundAgent, grant, local, openAccount, OWNER_KEY, rpcUrl, session, type Local } from './fixture';
@@ -18,7 +18,7 @@ function spawnServer(env: Record<string, string>) {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [BIN],
-    env: { ...(process.env as Record<string, string>), ...env },
+    env: { ...getDefaultEnvironment(), ...env },
     stderr: 'pipe',
   });
   let stderr = '';
@@ -62,8 +62,12 @@ d('MCP server over stdio (real client, real server process)', () => {
     await client.connect(transport);
     open.push(client);
 
-    const names = (await client.listTools()).tools.map((t) => t.name).sort();
-    expect(names).toEqual([...READ_TOOLS, ...TRADE_TOOLS].sort());
+    const list = (await client.listTools()).tools;
+    expect(list.map((t) => t.name).sort()).toEqual([...READ_TOOLS, ...TRADE_TOOLS].sort());
+    // the operator didn't set NOVATION_ALLOW_FORCED_SEND: the model never sees the option
+    for (const t of list.filter((x) => (TRADE_TOOLS as readonly string[]).includes(x.name))) {
+      expect(Object.keys(t.inputSchema.properties ?? {})).not.toContain('send_even_if_refused');
+    }
 
     const b = await client.callTool({ name: 'risk_budget', arguments: {} });
     expect(b.isError).toBeFalsy();
@@ -99,7 +103,7 @@ d('MCP server over stdio (real client, real server process)', () => {
     const { client, transport, stderr } = spawnServer({ ...base(), NOVATION_AGENT_KEY: OWNER_KEY, NOVATION_ACCOUNT: id.toString() });
     await expect(client.connect(transport)).rejects.toThrow();
     await new Promise((r) => setTimeout(r, 200));
-    expect(stderr()).toMatch(/refusing to start: NOVATION_AGENT_KEY is the owner key/);
+    expect(stderr()).toMatch(/refusing to start: NOVATION_AGENT_KEY owns subaccount/);
     await transport.close().catch(() => undefined);
   });
 });

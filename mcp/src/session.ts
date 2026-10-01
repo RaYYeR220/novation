@@ -22,6 +22,8 @@ export interface Session {
   /** The subaccount the agent trades for; the default account of the read tools. */
   accountId?: bigint;
   refusalGas: bigint;
+  /** The operator allows send_even_if_refused (NOVATION_ALLOW_FORCED_SEND=1). Off: the option doesn't exist. */
+  allowForcedSend: boolean;
   seriesCache: Map<number, SeriesInfo>;
   /** Serializes the agent's transactions so concurrent tool calls never race for a nonce. */
   lock: <T>(f: () => Promise<T>) => Promise<T>;
@@ -33,6 +35,7 @@ export interface SessionOptions {
   agentKey?: Hex;
   account?: bigint;
   refusalGas?: bigint;
+  allowForcedSend?: boolean;
 }
 
 function chainFor(chainId: number, rpcUrl?: string): Chain {
@@ -71,13 +74,21 @@ export function createSession(o: SessionOptions): Session {
     agent,
     accountId: o.account,
     refusalGas: o.refusalGas ?? DEFAULT_REFUSAL_GAS,
+    allowForcedSend: o.allowForcedSend ?? false,
     seriesCache: new Map(),
     lock: mutex(),
   };
 }
 
 export function sessionFromConfig(c: Config): Session {
-  return createSession({ deployment: c.deployment, rpcUrl: c.rpcUrl, agentKey: c.agentKey, account: c.account, refusalGas: c.refusalGas });
+  return createSession({
+    deployment: c.deployment,
+    rpcUrl: c.rpcUrl,
+    agentKey: c.agentKey,
+    account: c.account,
+    refusalGas: c.refusalGas,
+    allowForcedSend: c.allowForcedSend,
+  });
 }
 
 /** Thrown at startup when the key isn't a live agent of the account: the server doesn't start. */
@@ -104,15 +115,35 @@ async function grantsTo(s: Session, agent: Address): Promise<bigint[]> {
   return live.filter((x): x is bigint => x !== undefined);
 }
 
+/** Sessions whose agent key passed verifyAgent. Only verifyAgent writes here. */
+const VERIFIED = new WeakMap<Session, VerifiedAgent>();
+
+/**
+ * The verified agent of a session, or undefined. It must still match the session's key and
+ * account: trading tools exist only for a session that passed verifyAgent.
+ */
+export function verifiedAgentOf(s: Session): VerifiedAgent | undefined {
+  const v = VERIFIED.get(s);
+  if (!v || !s.agent || s.agent.account.address !== v.agent || s.accountId !== v.accountId) return undefined;
+  return v;
+}
+
 /**
  * The startup check. With an agent key, the server runs only if the chain holds a live AgentPolicy
- * for (account, agent), and only if the key is not the account owner's: owner keys can withdraw
- * and re-grant, so the server refuses to hold one. Without NOVATION_ACCOUNT the account is the one
- * live grant to this agent in the AgentGranted log. Sets `s.accountId`.
+ * for (account, agent), and only if the key owns no subaccount at all: an owner key can withdraw and
+ * re-grant, so the server refuses to hold one, whichever account it owns. Without NOVATION_ACCOUNT
+ * the account is the one live grant to this agent in the AgentGranted log. Sets `s.accountId` and
+ * marks the session verified.
  */
 export async function verifyAgent(s: Session): Promise<VerifiedAgent> {
   if (!s.agent) throw new StartupRefused('no agent key: the server is read-only');
   const agent = s.agent.account.address;
+  const owned = await s.n.clearinghouse.getSubaccountsOf(agent);
+  if (owned.length > 0) {
+    throw new StartupRefused(
+      `NOVATION_AGENT_KEY owns subaccount${owned.length > 1 ? 's' : ''} ${owned.join(', ')}: it is an owner key. The server only holds an agent key: grant a separate key that owns no account with grantAgent and pass that one.`,
+    );
+  }
   let id = s.accountId;
   if (id === undefined) {
     const live = await grantsTo(s, agent);
@@ -127,16 +158,14 @@ export async function verifyAgent(s: Session): Promise<VerifiedAgent> {
     throw new StartupRefused(`subaccount ${id} does not exist on chain ${s.chain.id}`);
   }
   if (/^0x0{40}$/i.test(owner)) throw new StartupRefused(`subaccount ${id} does not exist on chain ${s.chain.id}`);
-  if (owner.toLowerCase() === agent.toLowerCase()) {
-    throw new StartupRefused(
-      `NOVATION_AGENT_KEY is the owner key of subaccount ${id}. The server only holds an agent key: grant a separate key with grantAgent and pass that one.`,
-    );
-  }
+  if (owner.toLowerCase() === agent.toLowerCase()) throw new StartupRefused(`NOVATION_AGENT_KEY is the owner key of subaccount ${id}: pass an agent key instead`);
   const [policy, block] = await Promise.all([s.n.clearinghouse.getAgentPolicy(id, agent), s.n.client.getBlock()]);
   if (policy.expiresAt === 0) throw new StartupRefused(`no AgentPolicy for agent ${agent} on subaccount ${id}; the owner must call grantAgent first`);
   if (BigInt(policy.expiresAt) <= block.timestamp) {
     throw new StartupRefused(`the AgentPolicy for ${agent} on subaccount ${id} expired at ${new Date(policy.expiresAt * 1000).toISOString()}`);
   }
   s.accountId = id;
-  return { agent, accountId: id, owner, policy };
+  const v = { agent, accountId: id, owner, policy };
+  VERIFIED.set(s, v);
+  return v;
 }

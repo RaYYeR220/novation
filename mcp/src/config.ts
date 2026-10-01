@@ -16,6 +16,8 @@ export interface Config {
   /** The subaccount the agent trades for. Undefined: found from the chain's AgentGranted log. */
   account?: bigint;
   refusalGas: bigint;
+  /** NOVATION_ALLOW_FORCED_SEND=1: the trading tools offer send_even_if_refused. */
+  allowForcedSend: boolean;
 }
 
 export class ConfigError extends Error {
@@ -33,6 +35,7 @@ export class ConfigError extends Error {
  *   NOVATION_CHAIN_ID     default 46630, Robinhood Chain testnet.
  *   NOVATION_DEPLOYMENT   path to a contracts/deployments/<chainId>.json (default: the recorded one).
  *   NOVATION_REFUSAL_GAS  gas limit for send_even_if_refused (default 5,000,000).
+ *   NOVATION_ALLOW_FORCED_SEND  1 to offer send_even_if_refused (mines refused tickets as proof).
  * There is deliberately no setting for an owner key.
  */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -69,6 +72,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 
   const acct = v('NOVATION_ACCOUNT');
   if (acct !== undefined && !/^\d+$/.test(acct)) throw new ConfigError('NOVATION_ACCOUNT must be a subaccount id (a positive integer)');
+  const forced = v('NOVATION_ALLOW_FORCED_SEND');
+  if (forced !== undefined && !/^(0|1|true|false)$/i.test(forced)) throw new ConfigError('NOVATION_ALLOW_FORCED_SEND must be 1 or 0');
   const gas = v('NOVATION_REFUSAL_GAS');
   if (gas !== undefined && !/^\d+$/.test(gas)) throw new ConfigError('NOVATION_REFUSAL_GAS must be an integer');
 
@@ -79,5 +84,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     agentKey,
     account: acct !== undefined ? BigInt(acct) : undefined,
     refusalGas: gas !== undefined ? BigInt(gas) : DEFAULT_REFUSAL_GAS,
+    allowForcedSend: forced !== undefined && /^(1|true)$/i.test(forced),
   };
 }

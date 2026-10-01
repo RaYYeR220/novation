@@ -8,10 +8,13 @@
  *      agent would: risk_budget, what_if_margin, buy 1 call (in budget, sent), buy 3 more (refused
  *      in simulation, not sent), the same ticket with send_even_if_refused (the revert is mined),
  *      then explain_refusal on that transaction;
- *   4. prints the transcript and writes every transaction hash to mcp/out/<chainId>.json.
+ *   4. prints the transcript and writes every transaction hash to mcp/out/46630.json.
  *
- * Env (from the repo's .env): DEPLOYER_PRIVATE_KEY, RH_TESTNET_RPC. DEMO_RPC_URL, DEMO_DEPLOYER_KEY
- * and DEMO_DEPLOYMENT point it at another chain (a local anvil, say).
+ * Testnet only. The keccak256(deployerKey ‖ role) keys are a demo convenience: whoever holds the
+ * deployer key controls them. The script refuses to run on any chain but Robinhood Chain testnet
+ * (46630). A real agent gets an independent key.
+ *
+ * Env (from the repo's .env): DEPLOYER_PRIVATE_KEY, RH_TESTNET_RPC (DEMO_RPC_URL overrides it).
  *
  *   pnpm --filter @novation/mcp demo
  */
@@ -19,12 +22,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import {
   fromWad,
   getDeployment,
   getUnderlyingParams,
-  parseDeployment,
   simulateApprove,
   simulateCreateSubaccount,
   simulateDeposit,
@@ -51,13 +53,16 @@ function dotenv(path: string): Record<string, string> {
   return out;
 }
 
+/** The only chain this demo runs on: Robinhood Chain testnet. */
+const TESTNET = 46630;
+
 const env = { ...dotenv(join(ROOT, '.env')), ...process.env } as Record<string, string | undefined>;
-const deployerKey = (env.DEMO_DEPLOYER_KEY ?? env.DEPLOYER_PRIVATE_KEY) as Hex | undefined;
+const deployerKey = env.DEPLOYER_PRIVATE_KEY as Hex | undefined;
 if (!deployerKey) throw new Error('DEPLOYER_PRIVATE_KEY is not set (.env at the repo root)');
 const rpcUrl = env.DEMO_RPC_URL ?? env.RH_TESTNET_RPC;
-const deployment = env.DEMO_DEPLOYMENT ? parseDeployment(JSON.parse(readFileSync(env.DEMO_DEPLOYMENT, 'utf8'))) : getDeployment(46630);
+const deployment = getDeployment(TESTNET);
 
-/** Keys derived from the deployer key, so a rerun reuses the same addresses. */
+/** Testnet demo keys derived from the deployer key, so a rerun reuses the same addresses. Never for real funds. */
 const derive = (tag: string) => keccak256(concat([deployerKey, stringToHex(tag)]));
 const ownerKey = derive('agent-owner');
 const agentKey = derive('agent');
@@ -115,6 +120,10 @@ async function fund(who: 'owner' | 'agent', to: `0x${string}`) {
 }
 
 async function main() {
+  const rpcChain = await client.getChainId();
+  if (chain.id !== TESTNET || rpcChain !== TESTNET) {
+    throw new Error(`testnet only: the demo derives its keys from the deployer key and runs on chain ${TESTNET}, but the RPC is on chain ${rpcChain}`);
+  }
   say(`== Novation: an AI agent with an on-chain risk budget, over MCP (chain ${chain.id}) ==`);
   say(`owner ${owner.address}  (keccak256(deployerKey ‖ "agent-owner"))`);
   say(`agent ${agentAddr}  (keccak256(deployerKey ‖ "agent"))`);
@@ -160,13 +169,15 @@ async function main() {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [join(MCP, 'bin', 'novation-mcp.mjs')],
+    // a minimal environment: the server gets the agent key and nothing else of this shell
     env: {
-      ...(process.env as Record<string, string>),
+      ...getDefaultEnvironment(),
       NOVATION_AGENT_KEY: agentKey,
       NOVATION_ACCOUNT: id.toString(),
       NOVATION_CHAIN_ID: String(chain.id),
+      // the demo mines one refused ticket on purpose, as public proof of the refusal
+      NOVATION_ALLOW_FORCED_SEND: '1',
       ...(rpcUrl ? { NOVATION_RPC_URL: rpcUrl } : {}),
-      ...(env.DEMO_DEPLOYMENT ? { NOVATION_DEPLOYMENT: env.DEMO_DEPLOYMENT } : {}),
     },
     stderr: 'pipe',
   });

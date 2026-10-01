@@ -4,7 +4,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { simulateApprove, simulateCreateSubaccount, simulateDeposit, simulateGrantAgent, simulateMint, type AgentPolicy } from '@novation/sdk';
 import type {} from '../../../sdk/test/anvil/setup';
 import { local, send, type Local } from '../../../sdk/test/anvil/helpers';
-import { createSession, type Session } from '../../src/index';
+import { createSession, type Session, type SessionOptions } from '../../src/index';
 
 /** anvil's default accounts 1-2 (the public test mnemonic), the owner and maker wallets the SDK helpers hold. */
 export const OWNER_KEY: Hex = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d';
@@ -30,7 +30,7 @@ export function rpcUrl(): string {
   return a.rpcUrl;
 }
 
-export function session(l: Local, o: { agentKey?: Hex; account?: bigint } = {}): Session {
+export function session(l: Local, o: Omit<SessionOptions, 'deployment' | 'rpcUrl'> = {}): Session {
   return createSession({ deployment: l.ctx.deployment, rpcUrl: rpcUrl(), ...o });
 }
 

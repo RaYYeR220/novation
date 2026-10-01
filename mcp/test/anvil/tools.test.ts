@@ -1,4 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import {
   getAgentPolicy,
@@ -12,7 +14,7 @@ import {
   WAD,
   type RfqQuote,
 } from '@novation/sdk';
-import { StartupRefused, tools, verifyAgent, type Session } from '../../src/index';
+import { createServer, StartupRefused, tools, verifyAgent, type Session } from '../../src/index';
 import { AGENT, AGENT_KEY, blockTime, fundAgent, grant, local, MAKER_KEY, openAccount, OWNER_KEY, send, session, type Local } from './fixture';
 
 type R = Record<string, any>;
@@ -30,17 +32,31 @@ async function refusedStart(p: Promise<unknown>): Promise<string> {
   throw new Error('expected the server to refuse to start');
 }
 
+async function listed(s: Session) {
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'test', version: '0' });
+  await Promise.all([createServer(s).connect(a), client.connect(b)]);
+  const list = (await client.listTools()).tools;
+  await client.close();
+  return list;
+}
+
 d('MCP tool handlers on a local chain', () => {
   const L = l as Local;
   let id: bigint;
+  let makerId: bigint;
   let callId: number;
   let budget: bigint;
   let im1: bigint;
   let ro: Session;
+  /** The agent as an operator runs it by default: no forced sends. */
   let agent: Session;
+  /** The same agent on a server started with NOVATION_ALLOW_FORCED_SEND=1. */
+  let forcing: Session;
 
   beforeAll(async () => {
     id = await openAccount(L, 0, 2_000n);
+    makerId = await openAccount(L, 1, 5_000n);
     await fundAgent(L);
     ro = session(L, { account: id });
 
@@ -60,15 +76,22 @@ d('MCP tool handlers on a local chain', () => {
     const idx = (await getUnderlyingParams(L.ctx, NVDA)).index;
     await grant(L, id, AGENT, { maxWorstLoss: budget, maxPremiumPerTrade: 100n * WAD, allowedMask: 1n << BigInt(idx), expiresAt: (await blockTime(L)) + 86_400 });
     agent = session(L, { agentKey: AGENT_KEY, account: id });
+    forcing = session(L, { agentKey: AGENT_KEY, account: id, allowForcedSend: true });
+    await verifyAgent(agent);
+    await verifyAgent(forcing);
   });
 
-  it('starts only for a live agent of the account, never with the owner key', async () => {
-    const v = await verifyAgent(agent);
+  it('starts only for a live agent that owns no account', async () => {
+    const v = await verifyAgent(session(L, { agentKey: AGENT_KEY, account: id }));
     expect(v.accountId).toBe(id);
     expect(v.policy.maxWorstLoss).toBe(budget);
 
-    expect(await refusedStart(verifyAgent(session(L, { agentKey: OWNER_KEY, account: id })))).toMatch(/owner key/);
-    expect(await refusedStart(verifyAgent(session(L, { agentKey: MAKER_KEY, account: id })))).toMatch(/no AgentPolicy/);
+    // the account's own owner, and an agent key that owns some other account
+    expect(await refusedStart(verifyAgent(session(L, { agentKey: OWNER_KEY, account: id })))).toMatch(/owns subaccount.*owner key/);
+    await grant(L, id, privateKeyToAccount(MAKER_KEY).address, { maxWorstLoss: WAD, maxPremiumPerTrade: WAD, allowedMask: 1n, expiresAt: (await blockTime(L)) + 3600 });
+    expect(await refusedStart(verifyAgent(session(L, { agentKey: MAKER_KEY, account: id })))).toMatch(new RegExp(`owns subaccount ${makerId}`));
+
+    expect(await refusedStart(verifyAgent(session(L, { agentKey: generatePrivateKey(), account: id })))).toMatch(/no AgentPolicy/);
     expect(await refusedStart(verifyAgent(session(L, { agentKey: AGENT_KEY, account: 999_999n })))).toMatch(/does not exist/);
 
     // revoked: the policy is gone, so the server won't start
@@ -90,31 +113,51 @@ d('MCP tool handlers on a local chain', () => {
     expect(await refusedStart(verifyAgent(session(L, { agentKey: generatePrivateKey() })))).toMatch(/no live AgentPolicy/);
   });
 
-  it('reads markets, the chain, quotes and the portfolio', async () => {
+  it('never trades, or serves trading tools, for a key that was not verified', async () => {
+    const unverified = session(L, { agentKey: AGENT_KEY, account: id });
+    await expect(tools.buyFromVault(unverified, { series_id: callId, qty: 1 })).rejects.toThrow(/verifyAgent/);
+    expect(() => createServer(unverified)).toThrow(/verifyAgent/);
+
+    // verified: the trading tools appear, and send_even_if_refused only when the operator allows it
+    const plain = await listed(agent);
+    const buy = plain.find((t) => t.name === 'buy_from_vault')!;
+    const props = buy.inputSchema.properties as Record<string, { default?: unknown; anyOf?: { maximum?: number }[] }>;
+    expect(props.send_even_if_refused).toBeUndefined();
+    expect(props.qty!.anyOf?.[0]?.maximum).toBe(1_000_000);
+    const forced = (await listed(forcing)).find((t) => t.name === 'buy_from_vault')!;
+    expect((forced.inputSchema.properties as Record<string, { default?: unknown }>).send_even_if_refused!.default).toBe(false);
+    expect(buy.annotations?.readOnlyHint).toBe(false);
+  });
+
+  it('reads markets, the chain, quotes and the portfolio, each with a summary', async () => {
     const u = await tools.listUnderlyings(ro);
     expect(u.underlyings.map((x) => x.symbol)).toEqual(['NVDA', 'TSLA', 'AAPL', 'SPY']);
     expect(u.underlyings.every((x) => x.tradeable && x.spot! > 0)).toBe(true);
+    expect(u.summary).toMatch(/^4 underlyings: NVDA \d/);
 
-    const chain = await tools.getChain(ro, { underlying: 'nvda', type: 'call', qty: 1 });
-    expect(chain.series!.length).toBe(8);
-    const row = chain.series!.find((x) => x.seriesId === callId)!;
+    const chain: R = await tools.getChain(ro, { underlying: 'nvda', type: 'call', qty: 1 });
+    expect(chain.summary).toMatch(/^NVDA \d{4}-\d\d-\d\d: 8 series, [1-9] with a vault ask/);
+    expect(chain.series.length).toBe(8);
+    const row = chain.series.find((x: R) => x.seriesId === callId);
     expect(row.vaultAsk).toBeGreaterThan(0);
     expect(row.delta).toBeGreaterThan(0.05);
-    expect(chain.series!.some((x) => x.notOffered === 'not far enough out of the money')).toBe(true);
+    expect(chain.series.some((x: R) => x.notOffered === 'not far enough out of the money')).toBe(true);
 
     const q: R = await tools.quote(ro, { series_id: callId, qty: 2 });
     expect(q.quotable).toBe(true);
-    expect(q.premium).toBeCloseTo(2 * row.vaultAsk!, 0);
+    expect(q.premium).toBeCloseTo(2 * row.vaultAsk, 0);
     expect(q.totalCost).toBeCloseTo(q.premium + q.fee, 5);
     // the vault buys back only what it is short
     const bid: R = await tools.quote(ro, { series_id: callId, qty: 1_000, side: 'sell' });
     expect(bid.quotable).toBe(false);
     expect(bid.refusal?.code).toBe('ExceedsShort');
+    await expect(tools.quote(ro, { series_id: callId, qty: 1_000_001 })).rejects.toThrow(/capped at 1000000 contracts/);
 
     const p = await tools.portfolio(ro, {});
     expect(p.cash).toBe(2_000);
     expect(p.positions).toEqual([]);
     expect(p.scenarioGrid.rows).toHaveLength(3);
+    expect(p.summary).toMatch(/^account \d+: equity 2000 USDG/);
   });
 
   it('reports the risk budget and predicts the agent rules before trading', async () => {
@@ -135,11 +178,16 @@ d('MCP tool handlers on a local chain', () => {
 
   let refusedHash: `0x${string}`;
 
-  it('buys inside the budget, refuses over it without sending, and mines the refusal on request', async () => {
+  it('buys inside the budget with padded gas, refuses over it without sending, and mines the refusal only when allowed', async () => {
     const fill = await tools.buyFromVault(agent, { series_id: callId, qty: 1 });
     expect(fill.status).toBe('filled');
     expect(fill.sent).toBe(true);
-    expect((await L.client.getTransactionReceipt({ hash: fill.txHash as `0x${string}` })).status).toBe('success');
+    const rc = await L.client.getTransactionReceipt({ hash: fill.txHash as `0x${string}` });
+    expect(rc.status).toBe('success');
+    // estimate + 25%: the limit sits well above what the fill used
+    const tx = await L.client.getTransaction({ hash: fill.txHash as `0x${string}` });
+    expect(tx.gas).toBe(BigInt(fill.gasLimit as number));
+    expect(Number(tx.gas)).toBeGreaterThanOrEqual(Number(rc.gasUsed) * 1.2);
     expect((fill.budget as { used: number }).used).toBeLessThanOrEqual(Number(budget) / 1e18);
 
     const nonce = await L.client.getTransactionCount({ address: AGENT });
@@ -152,12 +200,27 @@ d('MCP tool handlers on a local chain', () => {
     expect(r.numbers.worstLoss).toBeGreaterThan(r.numbers.budget!);
     expect(await L.client.getTransactionCount({ address: AGENT })).toBe(nonce);
 
-    const mined = await tools.buyFromVault(agent, { series_id: callId, qty: 3, send_even_if_refused: true });
+    // the operator didn't allow forced sends on this server
+    await expect(tools.buyFromVault(agent, { series_id: callId, qty: 3, send_even_if_refused: true })).rejects.toThrow(/NOVATION_ALLOW_FORCED_SEND/);
+    expect(await L.client.getTransactionCount({ address: AGENT })).toBe(nonce);
+
+    const mined = await tools.buyFromVault(forcing, { series_id: callId, qty: 3, send_even_if_refused: true });
     expect(mined.status).toBe('refused');
     expect(mined.sent).toBe(true);
     refusedHash = mined.txHash as `0x${string}`;
     expect((await L.client.getTransactionReceipt({ hash: refusedHash })).status).toBe('reverted');
     expect((mined.refusal as { code: string }).code).toBe('AgentRiskBudgetExceeded');
+  });
+
+  it('reports a transaction that ran out of gas as out of gas, not as a refusal', async () => {
+    const starved = session(L, { agentKey: AGENT_KEY, account: id, allowForcedSend: true, refusalGas: 300_000n });
+    await verifyAgent(starved);
+    const r = await tools.buyFromVault(starved, { series_id: callId, qty: 3, send_even_if_refused: true });
+    expect(r.sent).toBe(true);
+    expect((await L.client.getTransactionReceipt({ hash: r.txHash as `0x${string}` })).status).toBe('reverted');
+    expect(r.status).toBe('out_of_gas');
+    expect(r.refusal).toBeNull();
+    expect(r.summary).toMatch(/^OUT OF GAS: .*No rule refused it/);
   });
 
   it('explains a mined refusal from its hash', async () => {
@@ -168,6 +231,20 @@ d('MCP tool handlers on a local chain', () => {
     expect(x.summary).toMatch(/refused on-chain: AgentRiskBudgetExceeded/);
     // read-only mode explains it too: it needs no key
     expect((await tools.explainRefusal(ro, { tx_hash: refusedHash })).refusal?.numbers.budget).toBeCloseTo(Number(budget) / 1e18, 6);
+  });
+
+  it('sends nothing without a price limit when the vault cannot quote', async () => {
+    const nonce = await L.client.getTransactionCount({ address: AGENT });
+    const r = await tools.sellToVault(agent, { series_id: callId, qty: 1_000 });
+    expect(r.status).toBe('no_quote');
+    expect(r.sent).toBe(false);
+    expect((r.refusal as { code: string }).code).toBe('ExceedsShort');
+    expect(r.summary).toMatch(/Pass min_premium/);
+    // an explicit limit goes to the simulation, which refuses it the same way
+    const explicit = await tools.sellToVault(agent, { series_id: callId, qty: 1_000, min_premium: 0 });
+    expect(explicit.status).toBe('refused');
+    expect(explicit.sent).toBe(false);
+    expect(await L.client.getTransactionCount({ address: AGENT })).toBe(nonce);
   });
 
   it('sells back to the vault: cutting risk always passes the budget', async () => {
@@ -181,7 +258,6 @@ d('MCP tool handlers on a local chain', () => {
   });
 
   it("fills a maker's signed RFQ quote and refuses a tampered one", async () => {
-    const makerId = await openAccount(L, 1, 5_000n);
     const maker = L.wallets[1]!.account;
     const cc = L.ctx.deployment.vaults.find((v) => v.type === 'coveredCall' && v.underlying === 'NVDA')!.address;
     const ask = await agent.n.vault.getVaultQuote(cc, callId, WAD, true);

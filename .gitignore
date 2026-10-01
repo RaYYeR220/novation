@@ -32,4 +32,3 @@ Thumbs.db
 # local anvil runs of the forge scripts (sdk integration tests)
 contracts/deployments/31337.json
 contracts/broadcast/*/31337/
-mcp/out/31337.json

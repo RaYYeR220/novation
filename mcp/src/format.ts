@@ -7,16 +7,37 @@ export function num(wad: bigint, dp = 6): number {
   return Math.round(fromWad(wad) * f) / f;
 }
 
-/** A decimal amount from a tool argument (number or decimal string) into WAD. */
+/** A decimal amount from a tool argument (number or decimal string, at most 18 decimals) into WAD. */
 export function wadOf(v: number | string, what: string): bigint {
   const s = typeof v === 'number' ? v : v.trim();
   if (typeof s === 'number' && !Number.isFinite(s)) throw new ToolInputError(`${what} must be a finite number`);
-  if (typeof s === 'string' && !/^-?\d+(\.\d+)?$/.test(s)) throw new ToolInputError(`${what} must be a decimal number, got "${v}"`);
+  if (typeof s === 'string' && !/^-?\d+(\.\d{1,18})?$/.test(s)) throw new ToolInputError(`${what} must be a decimal number with at most 18 decimals, got "${v}"`);
   try {
     return toWad(s);
   } catch {
     throw new ToolInputError(`${what} is not a valid amount: ${v}`);
   }
+}
+
+/** Sanity caps on tool arguments: far above anything the vaults or a quote can fill. */
+export const MAX_QTY = 1_000_000;
+export const MAX_AMOUNT = 1_000_000_000;
+
+/** Contracts, WAD: non-zero, at most MAX_QTY in size, and positive unless `signed`. */
+export function qtyOf(v: number | string, what: string, signed = false): bigint {
+  const x = wadOf(v, what);
+  if (x === 0n) throw new ToolInputError(`${what} must be non-zero`);
+  if (!signed && x < 0n) throw new ToolInputError(`${what} must be positive`);
+  if ((x < 0n ? -x : x) > BigInt(MAX_QTY) * 10n ** 18n) throw new ToolInputError(`${what} is capped at ${MAX_QTY} contracts`);
+  return x;
+}
+
+/** A USDG amount, WAD: 0 to MAX_AMOUNT. */
+export function amountOf(v: number | string, what: string): bigint {
+  const x = wadOf(v, what);
+  if (x < 0n) throw new ToolInputError(`${what} is a total in USDG and can't be negative`);
+  if (x > BigInt(MAX_AMOUNT) * 10n ** 18n) throw new ToolInputError(`${what} is capped at ${MAX_AMOUNT} USDG`);
+  return x;
 }
 
 /** A bad tool argument: reported to the agent as a tool error, never sent anywhere. */

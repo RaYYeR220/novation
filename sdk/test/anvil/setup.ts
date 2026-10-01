@@ -95,8 +95,6 @@ export default async function setup(project: TestProject) {
       SEED_SPY_UPDATED_AT: String(now - 60),
       DEPLOYER_PRIVATE_KEY: key,
     };
-    // --slow: one transaction at a time, each confirmed before the next. Batched broadcasts can lose
-    // a transaction on a loaded machine, and forge then waits forever behind the nonce gap.
     const script = (name: string) => run(['script', `script/${name}`, '--rpc-url', rpcUrl, '--broadcast', '--slow', '--private-key', key], seed);
     script('DeployMocks.s.sol');
     script('Deploy.s.sol');

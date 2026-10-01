@@ -71,11 +71,12 @@ import {
   seriesLabel,
   seriesView,
   symbolFor,
+  amountOf,
+  qtyOf,
   ToolInputError,
-  wadOf,
   type RefusalView,
 } from './format';
-import type { Session } from './session';
+import { verifiedAgentOf, type Session } from './session';
 
 type Num = number | string;
 const abs = (x: bigint) => (x < 0n ? -x : x);
@@ -93,8 +94,10 @@ function accountOf(s: Session, given?: Num): bigint {
 }
 
 function agentOf(s: Session) {
-  if (!s.agent || s.accountId === undefined) throw new ToolInputError('read-only mode: start the server with NOVATION_AGENT_KEY to trade');
-  return { ...s.agent, address: s.agent.account.address, accountId: s.accountId };
+  if (!s.agent) throw new ToolInputError('read-only mode: start the server with NOVATION_AGENT_KEY to trade');
+  const v = verifiedAgentOf(s);
+  if (!v) throw new Error('the agent key has not passed verifyAgent: no trading before the on-chain policy check');
+  return { ...s.agent, address: v.agent, accountId: v.accountId };
 }
 
 async function now(s: Session): Promise<number> {
@@ -211,7 +214,11 @@ export async function listUnderlyings(s: Session) {
   const [markets, paused, t] = await Promise.all([getMarkets(s.n.ctx), getOpeningPaused(s.n.ctx), now(s)]);
   let mask: bigint | undefined;
   if (s.agent && s.accountId !== undefined) mask = (await getAgentPolicy(s.n.ctx, s.accountId, s.agent.account.address)).allowedMask;
+  const line = markets
+    .map((m) => `${m.symbol} ${m.spot === null ? 'no price' : num(m.spot, 2)} ${m.session}${m.haltReason ? ` (${m.haltReason})` : ''}`)
+    .join(', ');
   return {
+    summary: `${markets.length} underlyings${paused ? ', opening paused' : ''}: ${line}`,
     chainId: s.chain.id,
     time: isoTime(t),
     openingPaused: paused,
@@ -236,13 +243,13 @@ export async function listUnderlyings(s: Session) {
 
 export async function getChain(s: Session, a: { underlying: string; expiry?: Num; type?: 'call' | 'put' | 'both'; qty?: Num }) {
   const token = await underlyingOf(s, a.underlying);
-  const qty = wadOf(a.qty ?? 1, 'qty');
-  if (qty <= 0n) throw new ToolInputError('qty must be positive');
+  const qty = qtyOf(a.qty ?? 1, 'qty');
   const t = await now(s);
   const all = await listSeries(s.n.ctx, { underlying: token, liveAt: t, cache: s.seriesCache });
   const expiries = expiriesOf(all);
   if (expiries.length === 0) {
-    return { underlying: symbolFor(s.n.deployment, token), expiries: [], series: [], note: 'No live series: the keeper lists the next weekly expiries.' };
+    const sym = symbolFor(s.n.deployment, token);
+    return { summary: `${sym}: no live series`, underlying: sym, expiries: [], series: [], note: 'No live series: the keeper lists the next weekly expiries.' };
   }
   let expiry = expiries[0] as number;
   if (a.expiry !== undefined) {
@@ -317,8 +324,10 @@ export async function getChain(s: Session, a: { underlying: string; expiry?: Num
   }
   const price = (q: QuoteRes | undefined) => (q && 'premium' in q ? num(q.premium) : null);
   const priceErr = (q: QuoteRes | undefined) => (q && 'refusal' in q ? String(q.refusal.code) : undefined);
+  const withAsk = rows.filter((_, i) => price(asks.get(i)) !== null).length;
 
   return {
+    summary: `${symbolFor(s.n.deployment, token)} ${isoTime(expiry).slice(0, 10)}: ${rows.length} series, ${withAsk} with a vault ask for ${num(qty)}; spot ${spot === null ? 'none' : num(spot, 2)}, ${market.session}`,
     underlying: symbolFor(s.n.deployment, token),
     spot: spot === null ? null : num(spot, 4),
     session: market.session,
@@ -356,8 +365,7 @@ export async function getChain(s: Session, a: { underlying: string; expiry?: Num
 
 export async function quote(s: Session, a: { series_id: number; qty?: Num; side?: 'buy' | 'sell' }) {
   const series = await seriesOf(s, a.series_id);
-  const qty = wadOf(a.qty ?? 1, 'qty');
-  if (qty <= 0n) throw new ToolInputError('qty must be positive');
+  const qty = qtyOf(a.qty ?? 1, 'qty');
   const side = a.side ?? 'buy';
   const v = vaultFor(s, series);
   if (!v) throw new ToolInputError(`no vault trades ${seriesLabel(s.n.deployment, series)}; vaults sell ${vaultsList(s)}. Use fill_rfq with a maker quote.`);
@@ -395,8 +403,7 @@ export async function quote(s: Session, a: { series_id: number; qty?: Num; side?
 export async function whatIfMargin(s: Session, a: { series_id: number; qty: Num; premium?: Num; account?: Num }) {
   const id = accountOf(s, a.account);
   const series = await seriesOf(s, a.series_id);
-  const qty = wadOf(a.qty, 'qty');
-  if (qty === 0n) throw new ToolInputError('qty must be non-zero: positive buys, negative sells');
+  const qty = qtyOf(a.qty, 'qty (positive buys, negative sells)', true);
   const [spot, globals, before, raw] = await Promise.all([
     getSpot(s.n.ctx, series.underlying),
     getGlobals(s.n.ctx),
@@ -408,8 +415,7 @@ export async function whatIfMargin(s: Session, a: { series_id: number; qty: Num;
   let premiumSource: string;
   let volNote: string | undefined;
   if (a.premium !== undefined) {
-    premium = wadOf(a.premium, 'premium');
-    if (premium < 0n) throw new ToolInputError('premium is a total USDG amount, never negative');
+    premium = amountOf(a.premium, 'premium');
     premiumSource = 'given';
   } else {
     const v = vaultFor(s, series);
@@ -618,11 +624,21 @@ interface Ticket {
 }
 
 export interface TradeResult {
-  status: 'filled' | 'refused';
+  /**
+   * filled: sent and mined. refused: the chain refused it (in simulation, or mined as a revert).
+   * out_of_gas: mined but ran out of gas, which is not a policy refusal. no_quote: the vault
+   * won't quote it and no explicit limit was given, so nothing was sent.
+   */
+  status: 'filled' | 'refused' | 'out_of_gas' | 'no_quote';
   sent: boolean;
   summary: string;
   [k: string]: unknown;
 }
+
+/** Gas headroom on agent sends: margin-check gas moves with the block timestamp. */
+export const GAS_HEADROOM_PCT = 125n;
+/** A revert that used this share of its gas limit or more ran out of gas (try/catch frames can leave 1/64 per level unspent). */
+const OOG_SHARE_PCT = 95n;
 
 function tradedOf(s: Session, receipt: TransactionReceipt) {
   for (const log of receipt.logs) {
@@ -637,22 +653,47 @@ function tradedOf(s: Session, receipt: TransactionReceipt) {
   return undefined;
 }
 
+/** send_even_if_refused, honoured only when the operator enabled it. */
+function forceOf(s: Session, requested: boolean | undefined): boolean {
+  if (!requested) return false;
+  if (!s.allowForcedSend) throw new ToolInputError('send_even_if_refused is disabled on this server: the operator enables it with NOVATION_ALLOW_FORCED_SEND=1');
+  return true;
+}
+
 /**
- * Simulate, then send. A refusal in the simulation comes back as a structured Refusal and nothing
- * is signed, unless `force`: then the same call is sent with a fixed gas limit (no estimate, which
- * would fail) so the revert is mined, and the mined revert is decoded by replay.
+ * Simulate, then send with the estimate plus 25%. A refusal in the simulation comes back as a
+ * structured Refusal and nothing is signed, unless `force`: then the same call is sent with a
+ * fixed gas limit (no estimate, which would fail) so the revert is mined, and the mined revert is
+ * decoded by replay. A mined revert that burned its gas limit without revert data is reported as
+ * out of gas, never as a refusal.
  */
 async function execute(s: Session, t: Ticket, force: boolean): Promise<TradeResult> {
   const ag = agentOf(s);
   const label = seriesLabel(s.n.deployment, t.series);
   const base = { action: t.action, venue: t.venue, account: ag.accountId.toString(), agent: ag.address, ...seriesView(s.n.deployment, t.series), qty: num(t.qty), ...t.limit };
 
-  const send = async (hash: Hash) => {
+  // signed locally with the agent key (a raw transaction), never eth_sendTransaction on the node
+  const sendWith = async (gas: bigint) => {
+    const hash = await ag.wallet.writeContract({
+      address: t.call.address,
+      abi: t.call.abi,
+      functionName: t.call.functionName,
+      args: t.call.args,
+      gas,
+      account: ag.account,
+      chain: s.chain,
+    } as Parameters<typeof ag.wallet.writeContract>[0]);
     const receipt = await s.n.client.waitForTransactionReceipt({ hash });
-    return { hash, receipt, tx: { txHash: hash, explorerUrl: explorerTx(s, hash), block: Number(receipt.blockNumber), gasUsed: Number(receipt.gasUsed) } };
+    return {
+      hash,
+      receipt,
+      gasLimit: gas,
+      tx: { txHash: hash, explorerUrl: explorerTx(s, hash), block: Number(receipt.blockNumber), gasUsed: Number(receipt.gasUsed), gasLimit: Number(gas) },
+    };
   };
+  type Sent = Awaited<ReturnType<typeof sendWith>>;
 
-  const filled = async (r: Awaited<ReturnType<typeof send>>, note?: string): Promise<TradeResult> => {
+  const filled = async (r: Sent, note?: string): Promise<TradeResult> => {
     const traded = tradedOf(s, r.receipt);
     const { p, st, t: ts, tokens } = await budgetOf(s, ag.accountId, ag.address);
     const premium = traded?.premium;
@@ -670,23 +711,44 @@ async function execute(s: Session, t: Ticket, force: boolean): Promise<TradeResu
     };
   };
 
-  const minedRefusal = async (r: Awaited<ReturnType<typeof send>>): Promise<TradeResult> => {
+  const reverted = async (r: Sent): Promise<TradeResult> => {
+    // checked first: an inner call that runs out of gas inside a try/catch can surface as some
+    // unrelated custom error, which must not read as a policy refusal
+    if (r.receipt.gasUsed * 100n >= r.gasLimit * OOG_SHARE_PCT) {
+      return {
+        status: 'out_of_gas',
+        sent: true,
+        ...base,
+        ...r.tx,
+        refusal: null,
+        summary: `OUT OF GAS: the transaction used ${r.receipt.gasUsed} of its ${r.gasLimit} gas limit and reverted. No rule refused it; retry the trade: ${r.hash}`,
+      };
+    }
     const why = await explainTx(s.n.ctx, r.hash).catch(() => undefined);
-    const refusal: RefusalView | null = why ? refusalView(why.refusal) : null;
+    if (why) {
+      const refusal = refusalView(why.refusal);
+      return {
+        status: 'refused',
+        sent: true,
+        ...base,
+        ...r.tx,
+        refusal,
+        summary: `REFUSED ON-CHAIN: ${refusalLine(refusal)}. The transaction was mined and reverted: ${r.hash}`,
+      };
+    }
     return {
       status: 'refused',
       sent: true,
       ...base,
       ...r.tx,
-      refusal,
-      summary: `REFUSED ON-CHAIN: ${refusal ? refusalLine(refusal) : 'reverted (revert data not recovered)'}. The transaction was mined and reverted: ${r.hash}`,
+      refusal: null,
+      summary: `REVERTED: the transaction was mined and reverted, and its revert data could not be recovered (explain_refusal may say more later): ${r.hash}`,
     };
   };
 
   return s.lock(async () => {
-    let sim: { request: unknown; result: bigint };
     try {
-      sim = await t.simulate();
+      await t.simulate();
     } catch (e) {
       if (!(e instanceof RefusalError)) throw e;
       const refusal = refusalView(e.refusal);
@@ -699,43 +761,54 @@ async function execute(s: Session, t: Ticket, force: boolean): Promise<TradeResu
           summary: `REFUSED (not sent): ${refusalLine(refusal)}. The simulation of this exact transaction reverted, so nothing was signed or sent.`,
         };
       }
-      const hash = await ag.wallet.writeContract({
-        address: t.call.address,
-        abi: t.call.abi,
-        functionName: t.call.functionName,
-        args: t.call.args,
-        gas: s.refusalGas,
-        account: ag.account,
-        chain: s.chain,
-      } as Parameters<typeof ag.wallet.writeContract>[0]);
-      const r = await send(hash);
+      const r = await sendWith(s.refusalGas);
       if (r.receipt.status === 'success') return filled(r, `The simulation refused (${refusal.code}) but the state moved before inclusion and the trade went through.`);
-      return minedRefusal(r);
+      return reverted(r);
     }
-    // signed locally with the agent key (raw transaction), never eth_sendTransaction on the node
-    const hash = await ag.wallet.writeContract({ ...(sim.request as object), account: ag.account, chain: s.chain } as Parameters<typeof ag.wallet.writeContract>[0]);
-    const r = await send(hash);
-    return r.receipt.status === 'success' ? filled(r) : minedRefusal(r);
+    const estimate = await s.n.client.estimateContractGas({
+      address: t.call.address,
+      abi: t.call.abi,
+      functionName: t.call.functionName,
+      args: t.call.args,
+      account: ag.account,
+    } as Parameters<typeof s.n.client.estimateContractGas>[0]);
+    const r = await sendWith((estimate * GAS_HEADROOM_PCT) / 100n);
+    return r.receipt.status === 'success' ? filled(r) : reverted(r);
   });
 }
 
 const DEFAULT_SLIPPAGE_BPS = 200;
 
+/** No readable vault quote and no explicit limit: nothing is sent, and the caller must name its limit. */
+function noQuote(s: Session, series: SeriesInfo, qty: bigint, side: 'buy' | 'sell', refusal: Refusal): TradeResult {
+  const r = refusalView(refusal);
+  const arg = side === 'buy' ? 'max_premium' : 'min_premium';
+  return {
+    status: 'no_quote',
+    sent: false,
+    action: side,
+    venue: 'vault',
+    ...seriesView(s.n.deployment, series),
+    qty: num(qty),
+    refusal: r,
+    summary: `NOT SENT: the vault won't quote this (${refusalLine(r)}), so there is no price to protect the trade. Pass ${arg} (total USDG) to send it with an explicit limit.`,
+  };
+}
+
 export async function buyFromVault(s: Session, a: { series_id: number; qty: Num; max_premium?: Num; slippage_bps?: number; send_even_if_refused?: boolean }) {
   const ag = agentOf(s);
+  const force = forceOf(s, a.send_even_if_refused);
   const series = await seriesOf(s, a.series_id);
-  const qty = wadOf(a.qty, 'qty');
-  if (qty <= 0n) throw new ToolInputError('qty must be positive (contracts to buy)');
+  const qty = qtyOf(a.qty, 'qty (contracts to buy)');
   const v = vaultFor(s, series);
   if (!v) throw new ToolInputError(`no vault sells ${seriesLabel(s.n.deployment, series)}; vaults sell ${vaultsList(s)}. Use fill_rfq with a maker quote.`);
   let maxPremium: bigint;
-  if (a.max_premium !== undefined) maxPremium = wadOf(a.max_premium, 'max_premium');
+  if (a.max_premium !== undefined) maxPremium = amountOf(a.max_premium, 'max_premium');
   else {
     const { results } = await vaultQuotes(s, v.address, series.underlying, [{ seriesId: series.id, qty, takerBuys: true }]);
     const r = results[0] as QuoteRes;
-    const bps = BigInt(a.slippage_bps ?? DEFAULT_SLIPPAGE_BPS);
-    // no ask: the agent can never pay more than its premium cap anyway; the simulation decides
-    maxPremium = 'premium' in r ? (r.premium * (10_000n + bps) + 9_999n) / 10_000n : (await getAgentPolicy(s.n.ctx, ag.accountId, ag.address)).maxPremiumPerTrade;
+    if ('refusal' in r) return noQuote(s, series, qty, 'buy', r.refusal);
+    maxPremium = (r.premium * (10_000n + BigInt(a.slippage_bps ?? DEFAULT_SLIPPAGE_BPS)) + 9_999n) / 10_000n;
   }
   return execute(
     s,
@@ -748,25 +821,24 @@ export async function buyFromVault(s: Session, a: { series_id: number; qty: Num;
       simulate: () => simulateVaultBuy(s.n.ctx, ag.account, v.address, series.id, qty, maxPremium, ag.accountId),
       call: { address: v.address, abi: optionVaultAbi as Abi, functionName: 'buy', args: [series.id, qty, maxPremium, ag.accountId] },
     },
-    a.send_even_if_refused ?? false,
+    force,
   );
 }
 
 export async function sellToVault(s: Session, a: { series_id: number; qty: Num; min_premium?: Num; slippage_bps?: number; send_even_if_refused?: boolean }) {
   const ag = agentOf(s);
+  const force = forceOf(s, a.send_even_if_refused);
   const series = await seriesOf(s, a.series_id);
-  const qty = wadOf(a.qty, 'qty');
-  if (qty <= 0n) throw new ToolInputError('qty must be positive (contracts to sell back)');
+  const qty = qtyOf(a.qty, 'qty (contracts to sell back)');
   const v = vaultFor(s, series);
   if (!v) throw new ToolInputError(`no vault buys back ${seriesLabel(s.n.deployment, series)}; use fill_rfq with a maker quote`);
   let minPremium: bigint;
-  if (a.min_premium !== undefined) minPremium = wadOf(a.min_premium, 'min_premium');
+  if (a.min_premium !== undefined) minPremium = amountOf(a.min_premium, 'min_premium');
   else {
     const { results } = await vaultQuotes(s, v.address, series.underlying, [{ seriesId: series.id, qty, takerBuys: false }]);
     const r = results[0] as QuoteRes;
-    const bps = BigInt(a.slippage_bps ?? DEFAULT_SLIPPAGE_BPS);
-    // no bid: the simulation decides; on-chain the value-drain cap bounds what a sale can give up
-    minPremium = 'premium' in r ? (r.premium * (10_000n - bps)) / 10_000n : 0n;
+    if ('refusal' in r) return noQuote(s, series, qty, 'sell', r.refusal);
+    minPremium = (r.premium * (10_000n - BigInt(a.slippage_bps ?? DEFAULT_SLIPPAGE_BPS))) / 10_000n;
   }
   return execute(
     s,
@@ -779,7 +851,7 @@ export async function sellToVault(s: Session, a: { series_id: number; qty: Num; 
       simulate: () => simulateVaultSellBack(s.n.ctx, ag.account, v.address, series.id, qty, minPremium, ag.accountId),
       call: { address: v.address, abi: optionVaultAbi as Abi, functionName: 'sellBack', args: [series.id, qty, minPremium, ag.accountId] },
     },
-    a.send_even_if_refused ?? false,
+    force,
   );
 }
 
@@ -794,16 +866,18 @@ export interface QuoteJson {
   nonce: Num;
 }
 
-const uint = (v: Num, what: string): bigint => {
+const uint = (v: Num, what: string, bits = 256): bigint => {
   const t = String(v).trim();
-  if (!/^\d+$/.test(t)) throw new ToolInputError(`quote.${what} must be a non-negative integer in raw on-chain units, got "${v}"`);
-  return BigInt(t);
+  if (!/^\d{1,78}$/.test(t)) throw new ToolInputError(`quote.${what} must be a non-negative integer in raw on-chain units, got "${v}"`);
+  const x = BigInt(t);
+  if (x >= 1n << BigInt(bits)) throw new ToolInputError(`quote.${what} does not fit in uint${bits}`);
+  return x;
 };
 
 /** A signed quote's JSON (integers as decimal strings, maxQty and price in WAD) into an RfqQuote. */
 export function parseQuote(q: QuoteJson): RfqQuote {
   if (!isAddress(q.signer)) throw new ToolInputError(`quote.signer must be an address, got "${q.signer}"`);
-  const seriesId = Number(uint(q.seriesId, 'seriesId'));
+  const seriesId = Number(uint(q.seriesId, 'seriesId', 32));
   return {
     signer: getAddress(q.signer),
     makerId: uint(q.makerId, 'makerId'),
@@ -811,19 +885,20 @@ export function parseQuote(q: QuoteJson): RfqQuote {
     makerSells: q.makerSells,
     maxQty: uint(q.maxQty, 'maxQty'),
     price: uint(q.price, 'price'),
-    deadline: uint(q.deadline, 'deadline'),
+    deadline: uint(q.deadline, 'deadline', 64),
     nonce: uint(q.nonce, 'nonce'),
   };
 }
 
 export async function fillRfq(s: Session, a: { quote: QuoteJson; signature: string; qty?: Num; send_even_if_refused?: boolean }) {
   const ag = agentOf(s);
+  const force = forceOf(s, a.send_even_if_refused);
   const q = parseQuote(a.quote);
   if (!isHex(a.signature)) throw new ToolInputError('signature must be 0x-prefixed hex');
   const sig = a.signature as Hex;
   const series = await seriesOf(s, q.seriesId);
-  const qty = a.qty !== undefined ? wadOf(a.qty, 'qty') : await getQuoteRemaining(s.n.ctx, q);
-  if (qty <= 0n) throw new ToolInputError(a.qty !== undefined ? 'qty must be positive' : 'nothing left to fill on this quote (filled, cancelled or expired)');
+  const qty = a.qty !== undefined ? qtyOf(a.qty, 'qty') : await getQuoteRemaining(s.n.ctx, q);
+  if (qty <= 0n) throw new ToolInputError('nothing left to fill on this quote (filled, cancelled or expired)');
   return execute(
     s,
     {
@@ -835,7 +910,7 @@ export async function fillRfq(s: Session, a: { quote: QuoteJson; signature: stri
       simulate: () => simulateRfqFill(s.n.ctx, ag.account, q, sig, ag.accountId, qty),
       call: { address: s.n.deployment.rfq, abi: rfqVenueAbi as Abi, functionName: 'fill', args: [quoteTuple(q), sig, ag.accountId, qty] },
     },
-    a.send_even_if_refused ?? false,
+    force,
   );
 }
 

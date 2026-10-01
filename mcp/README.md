@@ -21,17 +21,19 @@ It speaks MCP over stdio, so it works with any MCP client: a desktop assistant, 
 | `fill_rfq` | Fill a market maker's EIP-712 signed quote on the RFQ venue |
 | `explain_refusal` | Why a mined transaction reverted: replays it and decodes the revert into a `Refusal` |
 
-Amounts are decimal USDG, quantities are contracts (one contract is one token of the underlying). Every result carries a one-line `summary` and the full object as `structuredContent`.
+Amounts are decimal USDG, quantities are contracts (one contract is one token of the underlying). Quantities are capped at 1,000,000 contracts and amounts at 1,000,000,000 USDG, with at most 18 decimals. Every successful result starts with a one-line `summary` and carries the full object as `structuredContent`; a bad argument or a failed read comes back as a tool error with a plain message.
 
 ### How a trade runs
 
-`buy_from_vault`, `sell_to_vault` and `fill_rfq` take `send_even_if_refused` (default `false`):
+`buy_from_vault`, `sell_to_vault` and `fill_rfq` run the same way:
 
-1. The exact transaction is simulated from the agent's address (`eth_call`).
-2. If the chain would refuse it, the tool returns `{ status: "refused", sent: false, refusal: { code, message, numbers } }`. Nothing is signed or sent.
-3. Otherwise it is sent and the tool returns `{ status: "filled", txHash, premium, fee, accountAfter, budget }`.
+1. The price limit comes from the vault's quote plus or minus `slippage_bps` (default 2%), or from `max_premium` / `min_premium`. If the vault can't quote the trade and no limit was given, the tool returns `{ status: "no_quote", sent: false, refusal }` and sends nothing: there is never a default limit.
+2. The exact transaction is simulated from the agent's address (`eth_call`).
+3. If the chain would refuse it, the tool returns `{ status: "refused", sent: false, refusal: { code, message, numbers } }`. Nothing is signed or sent.
+4. Otherwise it is signed locally and sent with the gas estimate plus 25% (margin-check gas moves with the block timestamp), and the tool returns `{ status: "filled", txHash, premium, fee, accountAfter, budget }`.
+5. A transaction that still reverts on-chain returns `status: "refused"` with the decoded refusal, or `status: "out_of_gas"` when it burned its gas limit: that is not a policy refusal, and the trade can be retried.
 
-With `send_even_if_refused: true` a refused ticket is sent anyway with a fixed gas limit (`NOVATION_REFUSAL_GAS`, default 5,000,000), so the revert is mined and anyone can verify the refusal on-chain. It costs gas and changes nothing else.
+`send_even_if_refused` exists only when the operator starts the server with `NOVATION_ALLOW_FORCED_SEND=1`; otherwise it isn't in the schema. With it set to `true`, a refused ticket is sent anyway with a fixed gas limit (`NOVATION_REFUSAL_GAS`, default 5,000,000), so the revert is mined and anyone can verify the refusal on-chain. It costs gas and changes nothing else.
 
 A refusal looks like this:
 
@@ -64,10 +66,13 @@ A refusal looks like this:
 
 ## Security model
 
-- **The server only ever holds an agent key.** There is no setting for an owner key. If `NOVATION_AGENT_KEY` turns out to be the owner of the account, the server refuses to start.
+- **The server only ever holds an agent key.** There is no setting for an owner key. If `NOVATION_AGENT_KEY` owns any subaccount at all (an owner key can withdraw and re-grant), the server refuses to start.
 - **It refuses to start without a live policy.** At startup it reads `agentPolicy(account, agent)` on-chain and exits unless a policy exists and has not expired. Without `NOVATION_ACCOUNT` it looks the account up in the `AgentGranted` log and needs exactly one live grant.
 - **The chain is the authority.** The simulation is a courtesy to the agent: the same rules are enforced by `TradeLogic` in the transaction itself, so a modified or compromised server can't trade past the budget either. An agent can't withdraw, deposit stock collateral, grant or revoke agents, or call the clearinghouse directly; the server exposes none of that.
 - **Revocation is immediate.** Once the owner calls `revokeAgent`, every simulation refuses with `NotAuthorized` and the server won't start again.
+- **No trading before verification.** The trading tools are registered only for a session that passed the on-chain check; `createServer` refuses a session whose key was never verified, and the trading handlers check it again.
+- **No default price limits.** Every trade carries a limit taken from a live quote or given by the caller; without either, nothing is sent.
+- **Forced sends are the operator's call.** `send_even_if_refused` burns gas by design, so the model only sees it when the operator sets `NOVATION_ALLOW_FORCED_SEND=1`.
 - **Read-only mode.** Without a key the server starts with the read tools only.
 - **No secrets in output.** The key is used only to sign; tool results and logs never contain it. Logs go to stderr, since stdout carries the protocol.
 - **Known limit.** The value-drain cap applies per trade, so many trades can add up to more than one cap ([SECURITY.md](../SECURITY.md)). Size the premium cap and the policy expiry with that in mind.
@@ -92,6 +97,7 @@ NOVATION_AGENT_KEY=0x... NOVATION_ACCOUNT=12 node mcp/bin/novation-mcp.mjs
 | `NOVATION_CHAIN_ID` | Default `46630` (Robinhood Chain testnet) |
 | `NOVATION_DEPLOYMENT` | Path to a `contracts/deployments/<chainId>.json`, for a local or new deployment |
 | `NOVATION_REFUSAL_GAS` | Gas limit for `send_even_if_refused`. Default 5,000,000 |
+| `NOVATION_ALLOW_FORCED_SEND` | `1` adds `send_even_if_refused` to the trading tools. Default off |
 
 ### MCP client configuration
 
@@ -122,6 +128,8 @@ Leave out `NOVATION_AGENT_KEY` and `NOVATION_ACCOUNT` for a read-only server.
 ```bash
 pnpm --filter @novation/mcp demo
 ```
+
+The keccak256(deployerKey ‖ role) keys are a testnet demo convenience: whoever holds the deployer key controls them, and the script refuses to run on any chain but Robinhood Chain testnet (46630). Use an independent agent key for anything real. The demo starts the server with `NOVATION_ALLOW_FORCED_SEND=1` and a minimal environment, so the server process sees the agent key and nothing else from the shell.
 
 It reads `DEPLOYER_PRIVATE_KEY` and `RH_TESTNET_RPC` from the root `.env` and writes the transaction hashes and the transcript to [`out/46630.json`](out/46630.json).
 
