@@ -861,6 +861,49 @@ contract ClearinghouseTradeTest is Fixture {
         assertEq(ch.positionsOf(a).length, 0);
     }
 
+    /// An account in deficit can always buy back its last covered call at or below mark, although
+    /// its stock alone counts more downside (IM) than the covered book did. Paying above mark while
+    /// underwater, or selling a last protective long, stays refused.
+    function test_deficitAccountClosesLastCoveredCall() public {
+        uint256 a = _fund(alice, 1000 * USDG, 10e18);
+        uint256 b = _fund(bob, 10_000 * USDG, 0);
+        _trade(a, b, call180, -10e18, 80e18); // covered: 10 NVDA, short 10 calls
+        _cheatDeficitTotal(a, 2400e18);
+
+        AccountState memory pre = ch.accountState(a);
+        uint256 mark = 1800e18 - uint256(pre.mtm); // the 10 calls at the kernel mark (stock 10 x 180)
+        uint256 fee = _fee(address(nvda), 10e18, mark);
+        AccountState memory post = ch.marginAfter(a, call180, 10e18, -int256(mark + fee));
+        assertGt(post.im, pre.im); // the stock's downside without the calls' cushion
+        assertLt(post.equity, int256(post.im)); // underwater
+        assertEq(post.equity + int256(fee), pre.equity); // at mark equity doesn't move
+
+        // a buyback above mark would pay value away
+        uint256 fee1 = _fee(address(nvda), 10e18, mark + 1);
+        AccountState memory over = ch.marginAfter(a, call180, 10e18, -int256(mark + 1 + fee1));
+        _expectTradeRevert(
+            _tp(a, alice, b, bob, call180, 10e18, mark + 1),
+            abi.encodeWithSelector(CHErrors.InsufficientMargin.selector, a, over.equity, over.im)
+        );
+        // at mark it goes through
+        _trade(a, b, call180, 10e18, mark);
+        assertEq(ch.positionsOf(a).length, 0);
+        assertEq(ch.accountState(a).equity, post.equity);
+
+        // a last long that hedges the stock is still a hedge: selling it raises the risk
+        uint256 c = _fund(carol, 1000 * USDG, 10e18);
+        _trade(c, b, put170, 10e18, 40e18);
+        _cheatDeficitTotal(c, 1);
+        AccountState memory cPre = ch.accountState(c);
+        uint256 feeC = _fee(address(nvda), -10e18, 20e18);
+        AccountState memory cPost = ch.marginAfter(c, put170, -10e18, int256(20e18 - feeC));
+        assertGt(cPost.im, cPre.im);
+        _expectTradeRevert(
+            _tp(c, carol, b, bob, put170, -10e18, 20e18),
+            abi.encodeWithSelector(CHErrors.RiskIncreaseNotAllowed.selector, c, cPost.im, cPre.im)
+        );
+    }
+
     function test_openingOnDisabledUnderlyingReverts() public {
         (uint256 a, uint256 b) = _collar();
         uint256 c = _fund(carol, 1000 * USDG, 0);
