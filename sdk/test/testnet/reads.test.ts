@@ -31,6 +31,17 @@ describe.skipIf(off)('Robinhood Chain testnet (read-only)', () => {
     for (const v of vaults) expect(v.totalSupply).toBeGreaterThan(0n);
   });
 
+  it('prices vault quotes through the lens even while the stored vol is behind', async () => {
+    const v = N.deployment.vaults.find((x) => x.type === 'coveredCall' && x.underlying === 'NVDA')!;
+    const nvda = N.deployment.tokens.NVDA!;
+    const now = Number((await N.client.getBlock()).timestamp);
+    const calls = (await N.registry.listSeries({ underlying: nvda, liveAt: now })).filter((s) => s.isCall);
+    const r = await N.vault.getVaultQuotesSynced(v.address, calls.map((s) => s.id), 10n ** 18n);
+    expect(r.quotes).toHaveLength(calls.length);
+    if (r.live) expect(r.quotes.some((q) => q.ask !== undefined && q.ask > 0n)).toBe(true);
+    else expect(r.quotes.every((q) => q.askRefusal?.code !== undefined)).toBe(true);
+  });
+
   it('reads accounts the end-to-end scenario opened, and their scenario grid', async () => {
     const trades = await N.events.getTrades();
     expect(trades.length).toBeGreaterThan(0);

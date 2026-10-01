@@ -13,4 +13,5 @@ export { mockAggregatorAbi } from './mockAggregator';
 export { mockUsdgAbi } from './mockUsdg';
 export { mockStockTokenAbi } from './mockStockToken';
 export { erc20Abi } from './erc20';
+export { vaultQuoteLensAbi, vaultQuoteLensBytecode } from './vaultQuoteLens';
 export { novationErrorsAbi } from './errors';

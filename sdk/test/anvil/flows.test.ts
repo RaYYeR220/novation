@@ -20,6 +20,9 @@ import {
   getUnderlyingParams,
   getVaultHolding,
   getVaultQuote,
+  getVaultQuotesSynced,
+  decodeRefusal,
+  simulatePushRound,
   getVaults,
   getInsurance,
   listSeries,
@@ -254,6 +257,30 @@ d('Novation on a local chain (KernelReference kernel, repo deploy scripts)', () 
     await send(L, taker!.wallet, (await simulateRequestRedeem(L.ctx, me, cc, h.shares / 2n, me)).request);
     expect((await getVaultHolding(L.ctx, cc, me)).pendingShares).toBe(h.shares / 2n);
     await send(L, taker!.wallet, (await simulateVaultWithdraw(L.ctx, me, cc, WAD / 2n, me, me)).request);
+  });
+
+  it('quotes through the lens when a new feed round leaves the stored vol behind', async () => {
+    const before = await getVaultQuotesSynced(L.ctx, cc, [callSeries.id], WAD);
+    expect(before.live).toBe(true);
+    expect(before.quotes[0]!.ask).toBe(await getVaultQuote(L.ctx, cc, callSeries.id, WAD, true));
+
+    const feed = L.ctx.deployment.feeds.NVDA as Address;
+    const now = Number((await L.client.getBlock()).timestamp);
+    await send(L, maker!.wallet, (await simulatePushRound(L.ctx, maker!.account.address, feed, 191n * 10n ** 8n, BigInt(now))).request);
+    const stale = await refusal(
+      getVaultQuote(L.ctx, cc, callSeries.id, WAD, true).catch((e) => {
+        throw new RefusalError(decodeRefusal(e)!);
+      }),
+    );
+    expect(stale.refusal.code).toBe('VaultNotLive');
+    const after = await getVaultQuotesSynced(L.ctx, cc, [callSeries.id], WAD);
+    expect(after.live).toBe(true);
+    expect(after.quotes[0]!.ask).toBeGreaterThan(0n);
+    // the vault is short the one call it sold: it bids for that much, not for five
+    expect(after.quotes[0]!.bid).toBeGreaterThan(0n);
+    const five = await getVaultQuotesSynced(L.ctx, cc, [callSeries.id], 5n * WAD);
+    expect(five.quotes[0]!.bidRefusal?.code).toBe('ExceedsShort');
+    expect(five.quotes[0]!.bid).toBeUndefined();
   });
 
   it('scans events in chunks from the deployment block', async () => {

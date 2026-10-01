@@ -1,5 +1,6 @@
-import type { Address } from 'viem';
-import { erc20Abi, optionVaultAbi } from './abi/index';
+import { decodeFunctionResult, encodeFunctionData, type Address, type Hex } from 'viem';
+import { erc20Abi, optionVaultAbi, vaultQuoteLensAbi, vaultQuoteLensBytecode } from './abi/index';
+import { decodeRevertData, type Refusal } from './refusal';
 import type { NovationContext, VaultKind } from './types';
 
 /** OptionVaultBase.config(). Fractions are WAD. */
@@ -134,6 +135,52 @@ export async function getVaults(ctx: NovationContext): Promise<VaultState[]> {
  */
 export async function getVaultQuote(ctx: NovationContext, vault: Address, seriesId: number, qty: bigint, takerBuys: boolean): Promise<bigint> {
   return ctx.client.readContract({ ...v(vault), functionName: 'quote', args: [seriesId, qty, takerBuys] });
+}
+
+export interface SyncedQuote {
+  seriesId: number;
+  /** WAD USDG for `qty`, or undefined when the vault refuses that side (see the refusal). */
+  ask?: bigint;
+  bid?: bigint;
+  askRefusal?: Refusal;
+  bidRefusal?: Refusal;
+}
+
+/**
+ * The vault's ask and bid for each series as its next operation would price them: a deployless
+ * eth_call of VaultQuoteLens folds the feed's pending rounds into the mark vol first (every vault
+ * operation does), so quotes come back while the stored vol is a few rounds behind and the quote()
+ * view alone would revert VaultNotLive. `live` is isLive() after that sync. Note quote() doesn't
+ * check the strategy (type, moneyness, tenor, offer band): buy does.
+ */
+export async function getVaultQuotesSynced(
+  ctx: NovationContext,
+  vault: Address,
+  seriesIds: number[],
+  qty: bigint,
+): Promise<{ live: boolean; quotes: SyncedQuote[] }> {
+  // a non-view function, so a raw deployless call rather than readContract
+  const { data } = await ctx.client.call({
+    code: vaultQuoteLensBytecode,
+    data: encodeFunctionData({ abi: vaultQuoteLensAbi, functionName: 'quotes', args: [ctx.deployment.hub, vault, seriesIds, qty] }),
+  });
+  if (!data) throw new Error('VaultQuoteLens returned nothing');
+  const [live, out] = decodeFunctionResult({ abi: vaultQuoteLensAbi, functionName: 'quotes', data });
+  const why = (e: Hex) => (e.length > 2 ? decodeRevertData(e) : undefined);
+  return {
+    live,
+    quotes: out.map((q, i) => {
+      const askRefusal = why(q.askError);
+      const bidRefusal = why(q.bidError);
+      return {
+        seriesId: seriesIds[i] as number,
+        ...(q.askError === '0x' ? { ask: q.ask } : {}),
+        ...(q.bidError === '0x' ? { bid: q.bid } : {}),
+        ...(askRefusal ? { askRefusal } : {}),
+        ...(bidRefusal ? { bidRefusal } : {}),
+      };
+    }),
+  };
 }
 
 export async function getVaultHolding(ctx: NovationContext, vault: Address, owner: Address): Promise<VaultHolding> {

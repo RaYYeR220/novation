@@ -44,6 +44,11 @@ const ABIS: Record<string, { file: string; contract: string; module: string }> =
   erc20Abi: { file: 'IERC20Metadata', contract: 'IERC20Metadata', module: 'erc20' },
 };
 
+/** Read helpers that are never deployed: run as deployless eth_calls, so their creation code ships too. */
+const LENSES: Record<string, { file: string; contract: string; module: string }> = {
+  vaultQuoteLens: { file: 'VaultQuoteLens', contract: 'VaultQuoteLens', module: 'vaultQuoteLens' },
+};
+
 type AbiItem = { type: string; name?: string; inputs?: { type: string; name: string; components?: unknown[] }[] };
 
 const pending: { path: string; text: string }[] = [];
@@ -74,6 +79,14 @@ if (existsSync(OUT)) {
     emit(join(SDK, 'src', 'abi', `${a.module}.ts`), `${HEADER}export const ${name} = ${JSON.stringify(abi, null, 2)} as const;\n`);
   }
 
+  for (const [name, a] of Object.entries(LENSES)) {
+    const art = JSON.parse(readFileSync(join(OUT, `${a.file}.sol`, `${a.contract}.json`), 'utf8')) as { abi: AbiItem[]; bytecode: { object: string } };
+    emit(
+      join(SDK, 'src', 'abi', `${a.module}.ts`),
+      `${HEADER}export const ${name}Abi = ${JSON.stringify(art.abi, null, 2)} as const;\n\nexport const ${name}Bytecode = '${art.bytecode.object}' as const;\n`,
+    );
+  }
+
   // Every error declared or inherited by a contract or library under contracts/src, by signature.
   const errors = new Map<string, AbiItem>();
   for (const f of srcFiles(SRC).sort()) {
@@ -92,7 +105,10 @@ if (existsSync(OUT)) {
     `${HEADER}/** Every custom error a Novation contract or linked library can revert with (OpenZeppelin's included). */\nexport const novationErrorsAbi = ${JSON.stringify(sorted, null, 2)} as const;\n`,
   );
 
-  const names = Object.entries(ABIS).map(([n, a]) => `export { ${n} } from './${a.module}';`);
+  const names = [
+    ...Object.entries(ABIS).map(([n, a]) => `export { ${n} } from './${a.module}';`),
+    ...Object.entries(LENSES).map(([n, a]) => `export { ${n}Abi, ${n}Bytecode } from './${a.module}';`),
+  ];
   emit(join(SDK, 'src', 'abi', 'index.ts'), `${HEADER}${names.join('\n')}\nexport { novationErrorsAbi } from './errors';\n`);
 } else if (!check) {
   console.warn('contracts/out not found: run `forge build` in contracts/ to refresh the ABIs. Deployments only.');
