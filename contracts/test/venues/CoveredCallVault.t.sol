@@ -1091,6 +1091,44 @@ contract CoveredCallVaultTest is VaultFixture {
         assertEq(vault.reservedCash(), 0);
     }
 
+    /// Between an expiry and the vault's settlement of it, exits wait: an exit then would take
+    /// cash an in-the-money call owes its buyer and grow the deficit the holders who stay pay for.
+    function test_exitsWaitForExpiredPositionsToSettle() public {
+        _skipWithoutSettlement();
+        DeficitSaleRecorder ah = new DeficitSaleRecorder();
+        ch.bindAuctionHouse(address(ah));
+        usdg.mint(address(insurance), 10_000 * USDG);
+        _vaultDeposit(vault, alice, 10e18);
+        _vaultDeposit(vault, bob, 10e18);
+        _buy(vault, call190, 5e18);
+        _cooldown();
+        vm.prank(alice);
+        vault.requestRedeem(5e24, alice);
+        assertGt(vault.maxRedeem(bob), 0);
+
+        vm.warp(e + 1);
+        _settleExpiry(address(nvda), e, 220e18); // in the money
+        _pokeVol(address(nvda));
+        assertTrue(vault.isLive());
+        assertEq(vault.maxRedeem(bob), 0);
+        assertEq(vault.maxWithdraw(bob), 0);
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(ERC4626.ERC4626ExceededMaxRedeem.selector, bob, 1e24, 0));
+        vault.redeem(1e24, bob, bob);
+        vault.roll(new uint64[](0)); // not told to settle e: the queue waits too
+        assertEq(vault.epoch(), 0);
+
+        // the roll settles the calls: the vault pays what it can, the fund bridges the rest, and
+        // once that is repaid exits and the queue go ahead
+        vault.roll(_one(e));
+        assertEq(ch.positionsOf(vid).length, 0);
+        (uint256 deficit,,) = ch.deficitOf(vid, e);
+        _deposit(_user("friend"), vid, address(usdg), deficit / 1e12 + 1);
+        vault.roll(new uint64[](0));
+        assertEq(vault.epoch(), 1);
+        assertGt(vault.maxRedeem(bob), 0);
+    }
+
     /// The two parts of a queued exit are claimed on their own: a USDG transfer that fails for the
     /// receiver doesn't hold up its tokens, and the other way round.
     function test_claimLegsAreIndependent() public {

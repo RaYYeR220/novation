@@ -325,8 +325,9 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
     }
 
     /// @notice The asset the owner's shares redeem for, capped by the free assets. Zero while
-    /// halted, while the account owes a deficit (the clearinghouse blocks withdrawals then) and
-    /// during the owner's exit cooldown.
+    /// halted, while the account owes a deficit (the clearinghouse blocks withdrawals then), while
+    /// it holds an expired position not yet settled (roll settles it) and during the owner's exit
+    /// cooldown.
     function maxWithdraw(address owner) public view override returns (uint256) {
         if (!_canExit(owner)) return 0;
         uint256 own = previewRedeem(balanceOf(owner));
@@ -626,7 +627,7 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
     }
 
     function _canExit(address owner) private view returns (bool) {
-        if (!isLive() || _inDeficit()) return false;
+        if (!isLive() || _inDeficit() || _holdsExpired()) return false;
         if (block.timestamp < lastReceive[owner] + EXIT_COOLDOWN) return false;
         return totalAssets() != 0;
     }
@@ -756,6 +757,14 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         return backingWad > lockedWad ? (backingWad - lockedWad) / _assetScale : 0;
     }
 
+    /// @dev The account still carries a position whose series has expired: its payoff isn't in
+    /// the expiry pool yet. Exits wait for settleAccount (roll does it), so an exit can't take
+    /// cash that an in-the-money short owes its buyers and leave the stayers a bigger deficit.
+    function _holdsExpired() private view returns (bool) {
+        (uint256 live,) = ch.positionStatus(vaultId);
+        return live != ch.positionsOf(vaultId).length;
+    }
+
     function _holdsExpiry(uint64 e) private view returns (bool) {
         Position[] memory ps = ch.positionsOf(vaultId);
         for (uint256 i = 0; i < ps.length; ++i) {
@@ -771,7 +780,7 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         uint256 shares = escrowedShares;
         if (shares == 0) return;
         uint256 id = vaultId;
-        if (_inDeficit()) return;
+        if (_inDeficit() || _holdsExpired()) return;
         for (uint256 i = 0; i < expiries.length; ++i) {
             if (ch.claimable(id, expiries[i]) != 0) return;
         }
