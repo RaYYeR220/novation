@@ -1,0 +1,387 @@
+/* The scenario crown: stage, poster, tooltip and legend. Colours come from tokens.css. */
+
+.crown {
+  position: relative;
+  container-type: inline-size;
+  color: var(--color-navy-50);
+  font-family: var(--font-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.stage {
+  position: relative;
+  touch-action: pan-y;
+  outline-offset: -2px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.stage[data-live='true'] {
+  cursor: grab;
+}
+
+.stage[data-dragging='true'] {
+  cursor: grabbing;
+}
+
+.poster,
+.canvas {
+  position: absolute;
+  inset: 0;
+  transition: opacity var(--duration-base) var(--ease-out);
+}
+
+.poster img {
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.canvas {
+  opacity: 0;
+}
+
+.canvas[data-ready='true'] {
+  opacity: 1;
+}
+
+.poster[data-gone='true'] {
+  opacity: 0;
+}
+
+/* ---------- tooltip: a hairline leader from the node up to a small plate ---------- */
+
+.tip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 3;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--duration-fast) linear;
+  will-change: transform;
+}
+
+.tip[data-show='true'] {
+  opacity: 1;
+}
+
+.tipDot {
+  position: absolute;
+  left: -3px;
+  top: -3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-navy-50);
+  box-shadow: 0 0 0 2px rgb(3 14 41 / 0.7);
+}
+
+.tipStem {
+  position: absolute;
+  left: -0.5px;
+  bottom: 4px;
+  width: 1px;
+  height: var(--stem, 30px);
+  background: linear-gradient(to top, rgb(238 243 251 / 0.85), rgb(238 243 251 / 0.2));
+}
+
+.tipPlate {
+  position: absolute;
+  left: 0;
+  bottom: calc(var(--stem, 30px) + 4px);
+  transform: translateX(calc(-50% + var(--dx, 0px)));
+  padding: 8px 12px 9px;
+  white-space: nowrap;
+  background: rgb(3 14 41 / 0.88);
+  border: 1px solid var(--color-navy-600);
+  border-radius: var(--radius-control);
+  box-shadow: 0 12px 32px -12px rgb(1 4 15 / 0.8);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+.tip[data-below='true'] .tipStem {
+  bottom: auto;
+  top: 4px;
+  background: linear-gradient(to bottom, rgb(238 243 251 / 0.85), rgb(238 243 251 / 0.2));
+}
+
+.tip[data-below='true'] .tipPlate {
+  bottom: auto;
+  top: calc(var(--stem, 30px) + 4px);
+}
+
+.tipKey {
+  display: block;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--color-navy-200);
+}
+
+.tipFlag {
+  margin-right: 8px;
+  font-weight: 600;
+  color: var(--color-navy-50);
+}
+
+.tipValue {
+  display: block;
+  margin-top: 3px;
+  font-size: 20px;
+  line-height: 24px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.tipUnit {
+  margin-left: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--color-navy-200);
+}
+
+/* ---------- load button (mobile, save-data) ---------- */
+
+.load {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  z-index: 4;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding: 0 16px 0 12px;
+  border: 1px solid var(--color-navy-600);
+  border-radius: var(--radius-control);
+  background: rgb(3 14 41 / 0.86);
+  color: var(--color-navy-50);
+  font: 500 14px/1 var(--font-text);
+  cursor: pointer;
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+.load:hover {
+  border-color: var(--color-navy-400);
+}
+
+.load i {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.5px solid var(--color-cyan);
+  position: relative;
+}
+
+.load i::after {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  background: var(--color-cyan);
+}
+
+/* ---------- legend ---------- */
+
+.legend {
+  display: grid;
+  gap: 18px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  width: max-content;
+  border: 1px solid var(--color-navy-700);
+  border-radius: var(--radius-control);
+  background: rgb(3 14 41 / 0.7);
+}
+
+.seg button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 13px 0 10px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--color-navy-200);
+  font: 500 14px/1 var(--font-text);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) linear, color var(--duration-fast) linear;
+}
+
+.seg button:hover {
+  color: var(--color-navy-50);
+}
+
+.seg button i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+}
+
+.seg button[aria-pressed='true'] {
+  background: var(--color-navy-700);
+  color: var(--color-navy-50);
+}
+
+.seg button[aria-pressed='true'] i {
+  border-color: var(--color-cyan);
+  background: var(--color-cyan);
+}
+
+.im {
+  display: grid;
+  gap: 2px;
+}
+
+.imKey {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-navy-200);
+}
+
+.imValue {
+  font-size: 24px;
+  line-height: 30px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--color-navy-50);
+}
+
+.imUnit {
+  margin-left: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--color-navy-200);
+}
+
+.ramp {
+  display: grid;
+  gap: 6px;
+  width: 220px;
+}
+
+.bar {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(
+    90deg,
+    var(--color-loss-3) 0%,
+    var(--color-loss-2) 16.7%,
+    var(--color-loss-1) 33.3%,
+    var(--color-zero) 50%,
+    var(--color-gain-1) 66.7%,
+    var(--color-gain-2) 83.3%,
+    var(--color-gain-3) 100%
+  );
+}
+
+.imTick {
+  position: absolute;
+  top: -4px;
+  width: 2px;
+  height: 14px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--color-cyan);
+  box-shadow: 0 0 0 2px var(--color-navy-900);
+  transition: left var(--duration-slow) var(--ease-out);
+}
+
+.scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--color-navy-200);
+}
+
+.note {
+  max-width: 30ch;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--color-navy-200);
+}
+
+/* ---------- variants ---------- */
+
+.hero {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.hero .stage {
+  flex: 1 1 auto;
+  min-height: 240px;
+}
+
+.hero .legend {
+  padding: 12px 16px 0;
+  grid-template-columns: auto 1fr;
+  align-items: end;
+  column-gap: 24px;
+}
+
+.hero .legend .ramp,
+.hero .legend .note {
+  display: none;
+}
+
+@container (min-width: 1100px) {
+  .hero .legend {
+    position: absolute;
+    left: 24px;
+    bottom: 24px;
+    z-index: 2;
+    padding: 0;
+    grid-template-columns: none;
+    column-gap: 0;
+  }
+
+  .hero .legend .ramp,
+  .hero .legend .note {
+    display: grid;
+  }
+
+  .hero .legend .note {
+    display: block;
+  }
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.panel .stage {
+  flex: 1 1 auto;
+  min-height: 280px;
+}
+
+.panel .legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 16px 32px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-navy-700);
+}
+
+.panel .note {
+  flex: 1 1 200px;
+  max-width: 36ch;
+}
