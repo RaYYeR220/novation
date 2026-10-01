@@ -155,6 +155,36 @@ contract SeriesRegistryTest is Test {
         reg.listSeries(address(token), EXPIRY, 150e18, true);
     }
 
+    /// maxWeeksOut is inclusive: an expiry exactly maxWeeksOut weeks from now lists, one second
+    /// further out doesn't.
+    function test_maxWeeksOutBoundaryExact() public {
+        // maxWeeksOut = 1: EXPIRY2 is exactly 7 days after EXPIRY
+        uint256 boundary = EXPIRY2 - 7 days;
+        vm.warp(boundary - 1);
+        feed.pushRound(150e8, boundary - 1);
+        vm.expectRevert(SeriesRegistry.BadExpiry.selector);
+        reg.listSeries(address(token), EXPIRY2, 150e18, true);
+
+        vm.warp(boundary);
+        feed.pushRound(150e8, boundary);
+        assertEq(reg.listSeries(address(token), EXPIRY2, 150e18, true), 1);
+    }
+
+    /// While the underlying can't be priced, listSeries reverts with the hub's NoPrice or
+    /// ImplausiblePrice, which the registry's ABI declares.
+    function test_rejectsUnpricedUnderlying() public {
+        feed.pushRound(0, NOW_TS);
+        vm.expectRevert(SeriesRegistry.NoPrice.selector);
+        reg.listSeries(address(token), EXPIRY, 150e18, true);
+        assertEq(SeriesRegistry.NoPrice.selector, MarketDataHub.NoPrice.selector);
+
+        feed.pushRound(5000e8, NOW_TS); // above maxPrice
+        vm.expectRevert(SeriesRegistry.ImplausiblePrice.selector);
+        reg.listSeries(address(token), EXPIRY, 150e18, true);
+        assertEq(SeriesRegistry.ImplausiblePrice.selector, MarketDataHub.ImplausiblePrice.selector);
+        assertEq(reg.seriesCount(), 0);
+    }
+
     function test_rejectsHaltedUnderlying() public {
         token.setPaused(true);
         vm.expectRevert(SeriesRegistry.UnderlyingHalted.selector);
