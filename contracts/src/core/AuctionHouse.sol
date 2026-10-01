@@ -18,7 +18,10 @@ import {Session, WAD} from "../types/Types.sol";
 /// fraction of the account's book (positions, collateral, cash). If the book is worth something,
 /// the bidder pays for its share less the discount and the account pays a penalty to the
 /// InsuranceFund; if not, the fund pays the bidder to take it. The bidder must meet initial margin
-/// afterwards. The auction ends once the account is healthy again or has no positions left.
+/// afterwards, and the account must not be left riskier (initial margin may not rise). The
+/// auction ends once the account is healthy again or has no positions left. A bid moves its
+/// fraction of at most the first 128 positions (storage order) so that it fits a block on a full
+/// 256-position book; the difference to the fraction is settled at mark like any lot rounding.
 ///
 /// Deficit sale. The clearinghouse starts one when settlement leaves an account owing an expiry
 /// pool or the fund. Bidders buy the account's stock collateral at spot less the discount; the
@@ -28,7 +31,14 @@ import {Session, WAD} from "../types/Types.sol";
 ///
 /// No fire sales without live prices: every bid (and the start of a liquidation) needs a REGULAR
 /// or EXTENDED session and a usable price for every underlying involved, so auctions pause over
-/// weekends, holidays, halts and oracle outages, including a collateral-only token's.
+/// weekends, holidays, halts and oracle outages, including a collateral-only token's. Nor on
+/// a book the registry hasn't priced yet: a liquidation needs a live (unexpired) position and
+/// waits while any expired series of the account awaits its settlement price.
+///
+/// Known limit: the discount clock is wall time. It keeps running while bids are paused (a closed
+/// session, a halt), so an auction started shortly before a pause resumes at a higher discount
+/// (up to maxDiscount for a deficit sale; a liquidation that ran out must be restarted, from
+/// startDiscount).
 contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
     using SafeCast for uint256;
 
@@ -48,6 +58,11 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
     error PayAboveMax(int256 paid, int256 maxPay);
     error ExceedsCollateral();
     error ExceedsDeficit();
+    error BidRaisesRisk(uint256 imAfter, uint256 imBefore);
+
+    /// @dev Settlement differences this small are rounding of the marks (a few wei per position),
+    /// not lots: they are dropped so that an account without cash can still be taken over.
+    int256 private constant RESIDUE_DUST = 1e6;
 
     event DeficitSaleEnded(uint256 indexed id, uint64 indexed expiry);
 
@@ -70,12 +85,13 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
     // ================================================================ liquidation
 
     /// @notice Starts (or, once the previous one has run its course, restarts) the liquidation of
-    /// an account that is below maintenance margin and has positions.
+    /// an account that is below maintenance margin and has live positions.
     function startLiquidation(uint256 id) external nonReentrant {
         uint256 t0 = liquidationStartedAt[id];
         if (t0 != 0 && block.timestamp <= t0 + params.globals().auctionDuration) revert AuctionActive();
         _requireAccountTradable(id);
-        if (!ch.accountState(id).liquidatable || ch.positionsOf(id).length == 0) revert NotLiquidatable();
+        _requireLiveBook(id);
+        if (!ch.accountState(id).liquidatable) revert NotLiquidatable();
         liquidationStartedAt[id] = uint64(block.timestamp);
         emit LiquidationStarted(id, uint64(block.timestamp));
     }
@@ -97,6 +113,7 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
         (uint256 d, bool active) = _liquidationDiscount(id, g);
         if (!active) revert AuctionNotActive();
         _requireAccountTradable(id);
+        _requireLiveBook(id);
         AccountState memory st = ch.accountState(id);
         if (!st.liquidatable) revert NotLiquidatable();
         if (fractionWad > g.maxFractionPerBid && st.equity > uint256(g.dustEquity).toInt256()) {
@@ -106,11 +123,16 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
         (int256 value, uint256 claims) = _transferableEquity(st, id);
         ch.transferFraction(id, bidderId, fractionWad);
         AccountState memory moved = ch.accountState(id);
+        // a bid must not leave the account riskier (e.g. take its hedges whole and few liabilities)
+        if (moved.im > st.im) revert BidRaisesRisk(moved.im, st.im);
         // Positions move in whole lots (no sub-minimum lots), so the bidder can get a little more or
-        // less than its fraction. That difference is settled at mark on top of the price below, so
-        // the bidder's gain is the discount on its fraction whatever the lots: no choice of
-        // fraction can take value without the matching liabilities.
+        // less than its fraction. That difference is settled between the account and the bidder at
+        // mark, on top of the price below, so the bidder's gain is the discount on its fraction
+        // whatever the lots: no choice of fraction takes value without the matching liabilities,
+        // and the InsuranceFund never pays for lots. If the account can't pay its side, the bid
+        // reverts.
         int256 extra = (st.equity - moved.equity) - F.mulWad(fractionWad.toInt256(), value);
+        if (extra <= RESIDUE_DUST && extra >= -RESIDUE_DUST) extra = 0;
         if (value > 0) {
             // the bidder pays for its share of the book, less the discount (rounded up)
             paidWad = F.mulWadUp(F.mulWadUp(fractionWad, uint256(value)), WAD - d).toInt256() + extra;
@@ -118,17 +140,14 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
             _settle(id, bidderId, paidWad);
             ch.chargePenalty(id, _mulWad(g.liquidationPenalty, _mulWad(fractionWad, uint256(value))));
         } else {
-            // the book is worth nothing or less: the fund pays the bidder to take it, for the part
-            // of the loss the account's own claims don't cover, plus the discount on maintenance
+            // the book is worth nothing or less: the fund pays the bidder to take its fraction, for
+            // the part of the loss the account's own claims don't cover, plus the discount on
+            // maintenance; the lot difference stays between the account and the bidder
             int256 net = value + claims.toInt256();
             uint256 shortfall = net < 0 ? uint256(-net) : 0;
-            int256 bonus = _mulWad(fractionWad, shortfall + _mulWad(d, st.mm)).toInt256() - extra;
-            if (bonus > 0) {
-                paidWad = -ch.insurancePay(bidderId, uint256(bonus)).toInt256();
-            } else {
-                paidWad = -bonus;
-                _settle(id, bidderId, paidWad);
-            }
+            _settle(id, bidderId, extra);
+            uint256 bonus = _mulWad(fractionWad, shortfall + _mulWad(d, st.mm));
+            paidWad = extra - ch.insurancePay(bidderId, bonus).toInt256();
             if (paidWad > maxPayWad) revert PayAboveMax(paidWad, maxPayWad);
         }
         if (!ch.accountState(bidderId).healthy) revert BidderUnhealthy();
@@ -234,6 +253,13 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
         if (bidderId == id) revert SelfBid();
         (uint256 owed,,) = ch.deficitOf(bidderId, 0);
         if (owed != 0) revert BidderInDeficit();
+    }
+
+    /// @dev At least one unexpired position, and no expired series still waiting for the
+    /// registry's settlement price.
+    function _requireLiveBook(uint256 id) private view {
+        (uint256 live, uint256 awaiting) = ch.positionStatus(id);
+        if (live == 0 || awaiting != 0) revert NotLiquidatable();
     }
 
     function _requireAccountTradable(uint256 id) private view {

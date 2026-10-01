@@ -339,6 +339,12 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
         return AuctionHookLogic.underlyingsOf(_deps(), id);
     }
 
+    /// @return live positions whose series hasn't expired
+    /// @return awaiting expired positions whose expiry the registry hasn't settled yet
+    function positionStatus(uint256 id) external view returns (uint256 live, uint256 awaiting) {
+        return AuctionHookLogic.positionStatus(_deps(), id);
+    }
+
     function pool(uint64 expiry)
         external
         view

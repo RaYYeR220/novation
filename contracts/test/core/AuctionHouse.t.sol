@@ -13,6 +13,7 @@ import {IMarketDataHub} from "../../src/interfaces/IMarketDataHub.sol";
 import {FixedPointMath as F} from "../../src/libraries/FixedPointMath.sol";
 import {NyseCalendar} from "../../src/libraries/NyseCalendar.sol";
 import {Position, Session} from "../../src/types/Types.sol";
+import {console2} from "forge-std/console2.sol";
 
 /// @notice Test-only. Etched over the clearinghouse for one call to set an account's total of
 /// unpaid claims (no per-expiry claim, no pool).
@@ -441,20 +442,22 @@ contract AuctionHouseTest is Fixture {
     }
 
     /// Lots are rounded to the minimum size, so a tiny fraction can hand the bidder far more of a
-    /// small position than its share. That difference is settled at mark: whatever the fraction,
-    /// the bidder gains only the discount on its share, solvent or not.
+    /// small position than its share. That difference is settled between the account and the
+    /// bidder at mark: whatever the fraction, the bidder gains only the discount on its share,
+    /// solvent or not, and the InsuranceFund pays only the bonus on the fraction.
     function test_lotRoundingSettledAtMark() public {
-        (uint256 a, uint256 b) = _shortPuts(520 * USDG);
-        _trade(a, alice, b, bob, put160, 0.015e18, 0.3e18);
-        _trade(a, alice, b, bob, put150, 0.025e18, 0.2e18);
+        (uint256 a, uint256 b) = _shortPuts(540 * USDG);
+        _trade(a, alice, b, bob, put160, -0.015e18, 0.1e18);
+        _trade(a, alice, b, bob, put150, -0.025e18, 0.1e18);
         usdg.mint(address(insurance), 1_000 * USDG);
         _setPrice(address(nvda), 150e18);
         uint256 c = _fund(carol, 10_000 * USDG, 0);
+        AccountState memory st = ch.accountState(a);
+        assertTrue(st.liquidatable);
+        assertGt(st.equity, 0);
         ah.startLiquidation(a);
 
         // 0.1%: 0.01 of the put170 short, but all 0.015 put160 and 0.01 (not 0.000025) put150
-        AccountState memory st = ch.accountState(a);
-        assertGt(st.equity, 0);
         int256 carolBefore = ch.accountState(c).equity;
         uint256 f = 0.001e18;
         uint256 share = _mw(f, uint256(st.equity));
@@ -463,27 +466,159 @@ contract AuctionHouseTest is Fixture {
         vm.prank(carol);
         int256 paid = ah.bidLiquidation(a, f, c, type(int256).max);
         _assertPos(c, put170, -0.01e18);
-        _assertPos(c, put160, 0.015e18);
-        _assertPos(c, put150, 0.01e18);
-        assertGt(paid, int256(share)); // it paid for the extra long puts at mark
+        _assertPos(c, put160, -0.015e18);
+        _assertPos(c, put150, -0.01e18);
+        assertLt(paid, int256(share)); // it was paid at mark for the extra short puts
         assertApproxEqAbs(ch.accountState(c).equity - carolBefore, int256(gain), 10);
         // the account lost only the discount on the share and the penalty
         assertApproxEqAbs(st.equity - ch.accountState(a).equity, int256(gain + penalty), 10);
 
-        // now insolvent: the fund pays for the liabilities actually taken, plus the discount
+        // now insolvent: the 0.015 put150 left would split into 0.0015 + 0.0135, so it moves whole;
+        // the account pays the bidder for that extra liability, the fund only the bonus on 10%
         _setPrice(address(nvda), 90e18);
         st = ch.accountState(a);
         assertLt(st.equity, 0);
         carolBefore = ch.accountState(c).equity;
+        uint256 fundBefore = usdg.balanceOf(address(insurance));
+        uint256 aliceCash = ch.cashOf(a);
         f = 0.1e18;
-        // the 0.015 put150 left would split into 0.0015 + 0.0135: it moves whole
+        uint256 bonus = _mw(f, uint256(-st.equity) + _mw(0.02e18, st.mm));
         vm.prank(carol);
         paid = ah.bidLiquidation(a, f, c, 0);
-        assertLt(paid, 0);
         _assertPos(a, put150, 0);
-        _assertPos(c, put150, 0.025e18);
+        _assertPos(c, put150, -0.025e18);
+        assertEq(fundBefore - usdg.balanceOf(address(insurance)), bonus / USDG_SCALE);
+        assertEq(paid, int256(aliceCash - aliceCash / 10 - ch.cashOf(a)) * -1 - int256(bonus / USDG_SCALE * USDG_SCALE));
         assertApproxEqAbs(ch.accountState(c).equity - carolBefore, int256(_mw(f, _mw(0.02e18, st.mm))), 1e12);
         _assertBacked(_ids(a, b, c));
+    }
+
+    /// An insolvent book of small short lots: a dust fraction would move every lot whole and almost
+    /// none of the cash. The fund must not pay for those liabilities (the owner would then keep
+    /// and withdraw the cash); the account owes the bidder the difference, can't pay it, and the
+    /// bid fails. The honest full takeover leaves the account with nothing.
+    function test_insolventLotResidueNotPaidByFund() public {
+        uint256 a = _tinyShortBook();
+        ah.startLiquidation(a);
+        uint256 a2 = _fund(alice, 2_000 * USDG, 0); // the owner bids from another account
+        uint256 fundBefore = usdg.balanceOf(address(insurance));
+
+        vm.prank(alice);
+        vm.expectPartialRevert(CHErrors.InsufficientCash.selector);
+        ah.bidLiquidation(a, 100, a2, 0);
+        assertEq(usdg.balanceOf(address(insurance)), fundBefore);
+
+        AccountState memory st = ch.accountState(a);
+        uint256 bonus = uint256(-st.equity) + _mw(0.02e18, st.mm);
+        vm.prank(alice);
+        assertEq(ah.bidLiquidation(a, 1e18, a2, 0), -int256(bonus / USDG_SCALE * USDG_SCALE));
+        assertEq(fundBefore - usdg.balanceOf(address(insurance)), bonus / USDG_SCALE);
+        assertEq(ch.cashOf(a), 0);
+        assertEq(ch.positionsOf(a).length, 0);
+    }
+
+    /// Whatever the fraction, the fund pays at most the bonus on it, and a takeover that empties an
+    /// insolvent account leaves it no withdrawable cash.
+    function testFuzz_insolventFundOutlayBounded(uint256 f) public {
+        f = bound(f, 1, 1e18);
+        uint256 a = _tinyShortBook();
+        _cheatMovePosition(a, put170, -0.5e18); // and one lot that splits
+        ah.startLiquidation(a);
+        uint256 c = _fund(carol, 5_000 * USDG, 0);
+        AccountState memory st = ch.accountState(a);
+        assertLt(st.equity, 0);
+        uint256 cap = _mw(f, uint256(-st.equity) + _mw(0.02e18, st.mm));
+        uint256 fundBefore = usdg.balanceOf(address(insurance));
+
+        vm.prank(carol);
+        try ah.bidLiquidation(a, f, c, type(int256).max) {
+            assertLe((fundBefore - usdg.balanceOf(address(insurance))) * USDG_SCALE, cap + USDG_SCALE);
+            if (ch.positionsOf(a).length == 0) assertLt(ch.cashOf(a), USDG_SCALE);
+        } catch {
+            assertEq(usdg.balanceOf(address(insurance)), fundBefore);
+        }
+    }
+
+    /// An insolvent account with no cash at all can still be taken over in clean fractions: the
+    /// marks' wei rounding is not a lot difference it would have to pay.
+    function test_cashlessInsolventAccountCanBeTakenOver() public {
+        uint256 a = _newAccount(alice);
+        _cheatMovePosition(a, put170, -10e18);
+        _cheatMovePosition(a, put160, -7e18);
+        _setPrice(address(nvda), 150e18);
+        assertLt(ch.accountState(a).equity, 0);
+        uint256 c = _fund(carol, 10_000 * USDG, 0);
+        ah.startLiquidation(a);
+        uint256[6] memory fs = [uint256(0.3e18), 0.37e18, 0.123456789e18, 0.45e18, 0.111e18, 0.29e18];
+        for (uint256 i = 0; i < fs.length; ++i) {
+            uint256 snap = vm.snapshotState();
+            vm.prank(carol);
+            ah.bidLiquidation(a, fs[i], c, type(int256).max);
+            assertEq(ch.cashOf(a), 0);
+            vm.revertToState(snap);
+        }
+    }
+
+    /// A tiny fraction would take the small long-put hedges whole and only a minimum lot of the
+    /// short: the account would be left riskier, so the bid fails. A proportional bid is fine.
+    function test_bidCannotRaiseRisk() public {
+        (uint256 a, uint256 b) = _shortPuts(530 * USDG);
+        _trade(a, alice, b, bob, put160, 0.019e18, 0.4e18);
+        _trade(a, alice, b, bob, put150, 0.019e18, 0.3e18);
+        _setPrice(address(nvda), 150e18);
+        uint256 c = _fund(carol, 10_000 * USDG, 0);
+        AccountState memory st = ch.accountState(a);
+        assertTrue(st.liquidatable);
+        ah.startLiquidation(a);
+
+        vm.prank(carol);
+        vm.expectPartialRevert(AuctionHouse.BidRaisesRisk.selector);
+        ah.bidLiquidation(a, 1e15, c, type(int256).max);
+
+        vm.prank(carol);
+        ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
+        assertLt(ch.accountState(a).im, st.im);
+    }
+
+    /// No liquidation on a book the registry hasn't priced (an expired series awaiting its
+    /// settlement price is valued on spot), nor on one with nothing live left (settleAccount's job).
+    function test_noBidsOnDeadOrUnsettledBook() public {
+        uint32 put170e1 = _list(address(nvda), e1, 170e18, false);
+        uint256 a = _fund(alice, 300 * USDG, 0);
+        _cheatMovePosition(a, put170e1, -1e18);
+        _cheatMovePosition(a, put170, -10e18);
+        uint256 dead = _fund(dave, 10 * USDG, 0);
+        _cheatMovePosition(dead, put170e1, -1e18);
+        uint256 c = _fund(carol, 10_000 * USDG, 0);
+
+        vm.warp(e1 - 600);
+        _setPrice(address(nvda), 100e18);
+        assertTrue(ch.accountState(a).liquidatable);
+        ah.startLiquidation(a);
+
+        // past the close, before the registry has the settlement price
+        vm.warp(e1 + 60);
+        (uint256 live, uint256 awaiting) = ch.positionStatus(a);
+        assertEq(live, 1);
+        assertEq(awaiting, 1);
+        vm.prank(carol);
+        vm.expectRevert(AuctionHouse.NotLiquidatable.selector);
+        ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
+        vm.expectRevert(AuctionHouse.NotLiquidatable.selector);
+        ah.startLiquidation(dead);
+
+        // settled: the live book can be bid on, the expired-only one goes through settleAccount
+        uint80 rid = feedOf[address(nvda)].pushRound(int256(100e8), e1);
+        registry.settleExpiry(address(nvda), e1, rid);
+        (live, awaiting) = ch.positionStatus(a);
+        assertEq(awaiting, 0);
+        vm.prank(carol);
+        ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
+        assertTrue(ch.accountState(dead).liquidatable);
+        (live, awaiting) = ch.positionStatus(dead);
+        assertEq(live + awaiting, 0);
+        vm.expectRevert(AuctionHouse.NotLiquidatable.selector);
+        ah.startLiquidation(dead);
     }
 
     /// Unpaid settlement claims count in equity but stay with the account (a claim belongs to its
@@ -527,6 +662,43 @@ contract AuctionHouseTest is Fixture {
         assertEq(ch.claimableTotalOf(a), 300e18);
         // never more than the uncovered shortfall plus the discount on maintenance margin
         assertLe(uint256(-paid), _mw(0.5e18, uint256(-transferable) + _mw(0.02e18, st.mm)));
+    }
+
+    /// Gas of a 50% bid on an account at the 256-position cap, end to end (gate, book check, three
+    /// margin calls, transferFraction, payment, penalty). The kernel here is KernelReference; see
+    /// the report for the split against the on-chain Stylus kernel.
+    function test_gas_liquidation256() public {
+        uint256 a = _newAccount(alice);
+        uint256 b = _fund(bob, 100_000 * USDG, 0);
+        uint64 ex = e1;
+        uint256 n;
+        for (uint256 w; w < 6 && n < 256; ++w) {
+            for (uint256 k = 90; k <= 270 && n < 256; k += 5) {
+                for (uint256 cp; cp < 2 && n < 256; ++cp) {
+                    uint32 sid = _list(address(nvda), ex, uint128(k * 1e18), cp == 0);
+                    _cheatMovePosition(a, sid, -0.05e18);
+                    _cheatMovePosition(b, sid, 0.05e18);
+                    ++n;
+                }
+            }
+            ex = uint64(NyseCalendar.nextWeeklyExpiry(ex + 1));
+        }
+        assertEq(ch.positionsOf(a).length, 256);
+        AccountState memory st = ch.accountState(a);
+        _deposit(alice, a, address(usdg), (uint256(-st.equity) + st.mm / 2) / USDG_SCALE + 1);
+        st = ch.accountState(a);
+        assertTrue(st.liquidatable);
+        assertGt(st.equity, 0);
+        uint256 c = _fund(carol, 100_000 * USDG, 0);
+        ah.startLiquidation(a);
+
+        vm.prank(carol);
+        uint256 g0 = gasleft();
+        ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
+        uint256 used = g0 - gasleft();
+        console2.log("bidLiquidation(256 positions, f=0.5) gas", used);
+        assertEq(ch.positionsOf(c).length, 128); // the first 128 in storage order
+        assertEq(ch.positionsOf(a).length, 256);
     }
 
     // ================================================================ hooks
@@ -917,6 +1089,20 @@ contract AuctionHouseTest is Fixture {
         a = _fund(alice, usdgUnits, 0);
         b = _fund(bob, 10_000 * USDG, 0);
         _trade(a, alice, b, bob, put170, -10e18, 50e18);
+    }
+
+    /// @dev alice: 20 USDG and ten 0.019 short NVDA puts (strikes 135..180, next week), each lot
+    /// under twice the minimum; NVDA down to 30 makes it insolvent. The fund holds 1,000 USDG.
+    function _tinyShortBook() internal returns (uint256 a) {
+        a = _fund(alice, 20 * USDG, 0);
+        uint256 b = _fund(bob, 10_000 * USDG, 0);
+        for (uint256 i; i < 10; ++i) {
+            uint32 sid = _list(address(nvda), e2, uint128(135e18 + i * 5e18), false);
+            _trade(a, alice, b, bob, sid, -0.019e18, 0.01e18);
+        }
+        usdg.mint(address(insurance), 1_000 * USDG);
+        _setPrice(address(nvda), 30e18);
+        assertLt(ch.accountState(a).equity, 0);
     }
 
     /// @dev alice short 10 puts on 520 USDG, NVDA down to 150: equity ~297 > 0 but < MM ~340.
