@@ -4,6 +4,8 @@ Portfolio-margined options on Robinhood Chain stock tokens. Every margin check r
 
 Robinhood Chain testnet (chain id 46630): the Stylus kernel, its Solidity twin and the core contracts are live. Internally reviewed, not externally audited. Judges can start with [JUDGES.md](JUDGES.md).
 
+Live app: [novation-clearing.vercel.app](https://novation-clearing.vercel.app) (the app runs on a demo snapshot computed with the kernel reference; the contracts it describes are live on testnet).
+
 ## What Novation is
 
 Novation is a clearinghouse for weekly European options on the tokenized US stocks that trade on Robinhood Chain, starting with NVDA, TSLA, SPY and AAPL. Options are cash-settled in USDG at the Friday NYSE close. Trades reach the clearinghouse only through venues: an RFQ venue for EIP-712 signed maker quotes, and two option-selling vaults (covered calls and cash-secured puts). An owner can let an AI trading agent trade for an account under an on-chain risk budget, which caps the worst-case loss the account may carry rather than the amount the agent may spend.
@@ -155,10 +157,8 @@ docs/                      risk model, gas, deployments, architecture diagram
 
 Prerequisites: [Foundry](https://getfoundry.sh), Rust (the toolchain is pinned in `kernel/rust-toolchain.toml`), Python 3 for the tools, and Node with pnpm 9 for the app.
 
-<!-- FILL: replace repository_url with the public GitHub URL -->
-
 ```bash
-git clone --recurse-submodules repository_url novation
+git clone --recurse-submodules https://github.com/RaYYeR220/novation.git novation
 cd novation/contracts && forge build && forge test
 cd ../kernel && cargo test --test parity
 ```

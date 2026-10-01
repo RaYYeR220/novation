@@ -51,7 +51,7 @@ The mirror's limits:
 - Weekends produce no rounds, as on mainnet.
 - A mock feed only stays fresh while the mirror runs. Without it, the underlying reads HALTED once its latest round passes the staleness limit (26 hours in market hours).
 
-<!-- FILL: confirm the mirror is running on a schedule before the demo; on 2026-10-01 each feed still held its seed round from 2026-09-30 -->
+The mirror runs every 300 seconds. On 2026-10-01 the testnet NVDA and TSLA feeds carried the mainnet rounds of 07:28 and 08:11 UTC that day.
 
 ### One synthetic round
 
