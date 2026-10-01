@@ -23,7 +23,7 @@ Both kernels are deployed on Robinhood Chain testnet. With [Foundry](https://get
 RPC=https://rpc.testnet.chain.robinhood.com
 SIG="bsQuote(uint256,uint256,uint256,uint256,int256,bool)(uint256,int256,uint256,uint256,int256)"
 ARGS="100000000000000000000 100000000000000000000 604800 500000000000000000 40000000000000000 true"
-cast call 0x6d07e246eb757A1F97E3cdB7d1881ee5De27ceaA "$SIG" $ARGS --rpc-url $RPC
+cast call 0xAeE1D4F45AF43a9C4d52ADa65d423b1c0e67f0fd "$SIG" $ARGS --rpc-url $RPC
 cast call 0xB7d9232c8ff46b4950d85ed639908c86C08750C6 "$SIG" $ARGS --rpc-url $RPC
 ```
 
@@ -68,14 +68,23 @@ Robinhood Chain testnet, chain id 46630. Full list: [docs/deployments.md](docs/d
 
 | Contract | Address |
 |---|---|
-| Risk kernel (Stylus) | [`0x6d07e246eb757A1F97E3cdB7d1881ee5De27ceaA`](https://explorer.testnet.chain.robinhood.com/address/0x6d07e246eb757A1F97E3cdB7d1881ee5De27ceaA) |
+| Risk kernel (Stylus) | [`0xAeE1D4F45AF43a9C4d52ADa65d423b1c0e67f0fd`](https://explorer.testnet.chain.robinhood.com/address/0xAeE1D4F45AF43a9C4d52ADa65d423b1c0e67f0fd) |
 | KernelReference (Solidity twin) | [`0xB7d9232c8ff46b4950d85ed639908c86C08750C6`](https://explorer.testnet.chain.robinhood.com/address/0xB7d9232c8ff46b4950d85ed639908c86C08750C6) |
 | Hand-optimized Solidity gas baseline | [`0x9F5a98A1E678b124998328cfa0056c90720ceCEe`](https://explorer.testnet.chain.robinhood.com/address/0x9F5a98A1E678b124998328cfa0056c90720ceCEe) |
-| Core contracts and venues | deploying <!-- FILL: Clearinghouse, RiskParams, MarketDataHub, SeriesRegistry, InsuranceFund, RfqVenue, vault addresses --> |
+| RiskParams | [`0xeCEA04998e34250FAf5267886f764A84Eb22450f`](https://explorer.testnet.chain.robinhood.com/address/0xeCEA04998e34250FAf5267886f764A84Eb22450f) |
+| MarketDataHub | [`0xDf0045dB247DEcFab97324c62B6a4fC8d85D7fE8`](https://explorer.testnet.chain.robinhood.com/address/0xDf0045dB247DEcFab97324c62B6a4fC8d85D7fE8) |
+| SeriesRegistry | [`0x06a923dD90eA046Ef873d78A7e6CeAeF628fFA18`](https://explorer.testnet.chain.robinhood.com/address/0x06a923dD90eA046Ef873d78A7e6CeAeF628fFA18) |
+| InsuranceFund | [`0x407Ec2670121e0CFE05fAce426c5bFeedCB83FDb`](https://explorer.testnet.chain.robinhood.com/address/0x407Ec2670121e0CFE05fAce426c5bFeedCB83FDb) |
+| Clearinghouse (with MarginLogic, TradeLogic, SettlementLogic, AuctionHookLogic) | [`0x007dEfb27a1CE2410fec787eFdacbDBa90E08901`](https://explorer.testnet.chain.robinhood.com/address/0x007dEfb27a1CE2410fec787eFdacbDBa90E08901) |
+| AuctionHouse | [`0x9a09Aaa2383369a46b6EE5dc9910253D3E021c37`](https://explorer.testnet.chain.robinhood.com/address/0x9a09Aaa2383369a46b6EE5dc9910253D3E021c37) |
+| RfqVenue | [`0x8c0672d04766D06B432B29ab91B660b2Da87cE06`](https://explorer.testnet.chain.robinhood.com/address/0x8c0672d04766D06B432B29ab91B660b2Da87cE06) |
+| CoveredCallVault NVDA | [`0xf6719179446cb08696aa1b92472489B846741278`](https://explorer.testnet.chain.robinhood.com/address/0xf6719179446cb08696aa1b92472489B846741278) |
+| CoveredCallVault TSLA | [`0x25D4639DEBcFf9777bf0dB7955438C6070C27F47`](https://explorer.testnet.chain.robinhood.com/address/0x25D4639DEBcFf9777bf0dB7955438C6070C27F47) |
+| PutWriteVault NVDA | [`0xB582CEfC59751798825E5018067F7E37bbc167c8`](https://explorer.testnet.chain.robinhood.com/address/0xB582CEfC59751798825E5018067F7E37bbc167c8) |
+| TimelockController (60 s on testnet) | [`0xC010e18c0d35B99Df36eB8Ea0A070F62CF68Bf32`](https://explorer.testnet.chain.robinhood.com/address/0xC010e18c0d35B99Df36eB8Ea0A070F62CF68Bf32) |
 
 ## What is not done yet
 
-- The AuctionHouse (liquidations and deficit sales) is in development.
 - The keeper, the TypeScript SDK, the MCP server for agents and the indexer are in development; the web app is in progress in `app/`.
 - Nothing is on Robinhood Chain mainnet yet, and testnet uses mock tokens and mirrored feeds ([MOCKS.md](MOCKS.md)).
 - The code is internally reviewed and not externally audited.

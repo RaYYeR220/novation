@@ -2,7 +2,7 @@
 
 Portfolio-margined options on Robinhood Chain stock tokens. Every margin check re-prices the whole book across 39 scenarios in a Stylus risk kernel, for about 15x less gas than hand-optimized Solidity.
 
-Robinhood Chain testnet (chain id 46630): the Stylus kernel and its Solidity twin are live, the core contracts are deploying. Internally reviewed, not externally audited. Judges can start with [JUDGES.md](JUDGES.md).
+Robinhood Chain testnet (chain id 46630): the Stylus kernel, its Solidity twin and the core contracts are live. Internally reviewed, not externally audited. Judges can start with [JUDGES.md](JUDGES.md).
 
 ## What Novation is
 
@@ -65,15 +65,15 @@ The script checks that the two return byte-identical results and prints `eth_est
 - **MarketDataHub** turns a Chainlink feed and a stock token into a session (regular, extended, weekend, holiday or halted), a spot price, a mark volatility and a proven settlement price. Every halt condition fails closed.
 - **SeriesRegistry** lists series permissionlessly (weekly NYSE-close expiries, strike grid, distance from spot) and stores one settlement price per underlying and expiry.
 - **RiskParams** holds every risk and fee parameter inside hard-coded bounds. Only a timelock can change them; a guardian can only pause opening.
-- **InsuranceFund** receives a share of fees and bridges settlement shortfalls. **AuctionHouse** (in development) will run Dutch-auction liquidations and the sale of a defaulter's collateral.
+- **InsuranceFund** receives a share of fees and bridges settlement shortfalls. **AuctionHouse** runs Dutch-auction liquidations and the sale of a defaulter's collateral.
 
 | Component | Status |
 |---|---|
 | Risk kernel (Stylus) and `KernelReference.sol` | Implemented, deployed on RH testnet |
-| Clearinghouse with margin, trading, agent budgets and the settlement waterfall | Implemented and tested, deploying |
-| MarketDataHub, SeriesRegistry, RiskParams, InsuranceFund | Implemented and tested, deploying |
-| RfqVenue, CoveredCallVault, PutWriteVault | Implemented and tested, deploying |
-| AuctionHouse (liquidations, deficit sales) | In development |
+| Clearinghouse with margin, trading, agent budgets and the settlement waterfall | Implemented and tested, deployed on RH testnet |
+| MarketDataHub, SeriesRegistry, RiskParams, InsuranceFund | Implemented and tested, deployed on RH testnet |
+| RfqVenue, CoveredCallVault, PutWriteVault | Implemented and tested, deployed on RH testnet |
+| AuctionHouse (liquidations, deficit sales) | Implemented and tested, deployed on RH testnet |
 | Keeper, TypeScript SDK, MCP server for agents, indexer, web app | In development |
 | Robinhood Chain mainnet deployment | Planned |
 
@@ -83,19 +83,22 @@ Robinhood Chain testnet, chain id 46630. The machine-readable copy is [`contract
 
 | Contract | Address | State |
 |---|---|---|
-| Risk kernel (Stylus) | [`0x6d07e246eb757A1F97E3cdB7d1881ee5De27ceaA`](https://explorer.testnet.chain.robinhood.com/address/0x6d07e246eb757A1F97E3cdB7d1881ee5De27ceaA) | deployed, activated |
+| Risk kernel (Stylus) | [`0xAeE1D4F45AF43a9C4d52ADa65d423b1c0e67f0fd`](https://explorer.testnet.chain.robinhood.com/address/0xAeE1D4F45AF43a9C4d52ADa65d423b1c0e67f0fd) | deployed, activated |
 | KernelReference (Solidity twin) | [`0xB7d9232c8ff46b4950d85ed639908c86C08750C6`](https://explorer.testnet.chain.robinhood.com/address/0xB7d9232c8ff46b4950d85ed639908c86C08750C6) | deployed |
 | Mock USDG, NVDA, TSLA, AAPL, SPY and their feeds | see [docs/deployments.md](docs/deployments.md) | deployed, testnet only ([MOCKS.md](MOCKS.md)) |
-| RiskParams | pending | deploying |
-| MarketDataHub | pending | deploying |
-| SeriesRegistry | pending | deploying |
-| InsuranceFund | pending | deploying |
-| Clearinghouse (with MarginLogic, TradeLogic, SettlementLogic) | pending | deploying |
-| RfqVenue | pending | deploying |
-| CoveredCallVault, PutWriteVault | pending | deploying |
-| AuctionHouse | pending | in development |
+| RiskParams | [`0xeCEA04998e34250FAf5267886f764A84Eb22450f`](https://explorer.testnet.chain.robinhood.com/address/0xeCEA04998e34250FAf5267886f764A84Eb22450f) | deployed, setup finalized |
+| MarketDataHub | [`0xDf0045dB247DEcFab97324c62B6a4fC8d85D7fE8`](https://explorer.testnet.chain.robinhood.com/address/0xDf0045dB247DEcFab97324c62B6a4fC8d85D7fE8) | deployed |
+| SeriesRegistry | [`0x06a923dD90eA046Ef873d78A7e6CeAeF628fFA18`](https://explorer.testnet.chain.robinhood.com/address/0x06a923dD90eA046Ef873d78A7e6CeAeF628fFA18) | deployed, 128 series listed |
+| InsuranceFund | [`0x407Ec2670121e0CFE05fAce426c5bFeedCB83FDb`](https://explorer.testnet.chain.robinhood.com/address/0x407Ec2670121e0CFE05fAce426c5bFeedCB83FDb) | deployed, funded with 100,000 mock USDG |
+| Clearinghouse (with MarginLogic, TradeLogic, SettlementLogic, AuctionHookLogic) | [`0x007dEfb27a1CE2410fec787eFdacbDBa90E08901`](https://explorer.testnet.chain.robinhood.com/address/0x007dEfb27a1CE2410fec787eFdacbDBa90E08901) | deployed, setup finalized |
+| AuctionHouse | [`0x9a09Aaa2383369a46b6EE5dc9910253D3E021c37`](https://explorer.testnet.chain.robinhood.com/address/0x9a09Aaa2383369a46b6EE5dc9910253D3E021c37) | deployed |
+| RfqVenue | [`0x8c0672d04766D06B432B29ab91B660b2Da87cE06`](https://explorer.testnet.chain.robinhood.com/address/0x8c0672d04766D06B432B29ab91B660b2Da87cE06) | deployed |
+| CoveredCallVault NVDA | [`0xf6719179446cb08696aa1b92472489B846741278`](https://explorer.testnet.chain.robinhood.com/address/0xf6719179446cb08696aa1b92472489B846741278) | deployed, seeded |
+| CoveredCallVault TSLA | [`0x25D4639DEBcFf9777bf0dB7955438C6070C27F47`](https://explorer.testnet.chain.robinhood.com/address/0x25D4639DEBcFf9777bf0dB7955438C6070C27F47) | deployed, seeded |
+| PutWriteVault NVDA | [`0xB582CEfC59751798825E5018067F7E37bbc167c8`](https://explorer.testnet.chain.robinhood.com/address/0xB582CEfC59751798825E5018067F7E37bbc167c8) | deployed, seeded |
+| TimelockController (60 s on testnet) | [`0xC010e18c0d35B99Df36eB8Ea0A070F62CF68Bf32`](https://explorer.testnet.chain.robinhood.com/address/0xC010e18c0d35B99Df36eB8Ea0A070F62CF68Bf32) | deployed |
 
-<!-- FILL: replace the "pending" rows with explorer links once the core deployment lands in contracts/deployments/46630.json -->
+The end-to-end run on this deployment (deposits, a vault buy, an RFQ fill, an agent budget and a withdrawal blocked by margin, with every transaction hash) is in [`tools/e2e/out/46630.json`](tools/e2e/out/46630.json).
 
 ## Security model
 
@@ -113,8 +116,7 @@ The full trust model, invariants, threat table and review history are in [SECURI
 
 - Mark volatility is realized volatility from Chainlink rounds, not implied volatility. Vault premiums add model parameters (skew, spread) on top of it.
 - Options are weekly, European and cash-settled. Settlement uses the last feed print at or before the close, which can be hours old.
-- The AuctionHouse is in development. Until it ships, under-margined accounts are not liquidated and a defaulter's collateral can't be sold.
-- Once live, liquidation and deficit auctions pause over weekends and while an underlying is halted, by design. A gap larger than the weekend shock can still create bad debt; it goes through the waterfall and, as a last resort, the cash index.
+- Liquidation and deficit auctions pause over weekends and while an underlying is halted, by design. A gap larger than the weekend shock can still create bad debt; it goes through the waterfall and, as a last resort, the cash index.
 - While a feed returns no usable price (unreadable, zero or outside the plausibility band), stock tokens held only as collateral are valued at 0. An account with options on that underlying can't withdraw, trade or be liquidated until the feed recovers.
 - An agent's value-drain cap applies per trade. Many trades can add up to more than one cap; owners should size budgets and expiries with that in mind. Revoking an agent takes effect immediately.
 - The Stylus program expires 365 days after activation. It must be kept alive (anyone can pay for that through ArbWasm), or every margin check fails.

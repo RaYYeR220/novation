@@ -25,5 +25,38 @@
     "type": "stylus",
     "codehash": "0xf46d723e12cd3a13b314d991ac137789fcc7a431d1c664b6448c4b22d7d84e40",
     "wasmSha256": "06466b69755c093658d433239d7284ce208497887e6715ebaf61c00565bb9f27"
-  }
+  },
+  "timelock": "0xC010e18c0d35B99Df36eB8Ea0A070F62CF68Bf32",
+  "guardian": "0x4108064852c95135844be338fc8bcBdF91C41ACF",
+  "riskParams": "0xeCEA04998e34250FAf5267886f764A84Eb22450f",
+  "hub": "0xDf0045dB247DEcFab97324c62B6a4fC8d85D7fE8",
+  "registry": "0x06a923dD90eA046Ef873d78A7e6CeAeF628fFA18",
+  "insurance": "0x407Ec2670121e0CFE05fAce426c5bFeedCB83FDb",
+  "clearinghouse": "0x007dEfb27a1CE2410fec787eFdacbDBa90E08901",
+  "auctionHouse": "0x9a09Aaa2383369a46b6EE5dc9910253D3E021c37",
+  "rfq": "0x8c0672d04766D06B432B29ab91B660b2Da87cE06",
+  "vaults": [
+    {
+      "address": "0xf6719179446cb08696aa1b92472489B846741278",
+      "type": "coveredCall",
+      "underlying": "NVDA"
+    },
+    {
+      "address": "0x25D4639DEBcFf9777bf0dB7955438C6070C27F47",
+      "type": "coveredCall",
+      "underlying": "TSLA"
+    },
+    {
+      "address": "0xB582CEfC59751798825E5018067F7E37bbc167c8",
+      "type": "putWrite",
+      "underlying": "NVDA"
+    }
+  ],
+  "libraries": {
+    "AuctionHookLogic": "0x0d7A7ADb895a5503047C5D8a5Ae3aBF5952356F5",
+    "MarginLogic": "0xCe93b81f68b33b56aF06c00CB3AB659178Ce2D7b",
+    "SettlementLogic": "0xf5c256273bafEc29d9F4b81C6bA84b8e2d45a901",
+    "TradeLogic": "0x74C6318bd22f623c177faF5a9b24504ed7E86C17"
+  },
+  "block": 127112331
 }

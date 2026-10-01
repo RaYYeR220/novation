@@ -17,7 +17,7 @@ The core contracts are immutable: no proxies, no `selfdestruct`, no `delegatecal
 | Setup admin | The deployer, until `finalizeSetup` | Clearinghouse: add venues, bind the auction house. RiskParams: add underlyings and set parameters within bounds. InsuranceFund: bind the clearinghouse once | Anything on the clearinghouse or RiskParams after their setup is finalized |
 | Timelock | An OpenZeppelin `TimelockController` (24-hour minimum delay planned for mainnet) | Add underlyings, change any parameter within its hard-coded bounds, enable or disable an underlying, pause or unpause opening | Exceed a bound, change an underlying's feed, move funds, change code, or block withdrawals directly (see the note below) |
 | Guardian | A separate key or multisig | Pause and unpause opening | Anything else |
-| AuctionHouse | The contract bound at setup (in development) | Call the clearinghouse's auction hooks: move a fraction of an account to a bidder, charge the liquidation penalty, draw on the InsuranceFund for an insolvent account, apply deficit-sale proceeds | Call any other clearinghouse function with special rights |
+| AuctionHouse | The contract bound at setup | Call the clearinghouse's auction hooks: move a fraction of an account to a bidder, charge the liquidation penalty, draw on the InsuranceFund for an insolvent account, apply deficit-sale proceeds | Call any other clearinghouse function with special rights |
 
 Two powers deserve a note. The setup admin chooses the venue list, and a venue vouches for the actors it passes; before trusting a deployment, check that `setupFinalized()` is true and that the `VenueAdded` events name only the published venues. The timelock can't touch funds, but it can raise margin requirements within bounds, and it can move an underlying's plausibility band so that the live price falls outside it, which freezes accounts holding options on that underlying until the band is corrected. The timelock delay is the users' window to react to either.
 
@@ -97,7 +97,6 @@ Smaller issues found in the same reviews or while implementing:
 ## Known limitations
 
 - **No external audit.** The review described above was internal.
-- **Liquidation is in development.** Until the AuctionHouse ships, under-margined accounts are not liquidated and a defaulter's collateral can't be sold.
 - **Cumulative agent drain.** The value-drain cap applies per trade, so many trades can add up to more than one cap. Owners should size `maxPremiumPerTrade` and the policy expiry with that in mind.
 - **Oracle outages.** While a feed returns no usable price (unreadable, zero or outside the plausibility band), collateral-only holdings of that token count as 0, which can make an honest account liquidatable. An account with options on that underlying can't withdraw, trade or be liquidated until the feed recovers. A stale feed still prices; it halts opening and widens margin instead.
 - **Settlement prices can be hours old.** Settlement uses the last print at or before the close; on 2026-09-18 that was 08:22 ET for SPY. If the pre-close print is stale and the first post-close print is implausible, no proof can pass: that underlying's expiry stays unsettled and the claims of the expiry stay frozen. This follows from having no admin override.
@@ -109,7 +108,7 @@ Smaller issues found in the same reviews or while implementing:
 - **Stylus program expiry.** If the program expires, every margin check fails, which stops trading and margin-checked withdrawals until it is re-activated.
 - **Issuer powers.** A blocklisted clearinghouse address or a paused token stops transfers of that token; an `adminBurn` from the clearinghouse would break the collateral-backing invariant.
 - **Calendar horizon.** The NYSE holiday table covers 2026 and 2027; later years need a new deployment.
-- **Testnet build.** The deployed testnet kernel predates the decoder fix above and will be redeployed. The testnet mocks are writable by anyone ([MOCKS.md](MOCKS.md)).
+- **Testnet build.** The testnet kernel was redeployed from the current source on 2026-10-01; the earlier program, which predates the decoder fix above, is no longer used. The testnet mocks are writable by anyone ([MOCKS.md](MOCKS.md)).
 - **Gas per trade.** A trade runs two to four kernel evaluations; the Solidity that gathers each account's positions adds gas that grows with the book.
 
 ## Reporting a vulnerability

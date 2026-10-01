@@ -1,0 +1,236 @@
+{
+  "chainId": 46630,
+  "date": "2026-10-01T11:58:34+00:00",
+  "kernel": "0xAeE1D4F45AF43a9C4d52ADa65d423b1c0e67f0fd",
+  "clearinghouse": "0x007dEfb27a1CE2410fec787eFdacbDBa90E08901",
+  "actors": {
+    "user": "0x4108064852c95135844be338fc8bcBdF91C41ACF",
+    "maker": "0xB45a00D9ffF5348E6aB4Eb0D6B82B43610AE951E",
+    "agent": "0xf6D60d787dC6222fA53C644d34F578f5A439d4DC"
+  },
+  "txs": [
+    {
+      "label": "fund maker gas",
+      "tx": "0x5cf199777b99fbb5525219e9bc8ac0ca4c0665626cffb46b8600fee2ddcb917f",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x5cf199777b99fbb5525219e9bc8ac0ca4c0665626cffb46b8600fee2ddcb917f",
+      "status": "success",
+      "gasUsed": 25450,
+      "block": 127126684
+    },
+    {
+      "label": "fund agent gas",
+      "tx": "0x0f531123f809ec142ebcf0c77f50d184e163f9d2526ba4d9c11e23e63396e31c",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x0f531123f809ec142ebcf0c77f50d184e163f9d2526ba4d9c11e23e63396e31c",
+      "status": "success",
+      "gasUsed": 25450,
+      "block": 127126700
+    },
+    {
+      "label": "1 createSubaccount (user)",
+      "tx": "0xfdc3a3d802cafe01233978c629a9968d154061b428dc34b919a1ec07d497392d",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xfdc3a3d802cafe01233978c629a9968d154061b428dc34b919a1ec07d497392d",
+      "status": "success",
+      "gasUsed": 98303,
+      "block": 127126733
+    },
+    {
+      "label": "1 mint USDG",
+      "tx": "0x257cfe436f816487bc69a9bb23578bc665505943fac1138d97da588bbd1eef2b",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x257cfe436f816487bc69a9bb23578bc665505943fac1138d97da588bbd1eef2b",
+      "status": "success",
+      "gasUsed": 54986,
+      "block": 127126753
+    },
+    {
+      "label": "1 mint NVDA",
+      "tx": "0xf44a0db970ab937f59c940a4fb23ad653ddcbd85d4d216f34e9399ca599b303c",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xf44a0db970ab937f59c940a4fb23ad653ddcbd85d4d216f34e9399ca599b303c",
+      "status": "success",
+      "gasUsed": 55088,
+      "block": 127126769
+    },
+    {
+      "label": "1 approve USDG",
+      "tx": "0x9a7e4d6a5559893285b2a376b7d7fefbf8346ca489ea7a1dd26abb62c83763c5",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x9a7e4d6a5559893285b2a376b7d7fefbf8346ca489ea7a1dd26abb62c83763c5",
+      "status": "success",
+      "gasUsed": 50282,
+      "block": 127126790
+    },
+    {
+      "label": "1 approve NVDA",
+      "tx": "0xdc1416ae0e48fb484f4f99cf6e35c2e8f4802cfabc408094381fe80f0b68c0d2",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xdc1416ae0e48fb484f4f99cf6e35c2e8f4802cfabc408094381fe80f0b68c0d2",
+      "status": "success",
+      "gasUsed": 50282,
+      "block": 127126810
+    },
+    {
+      "label": "1 deposit 2000 USDG",
+      "tx": "0xe2723961ae5eee81f232a503f8dfa53d457b26b32fe96431b3ea474962834550",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xe2723961ae5eee81f232a503f8dfa53d457b26b32fe96431b3ea474962834550",
+      "status": "success",
+      "gasUsed": 81141,
+      "block": 127126825
+    },
+    {
+      "label": "1 deposit 1 NVDA",
+      "tx": "0xc6564d690701f3f5e33c249bcb9097ec5b8131bcb135f12389a79ce63c242251",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xc6564d690701f3f5e33c249bcb9097ec5b8131bcb135f12389a79ce63c242251",
+      "status": "success",
+      "gasUsed": 207482,
+      "block": 127126846
+    },
+    {
+      "label": "2 syncVol NVDA",
+      "tx": "0xd5ec11f3a77db4fb44f685e073538b00c4b6a7e0393885c556f09e994b5a9f77",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xd5ec11f3a77db4fb44f685e073538b00c4b6a7e0393885c556f09e994b5a9f77",
+      "status": "success",
+      "gasUsed": 62905,
+      "block": 127126862
+    },
+    {
+      "label": "2 buy 1 NVDA call from the covered-call vault",
+      "tx": "0x279e2b3d5aeb393ba78ac5119a867000b44c3cf4ac9f1c66d15de07c676b61c6",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x279e2b3d5aeb393ba78ac5119a867000b44c3cf4ac9f1c66d15de07c676b61c6",
+      "status": "success",
+      "gasUsed": 905772,
+      "block": 127127452
+    },
+    {
+      "label": "3 createSubaccount (maker)",
+      "tx": "0x4ef1b565c5cdee3e8e746fd08f91a04a25d0e4a8a54d077cc69bce15d8fcbdff",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x4ef1b565c5cdee3e8e746fd08f91a04a25d0e4a8a54d077cc69bce15d8fcbdff",
+      "status": "success",
+      "gasUsed": 98280,
+      "block": 127127484
+    },
+    {
+      "label": "3 mint USDG for the maker",
+      "tx": "0x1d146496779434f5b79027fdff42b291a29d7c906153d3df77d8e76c46d9a072",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x1d146496779434f5b79027fdff42b291a29d7c906153d3df77d8e76c46d9a072",
+      "status": "success",
+      "gasUsed": 37886,
+      "block": 127127513
+    },
+    {
+      "label": "3 deposit 2000 USDG into the maker account",
+      "tx": "0x7628e836c538e1c2f4a3cb0ad4fe764d04f70a20da3396637e6782862a03b7b0",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x7628e836c538e1c2f4a3cb0ad4fe764d04f70a20da3396637e6782862a03b7b0",
+      "status": "success",
+      "gasUsed": 81141,
+      "block": 127127539
+    },
+    {
+      "label": "3 RFQ fill: user sells 5 NVDA puts to the maker",
+      "tx": "0x028bca13826dcd0f216fa7a578f33313cfb08c31f7664174c8ae0d75cbea040a",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x028bca13826dcd0f216fa7a578f33313cfb08c31f7664174c8ae0d75cbea040a",
+      "status": "success",
+      "gasUsed": 734630,
+      "block": 127127562
+    },
+    {
+      "label": "4 createSubaccount (agent-run)",
+      "tx": "0x3dc504e534fa60c5e8282d243323b7a8d8eefc4f9bd8a8f9555e69f2aa073760",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x3dc504e534fa60c5e8282d243323b7a8d8eefc4f9bd8a8f9555e69f2aa073760",
+      "status": "success",
+      "gasUsed": 81203,
+      "block": 127127575
+    },
+    {
+      "label": "4 deposit 500 USDG (agent-run)",
+      "tx": "0xcab4bac03fd514b7829bc745e285a4619b4a8a73dc0daf999414f58148477f8b",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xcab4bac03fd514b7829bc745e285a4619b4a8a73dc0daf999414f58148477f8b",
+      "status": "success",
+      "gasUsed": 81141,
+      "block": 127127603
+    },
+    {
+      "label": "4 grantAgent (risk budget 1.5x one call)",
+      "tx": "0x595bb5b699f2b0b786e1191020353d947545a406ff128bddd25e29f85b699910",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x595bb5b699f2b0b786e1191020353d947545a406ff128bddd25e29f85b699910",
+      "status": "success",
+      "gasUsed": 79343,
+      "block": 127127642
+    },
+    {
+      "label": "4 agent buys 1 call (in budget)",
+      "tx": "0xa1311f851671cdc1947f07b52c9df1569c6bf13c35da9bfaf914bd71485f9b90",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xa1311f851671cdc1947f07b52c9df1569c6bf13c35da9bfaf914bd71485f9b90",
+      "status": "success",
+      "gasUsed": 806271,
+      "block": 127127664
+    },
+    {
+      "label": "4 agent buys 3 more calls (over budget)",
+      "tx": "0x707fc74a877935acd68476868ad21da82af5d7674012e633792550a0db965e51",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x707fc74a877935acd68476868ad21da82af5d7674012e633792550a0db965e51",
+      "status": "reverted",
+      "gasUsed": 758871,
+      "block": 127127686,
+      "expectedError": "AgentRiskBudgetExceeded"
+    },
+    {
+      "label": "5 withdraw past initial margin",
+      "tx": "0x82afac590a548e372261c019ec1951f2d2953e6dbb18c0c84df915410d5a2811",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x82afac590a548e372261c019ec1951f2d2953e6dbb18c0c84df915410d5a2811",
+      "status": "reverted",
+      "gasUsed": 255747,
+      "block": 127127703,
+      "expectedError": "InsufficientMargin"
+    }
+  ],
+  "userSubaccount": 4,
+  "callSeries": {
+    "id": 5,
+    "series": [
+      "0xc2DBC8d95f357C2746242a497BD3170B87F77999",
+      1790971200,
+      true,
+      255000000000000000000
+    ],
+    "premiumQuote": 1920050298371027352
+  },
+  "rfq": {
+    "makerSubaccount": 5,
+    "seriesId": 20,
+    "strike": 220000000000000000000,
+    "expiry": 1791576000,
+    "qty": 5000000000000000000,
+    "price": 15217439000000000000
+  },
+  "agent": {
+    "subaccount": 6,
+    "maxWorstLoss": 2179463980829632863,
+    "imAfterOneCall": 1452975987219755242
+  },
+  "withdraw": {
+    "subaccount": 4,
+    "cash": 2073752456942115222278,
+    "equity": 2227990533109122531286,
+    "im": 444603386978766672520,
+    "amountUsdg": 1784387146
+  },
+  "gasProof": {
+    "book": "margin(), 256 positions on one underlying (KernelGas.t.sol inputs)",
+    "txGasCap": 32000000,
+    "stylus": {
+      "address": "0xAeE1D4F45AF43a9C4d52ADa65d423b1c0e67f0fd",
+      "estimateGas": 1661950
+    },
+    "solidityReference": {
+      "address": "0xB7d9232c8ff46b4950d85ed639908c86C08750C6",
+      "error": "{'code': -32000, 'message': 'gas required exceeds allowance (32000000)'}"
+    }
+  },
+  "ethSpentByDeployer": 0.00032968232,
+  "ethSpentByThrowawayKeys": {
+    "0xB45a00D9ffF5348E6aB4Eb0D6B82B43610AE951E": 9.828e-07,
+    "0xf6D60d787dC6222fA53C644d34F578f5A439d4DC": 1.565142e-05
+  },
+  "revertReplay": {
+    "method": "eth_call of the same tx at block-1 (RH testnet has no debug_traceTransaction)",
+    "0x707fc74a877935acd68476868ad21da82af5d7674012e633792550a0db965e51": "AgentRiskBudgetExceeded(uint256,uint256,uint256)",
+    "0x82afac590a548e372261c019ec1951f2d2953e6dbb18c0c84df915410d5a2811": "InsufficientMargin(uint256,int256,uint256)"
+  }
+}
