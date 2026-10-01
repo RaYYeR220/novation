@@ -4,6 +4,7 @@ pragma solidity 0.8.30;
 import {Script} from "forge-std/Script.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {RiskParams} from "../src/core/RiskParams.sol";
 import {MarketDataHub} from "../src/core/MarketDataHub.sol";
 import {SeriesRegistry} from "../src/core/SeriesRegistry.sol";
@@ -170,7 +171,7 @@ contract Deploy is Script {
             maxOpenSeries: 24,
             minDelta: 0.05e18,
             maxDelta: 0.5e18,
-            minNewSeriesQty: uint128(minNew)
+            minNewSeriesQty: SafeCast.toUint128(minNew)
         });
     }
 
