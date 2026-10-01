@@ -16,6 +16,7 @@ import { Tooltip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/cn';
 import { fmtNumber, fmtSigned, fmtUsd } from '@/lib/format';
 import { worstCell } from '@/lib/scenario';
+import { explorerTx } from '@/lib/wallet/chains';
 import type { Refusal, Session } from '@/lib/client/types';
 import account7 from '@/fixtures/account7.json';
 import agents from '@/fixtures/agents.json';
@@ -777,7 +778,7 @@ export default function SystemPage() {
                   limit: { label: 'Budget', value: budgetRefusal!.numbers!.budget! },
                 }}
                 hint={`Keep the trade's worst case at or under ${fmtNumber(budgetRefusal!.numbers!.budget!)} USDG, or ask the owner to raise the budget.`}
-                proof={{ href: `https://sepolia.arbiscan.io/tx/${budgetRefusal!.txHash}`, label: 'View transaction' }}
+                proof={{ href: explorerTx(budgetRefusal!.txHash!), label: 'View transaction (demo hash, not on chain)' }}
               />
               <RefusalCard
                 code={marginRefusal!.code}

@@ -61,7 +61,7 @@ export function DepositDialog({ vault, open, onOpenChange, asOf, demo, balance }
         if (!o) setTouched(false);
       }}
       title={`Deposit into ${vault.symbol}`}
-      description={`Priced at the vault's live NAV: ${fmtNumber(vault.navPerShare, 6)} ${unit} per share, from the kernel's marks right now.`}
+      description={`Priced at the vault's live NAV: ${fmtNumber(vault.navPerShare, 6)} ${unit} per share, from the kernel's marks ${demo ? 'at the demo snapshot' : 'right now'}.`}
       footer={
         <>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>

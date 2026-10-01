@@ -1,4 +1,3 @@
-import account7 from '@/fixtures/account7.json';
 import chains from '@/fixtures/chains.json';
 import { MockClient } from '@/lib/client/mock';
 import type { GasRow, NovationClient, ProtocolStats, ScenarioGrid } from '@/lib/client/types';
@@ -21,6 +20,19 @@ export interface DiagramTrade {
   seller: DiagramSide;
 }
 
+/**
+ * The demo agent and its refused ticket, read the way /app/agents and /app/risk read them: the grant's
+ * budget and current use, and the refusal's worst case after the trade (the account's lossIM).
+ */
+export interface LandingAgent {
+  label: string;
+  budget: number;
+  imNow: number;
+  worstAfter: number;
+  /** What the agent tried, in words: "sell 60 NVDA 200 calls". */
+  ticket: string;
+}
+
 export interface LandingData {
   asOf: number;
   demo: boolean;
@@ -29,6 +41,7 @@ export interface LandingData {
   gas: GasRow[];
   protocol: ProtocolStats;
   trade: DiagramTrade;
+  agent: LandingAgent;
 }
 
 const BUYER = 7;
@@ -50,7 +63,7 @@ export async function landingData(): Promise<LandingData> {
   if (!series) throw new Error(`series ${SERIES_ID} missing from fixtures`);
   const premium = series.ask * QTY;
 
-  const [asOf, regular, weekend, gas, protocol, buyer, seller, buyerGrid, sellerGrid, buyQuote, sellQuote] = await Promise.all([
+  const [asOf, regular, weekend, gas, protocol, buyer, seller, buyerGrid, sellerGrid, buyQuote, sellQuote, grants, feed] = await Promise.all([
     c.asOf(),
     c.scenarioGrid(BUYER, 'REGULAR'),
     c.scenarioGrid(BUYER, 'WEEKEND'),
@@ -62,13 +75,21 @@ export async function landingData(): Promise<LandingData> {
     c.scenarioGrid(SELLER),
     c.whatIf(BUYER, SERIES_ID, QTY, premium),
     c.whatIf(SELLER, SERIES_ID, -QTY, premium),
+    c.agents(BUYER),
+    c.refusalsFeed(),
   ]);
+
+  const grant = grants.find((g) => g.lastRefusal?.code === 'AgentRiskBudgetExceeded');
+  const refused = feed.find((r) => r.code === 'AgentRiskBudgetExceeded' && r.account === BUYER && r.agent === grant?.agent);
+  const worstAfter = refused?.numbers?.worstLoss;
+  if (!grant || !refused?.detail || worstAfter === undefined) throw new Error('the over-budget agent refusal is missing from the demo data');
+  const action = refused.detail.split(' through ')[0]!;
 
   return {
     asOf,
     demo: c instanceof MockClient,
     grids: { REGULAR: regular, WEEKEND: weekend },
-    ims: { REGULAR: account7.summary.im_regular, WEEKEND: account7.summary.im_weekend },
+    ims: { REGULAR: regular.im, WEEKEND: weekend.im },
     gas,
     protocol,
     trade: {
@@ -91,6 +112,13 @@ export async function landingData(): Promise<LandingData> {
         imAfter: sellQuote.after.im,
         equity: sellQuote.after.equity,
       },
+    },
+    agent: {
+      label: grant.label,
+      budget: grant.maxWorstLoss,
+      imNow: grant.used,
+      worstAfter,
+      ticket: action.charAt(0).toLowerCase() + action.slice(1),
     },
   };
 }

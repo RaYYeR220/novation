@@ -132,3 +132,12 @@ test('/app redirects to trade and every section link resolves', async ({ page })
     await expect(page.getByRole('heading', { level: 1, name })).toBeVisible();
   }
 });
+
+test('every /app page says it runs on demo data', async ({ page }) => {
+  for (const path of ['trade', 'earn', 'portfolio', 'risk', 'agents']) {
+    await page.goto(`/app/${path}`);
+    const note = page.getByRole('note').filter({ hasText: 'Demo data' });
+    await expect(note).toContainText('Demo data: computed with the Novation kernel reference.');
+    await expect(note).toContainText('Nothing is sent to a chain.');
+  }
+});

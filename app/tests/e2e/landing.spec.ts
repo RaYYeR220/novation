@@ -80,6 +80,25 @@ test.describe('landing', () => {
     expect(errors).toEqual([]);
   });
 
+  test('demo figures match the app pages: account 7 margin, the agent refusal, the protocol strip', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('/');
+    // the hero crown: the same 596.51 -> 1,373.29 that /app/portfolio shows
+    const crown = page.locator('figure[data-variant="hero"]');
+    await expect(crown.getByRole('table')).toContainText('Regular session. Initial margin 596.51 USDG');
+    const breaks = page.locator('section[aria-labelledby="when-it-breaks"]');
+    await expect(breaks).toContainText('596.51 USDG of initial margin on a weekday and 1,373.29 over the weekend');
+    // the over-budget agent: the worst case after the ticket against the budget, as /app/risk and /app/agents show it
+    await expect(breaks).toContainText('the hedge-bot agent tries to sell 60 NVDA 200 calls for account 7');
+    await expect(breaks).toContainText('comes to 1,762.72 USDG, past the agent’s 1,500.00 USDG budget');
+    const ways = page.locator('section[aria-labelledby="ways-in"]');
+    await expect(ways).toContainText('works under a 1,500 USDG budget, and account 7 needs 596.51 today');
+    const strip = page.locator('section[aria-labelledby="protocol"]');
+    await expect(strip).toContainText('$1,440,901');
+    await expect(strip).toContainText('$1,344,232');
+    await expect(strip).toContainText('$5,662');
+  });
+
   test('the primary CTA is reachable by keyboard and leads to the app', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto('/');

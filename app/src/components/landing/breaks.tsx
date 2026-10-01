@@ -3,14 +3,15 @@ import { WaterfallDiagram } from '@/components/charts/WaterfallDiagram';
 import { Lamp } from '@/components/ui/lamp';
 import { cn } from '@/lib/cn';
 import { fmtNumber } from '@/lib/format';
+import type { LandingAgent } from './data';
 import { Fig, Ref, SectionHead, TEXT_LINK, WRAP } from './parts';
 import { PROOF_TX, txUrl } from './site';
 
 export interface BreaksProps {
   /** Demo account 7's initial margin in a regular session and over a weekend. */
   ims: { REGULAR: number; WEEKEND: number };
-  /** The refused agent ticket: the account's initial margin after it, against the agent's budget. */
-  agent: { label: string; imAfter: number; budget: number };
+  /** The refused agent ticket: its worst case after the trade (the account's initial margin), against the agent's budget. */
+  agent: Pick<LandingAgent, 'label' | 'ticket' | 'worstAfter' | 'budget'>;
 }
 
 interface Refusal {
@@ -47,9 +48,9 @@ export function Breaks({ ims, agent }: BreaksProps) {
       name: 'Over-budget agent',
       body: (
         <>
-          The {agent.label} agent tried to sell 60 NVDA 200 calls for account 7. After the trade the account would need{' '}
-          <Fig id="demo">{fmtNumber(agent.imAfter)}</Fig> USDG of initial margin, past the agent’s <Fig id="demo">{fmtNumber(agent.budget)}</Fig> budget.
-          It reverted with AgentRiskBudgetExceeded.
+          In the demo, the {agent.label} agent tries to {agent.ticket} for account 7. Its worst case after the trade, the account’s initial
+          margin, comes to <Fig id="demo">{fmtNumber(agent.worstAfter)}</Fig> USDG, past the agent’s <Fig id="demo">{fmtNumber(agent.budget)}</Fig>{' '}
+          USDG budget, so the trade reverts with AgentRiskBudgetExceeded.
           <Ref id="demo" />
         </>
       ),
