@@ -348,7 +348,7 @@ function Drawing({ g, props, className }: { g: Geo; props: NovationDiagramProps;
 const STEPS = [
   {
     title: 'Stress-test the whole book',
-    body: 'Each side’s options and collateral are re-priced across 13 price shocks and 3 volatility shocks. The worst of the 39 sets its initial margin.',
+    body: 'Each side’s options and collateral are re-priced across 13 price shocks and 3 volatility shocks. The worst of the 39, with a floor for short options, sets its initial margin.',
   },
   {
     title: 'Refuse before risk',

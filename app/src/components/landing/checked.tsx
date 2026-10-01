@@ -12,18 +12,18 @@ interface Check {
 const CHECKS: Check[] = [
   {
     name: 'Immutable core',
-    body: 'The clearinghouse, the kernel and the list of venues cannot be upgraded. There is no proxy and no admin path to positions or cash; a guardian can only pause new openings.',
+    body: 'The clearinghouse and the kernel cannot be upgraded, and the list of venues is fixed once setup ends. There is no proxy and no admin path to positions or cash; a guardian can only pause new openings.',
     links: [{ label: 'Read the contracts', href: CHECK_LINKS.immutableCore }],
   },
   {
     name: 'Bounded parameters behind a timelock',
-    body: 'Risk parameters change only through a 24-hour timelock, and only inside minimums and maximums written into the contracts.',
+    body: 'Risk parameters change only through a timelock, and only inside minimums and maximums written into the contracts.',
     links: [{ label: 'Read the parameter bounds', href: CHECK_LINKS.timelock }],
   },
   {
-    name: 'Invariant test suite',
-    body: 'Fuzzed handlers deposit, trade, settle, liquidate and jump across sessions while the suite checks that the clearinghouse always holds every cash balance and every expiry pool.',
-    links: [{ label: 'Read the invariants', href: CHECK_LINKS.invariants }],
+    name: 'Solvency invariants under test',
+    body: 'Unit, fuzz and mutation tests check after every settlement step that the clearinghouse holds every cash balance and every expiry pool. A stateful invariant suite is in progress.',
+    links: [{ label: 'Read the tests', href: CHECK_LINKS.invariants }],
   },
   {
     name: 'Bit-exact kernel parity',

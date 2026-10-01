@@ -6,7 +6,7 @@ export const TX_GAS_CAP = 32_000_000;
 /** A trade checks margin on both sides, so it runs the kernel twice. */
 export const CHECKS_PER_TRADE = 2;
 
-/** "47.4M", "2.81M", "131k": three significant figures. */
+/** "46.5M", "2.65M", "110k": three significant figures. */
 export function fmtGas(v: number): string {
   const a = Math.abs(v);
   if (a >= 1e6) return `${Number((v / 1e6).toPrecision(3))}M`;

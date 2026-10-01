@@ -107,8 +107,8 @@ export function WaterfallDiagram({ className, idPrefix = 'waterfall' }: { classN
       title: 'First, the defaulter’s own collateral',
       body: (
         <>
-          Sold by Dutch auction: the discount rises from 2% to 12% over 30 minutes. Proceeds repay the expiry pool first. Auctions wait out
-          weekends and halts, so nothing is sold without a live price.
+          Sold by Dutch auction: by default the discount rises from 2% to 12% over 30 minutes. Proceeds repay the expiry pool first. No bids are
+          taken on weekends or while the underlying is halted, so nothing sells without a live price.
         </>
       ),
       graphic: <Basin id={`${uid}-b1`} left={8} inX={S0.x} inW={S0.w} outX={S1.x} outW={S1.w} />,
@@ -116,13 +116,13 @@ export function WaterfallDiagram({ className, idPrefix = 'waterfall' }: { classN
     },
     {
       title: 'Then the insurance fund',
-      body: 'Filled by a share of every fee and all liquidation penalties. At settlement it bridges the shortfall at once and is paid back from the auction.',
+      body: 'Filled by a share of every trading fee and by liquidation penalties. At settlement it bridges the shortfall as far as its balance goes, and the sale repays it after the pool.',
       graphic: <Basin id={`${uid}-b2`} left={48} inX={S1.x} inW={S1.w} outX={S2.x} outW={S2.w} />,
       out: S2,
     },
     {
       title: 'Last, every cash balance, pro rata',
-      body: 'Only if the collateral and the fund run out: one cash index scales every balance down by the same fraction, and the chain emits LossSocialized.',
+      body: 'Only if the collateral and the fund run out: one cash index scales every account’s USDG cash down by the same fraction, and the chain emits LossSocialized.',
       graphic: <Spread inX={S2.x} inW={S2.w} />,
       out: null,
     },
@@ -149,7 +149,7 @@ export function WaterfallDiagram({ className, idPrefix = 'waterfall' }: { classN
       </ol>
       <figcaption className="mt-s2 max-w-[56ch] text-t13 text-navy-200">
         The orange stream is the unpaid loss. Each basin keeps what it can and spills the rest to the next. The order is fixed in the contracts,
-        and every step is an on-chain transaction anyone can trigger.
+        and no step needs an admin to run it.
       </figcaption>
     </figure>
   );

@@ -23,7 +23,7 @@ describe('landing data', () => {
     expect(d.ims.REGULAR).toBeCloseTo(656.25, 2);
     expect(d.ims.WEEKEND).toBeCloseTo(1350.99, 2);
     expect(d.grids.WEEKEND.session).toBe('WEEKEND');
-    expect(d.gas.find((r) => r.positions === 256)?.solidityOptimized).toBe(23_698_810);
+    expect(d.gas.find((r) => r.positions === 256)?.solidityOptimized).toBe(23_269_339);
   });
 
   it('footnotes are numbered in list order and each has a public link or is the demo note', () => {

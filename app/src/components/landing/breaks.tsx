@@ -9,8 +9,8 @@ import { PROOF_TX, txUrl } from './site';
 export interface BreaksProps {
   /** Demo account 7's initial margin in a regular session and over a weekend. */
   ims: { REGULAR: number; WEEKEND: number };
-  /** The refused agent ticket. */
-  agent: { label: string; worstLoss: number; budget: number };
+  /** The refused agent ticket: the account's initial margin after it, against the agent's budget. */
+  agent: { label: string; imAfter: number; budget: number };
 }
 
 interface Refusal {
@@ -25,7 +25,7 @@ export function Breaks({ ims, agent }: BreaksProps) {
       name: 'Weekend widening',
       body: (
         <>
-          From Friday 20:00 ET to Sunday 20:00 ET every shock is 1.75× wider. The same demo book needs{' '}
+          From Friday 20:00 ET to Sunday 20:00 ET the default shocks are 1.75× wider. The same demo book needs{' '}
           <Fig id="demo">{fmtNumber(ims.REGULAR)}</Fig> USDG of initial margin on a weekday and <Fig id="demo">{fmtNumber(ims.WEEKEND)}</Fig> over
           the weekend, so a trade that clears on Friday can be refused on Saturday.
           <Ref id="demo" />
@@ -40,16 +40,16 @@ export function Breaks({ ims, agent }: BreaksProps) {
     },
     {
       name: 'Stale-feed halt',
-      body: 'A price older than its session’s limit halts the underlying the same way, and auctions on it wait for a fresh round.',
+      body: 'A price older than its session’s limit halts the underlying the same way, and auctions on it take no bids until a fresh round.',
       proof: PROOF_TX.staleFeed,
     },
     {
       name: 'Over-budget agent',
       body: (
         <>
-          {agent.label} tried to sell 60 NVDA 200 calls for account 7. The worst case after the trade was{' '}
-          <Fig id="demo">{fmtNumber(agent.worstLoss)}</Fig> USDG against a <Fig id="demo">{fmtNumber(agent.budget)}</Fig> budget. It reverted
-          with AgentRiskBudgetExceeded.
+          The {agent.label} agent tried to sell 60 NVDA 200 calls for account 7. After the trade the account would need{' '}
+          <Fig id="demo">{fmtNumber(agent.imAfter)}</Fig> USDG of initial margin, past the agent’s <Fig id="demo">{fmtNumber(agent.budget)}</Fig> budget.
+          It reverted with AgentRiskBudgetExceeded.
           <Ref id="demo" />
         </>
       ),

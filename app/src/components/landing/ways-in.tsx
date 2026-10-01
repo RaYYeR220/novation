@@ -6,8 +6,8 @@ import { AgentGlyph, RfqGlyph, VaultGlyph } from './glyphs';
 import { Fig, Ref, SectionHead, TEXT_LINK, WRAP } from './parts';
 
 export interface WaysInProps {
-  /** The demo agent's budget and what it has used, in USDG. */
-  agent: { label: string; budget: number; used: number };
+  /** The demo agent's budget and the account's initial margin today, in USDG. */
+  agent: { label: string; budget: number; im: number };
 }
 
 interface Way {
@@ -47,13 +47,13 @@ export function WaysIn({ agent }: WaysInProps) {
       line: 'A risk budget, not a spending limit.',
       body: (
         <>
-          Grant an agent a maximum scenario loss on your account. The demo’s {agent.label} has{' '}
-          <Fig id="demo">{fmtNumber(agent.used, 0)}</Fig> of a <Fig id="demo">{fmtNumber(agent.budget, 0)}</Fig> USDG budget in use; a ticket
-          that would push the worst case past it reverts on-chain.
+          Grant an agent a ceiling on your account’s initial margin. The demo’s {agent.label} works under a{' '}
+          <Fig id="demo">{fmtNumber(agent.budget, 0)}</Fig> USDG budget, and account 7 needs <Fig id="demo">{fmtNumber(agent.im)}</Fig> today. A
+          ticket that would push the margin past the budget reverts on-chain.
           <Ref id="demo" />
         </>
       ),
-      glyph: <AgentGlyph used={agent.used / agent.budget} />,
+      glyph: <AgentGlyph used={agent.im / agent.budget} />,
       href: '/app/agents',
       link: 'Set an agent’s budget',
     },

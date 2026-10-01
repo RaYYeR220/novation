@@ -12,19 +12,19 @@ const STATEMENTS: Statement[] = [
     claim: (
       <>
         <Fig id="tokens">195</Fig> stock tokens are live on Robinhood Chain.
-        <Ref id="tokens" /> None of them can be hedged with an option on-chain.
+        <Ref id="tokens" /> There is no options market to hedge them with.
       </>
     ),
-    detail: 'A holder can sell the token or keep it. There is no on-chain put to cap the downside and no call to write against it for income.',
+    detail: 'Without options, a holder can sell the token or keep it. A put caps the downside at a known price, for a known premium.',
   },
   {
     claim: (
       <>
-        Stock tokens are about <Fig id="tvl">$125M</Fig> of the chain’s <Fig id="tvl">$1.0B</Fig> in value locked.
+        Tokenized assets hold about <Fig id="tvl">$125M</Fig> of the chain’s <Fig id="tvl">$1.0B</Fig> in value locked.
         <Ref id="tvl" />
       </>
     ),
-    detail: 'Little of it does any work beyond being held or swapped: there is nowhere on the chain to write an option against a token, or to post it as margin for one.',
+    detail: 'Held tokens can also earn. A covered call collects premium on a token its holder means to keep, with the token itself as the collateral.',
   },
   {
     claim: (
@@ -35,8 +35,8 @@ const STATEMENTS: Statement[] = [
     ),
     detail: (
       <>
-        The Chainlink equity feeds publish nothing from Friday afternoon until{' '}
-        <Fig id="feeds">Sunday 20:00 ET</Fig>. Any margin system on this chain has to price that gap before it opens, not after.
+        In 13 weeks of round history, the Chainlink equity feeds published no round on a Saturday, or on a Sunday before{' '}
+        <Fig id="feeds">20:00 ET</Fig>. A margin system has to price that gap before it starts, not after it ends.
       </>
     ),
   },
@@ -49,7 +49,7 @@ export function Problem() {
         id="problem"
         title={
           <>
-            The tokens are <span className="whitespace-nowrap">on-chain</span>. The hedges are not.
+            The tokens are <span className="whitespace-nowrap">on-chain</span>. The hedges belong there too.
           </>
         }
       />

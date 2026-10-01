@@ -28,9 +28,9 @@ function LineKey({ color }: { color: string }) {
 }
 
 /**
- * Gas for one portfolio-margin check against the number of positions in the book (log x), measured
- * for the optimized Solidity kernel and the Stylus kernel. The band above 32M does not fit in one
- * transaction; the trade marker doubles both lines because a trade checks both sides.
+ * Execution gas of one portfolio-margin check against the number of positions in the book (log x),
+ * for a hand-optimized Solidity version and the Stylus kernel. The band above 32M does not fit in one
+ * transaction; the trade marker doubles both lines because a trade runs at least two checks.
  */
 export function GasChart({ rows, tradeAt = 256, className, source }: GasChartProps) {
   const [ref, width] = useWidth<HTMLDivElement>(1120);
@@ -94,7 +94,7 @@ export function GasChart({ rows, tradeAt = 256, className, source }: GasChartPro
       <div className="flex flex-wrap items-center gap-x-s6 gap-y-s2 text-t13 text-navy-200">
         <span className="inline-flex items-center gap-s2">
           <LineKey color={SOL} />
-          Solidity, optimized
+          Solidity, hand-optimized
         </span>
         <span className="inline-flex items-center gap-s2">
           <LineKey color={STY} />
@@ -112,7 +112,7 @@ export function GasChart({ rows, tradeAt = 256, className, source }: GasChartPro
         tabIndex={0}
         role="group"
         aria-roledescription="chart"
-        aria-label={`Gas per margin check against positions in the book. Arrow keys step through the ${sorted.length} measured sizes.`}
+        aria-label={`Execution gas per margin check against positions in the book. Arrow keys step through the ${sorted.length} measured sizes.`}
         aria-describedby={`${ids}-sum`}
         onPointerMove={onMove}
         onPointerLeave={() => setActive(null)}
@@ -145,7 +145,7 @@ export function GasChart({ rows, tradeAt = 256, className, source }: GasChartPro
               Positions in the book, log scale
             </text>
             <text x={-M.left + 4} y={-18} className="fill-navy-200 text-[12px]">
-              Gas per margin check
+              Execution gas per margin check
             </text>
 
             {/* the cap */}
@@ -252,12 +252,12 @@ export function GasChart({ rows, tradeAt = 256, className, source }: GasChartPro
       {/* a table never shrinks to the 1px box, so the clip lives on a wrapper */}
       <div className="sr-only">
         <table>
-          <caption>Gas per margin check, measured on Robinhood Chain testnet</caption>
+          <caption>Execution gas of one margin check, measured on Robinhood Chain testnet</caption>
           <thead>
             <tr>
               <th scope="col">Positions</th>
-              <th scope="col">Solidity, optimized</th>
-              <th scope="col">Stylus</th>
+              <th scope="col">Solidity, hand-optimized</th>
+              <th scope="col">Stylus kernel</th>
             </tr>
           </thead>
           <tbody>

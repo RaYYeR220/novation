@@ -80,7 +80,7 @@ export function RfqGlyph({ className }: { className?: string }) {
   );
 }
 
-/** Agents: a node inside its risk budget, drawn as a ring with the used share lit (1,180 of 1,500 USDG). */
+/** Agents: a node inside its risk budget, drawn as a ring with the share in use lit (656.25 of 1,500 USDG). */
 export function AgentGlyph({ used, className }: { used: number; className?: string }) {
   const c = 32;
   const r = 22;

@@ -1,51 +1,36 @@
 {
- "source": "spikes/stylus-bs-gas/RESULTS.md (RH testnet, L2 gas = estimate - L1 component)",
- "capNote": "Solidity hits the 32M per-tx gas cap at about 343-347 positions; Stylus does N=352 in 1.92M gas.",
+ "source": "docs/gas.md (RH testnet, execution gas of one margin() call, gasleft() probe)",
+ "capNote": "Hand-optimized Solidity reaches the 32M per-tx gas limit at about 345 positions for one evaluation.",
  "rows": [
   {
    "positions": 1,
-   "solidityOptimized": 131615,
-   "stylus": 52363
-  },
-  {
-   "positions": 4,
-   "solidityOptimized": 410442,
-   "stylus": 68509
+   "solidityOptimized": 109700,
+   "stylus": 42597
   },
   {
    "positions": 8,
-   "solidityOptimized": 780061,
-   "stylus": 90179
-  },
-  {
-   "positions": 16,
-   "solidityOptimized": 1520541,
-   "stylus": 131738
+   "solidityOptimized": 745420,
+   "stylus": 76352
   },
   {
    "positions": 32,
-   "solidityOptimized": 2995000,
-   "stylus": 215756
+   "solidityOptimized": 2922648,
+   "stylus": 199415
   },
   {
    "positions": 64,
-   "solidityOptimized": 5952285,
-   "stylus": 386324
+   "solidityOptimized": 5828423,
+   "stylus": 351072
   },
   {
    "positions": 128,
-   "solidityOptimized": 11872957,
-   "stylus": 726891
+   "solidityOptimized": 11646851,
+   "stylus": 685075
   },
   {
    "positions": 256,
-   "solidityOptimized": 23698810,
-   "stylus": 1406348
-  },
-  {
-   "positions": 336,
-   "solidityOptimized": 31083410,
-   "stylus": 1831848
+   "solidityOptimized": 23269339,
+   "stylus": 1323108
   }
  ]
 }

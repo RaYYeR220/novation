@@ -41,8 +41,11 @@ export const testnetAddress = (a: string) => `${EXPLORER.testnet}/address/${a}`;
 export const CONTRACTS = {
   kernel: '0x6d07e246eb757A1F97E3cdB7d1881ee5De27ceaA',
   kernelReference: '0xB7d9232c8ff46b4950d85ed639908c86C08750C6',
+  /** The hand-optimized Solidity baseline the gas chart compares the kernel with. */
   benchSolidity: '0x9F5a98A1E678b124998328cfa0056c90720ceCEe',
-  benchStylus: '0x231f4394176362ac7321cdd3b90b25da228ef48c',
 } as const;
+
+/** The repository's gas page, once the repository URL is set. */
+export const GAS_DOC_URL = LINKS.github ? `${LINKS.github.replace(/\/$/, '')}/blob/main/docs/gas.md` : '';
 
 export const shortAddress = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;

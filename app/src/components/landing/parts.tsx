@@ -22,7 +22,7 @@ export function PageGrid({ className }: { className?: string }) {
 export function Ref({ id }: { id: SourceId }) {
   const n = sourceNumber(id);
   return (
-    <sup className="ml-0.5 align-super text-[0.62em] font-medium leading-none tracking-normal">
+    <sup className="ml-0.5 text-[0.62em] font-medium leading-none tracking-normal">
       <a
         href={`#source-${n}`}
         aria-label={`Source ${n}`}

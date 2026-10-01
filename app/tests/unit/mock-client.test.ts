@@ -21,7 +21,7 @@ describe('MockClient', () => {
     expect((await c.refusalsFeed()).length).toBeGreaterThan(0);
     expect(await c.asOf()).toBe(1790697600);
     const gas = await c.gasTable();
-    expect(gas.find((r) => r.positions === 64)?.stylus).toBe(386324);
+    expect(gas.find((r) => r.positions === 64)?.stylus).toBe(351072);
   });
 
   it('account 7 IM equals the fixture and the grid agrees', async () => {

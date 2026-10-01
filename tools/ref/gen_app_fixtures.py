@@ -10,7 +10,7 @@ Inputs:
   spots   latest Chainlink RH mainnet rounds (spikes/rh-data/RESULTS.md section 3,
           rounds_*.json at the last round): NVDA 225.57, TSLA 380.245, SPY 768.43, AAPL 336.31
   vols    NVDA 0.52, TSLA 0.61, SPY 0.16, AAPL 0.27
-  gas     spikes/stylus-bs-gas/RESULTS.md (Stylus fast + 32 KB stack vs Solidity via-IR)
+  gas     docs/gas.md headline comparison (Stylus risk kernel vs hand-optimized Solidity)
   agent / protocol / vault aggregates: design/variants/_data/book.json (demo book)
 Symbols are used as the underlying identifier everywhere in the fixtures.
 """
@@ -244,14 +244,16 @@ def build_mm(ids):
 
 # ---- static aggregates -----------------------------------------------------
 def gas_table():
+    # docs/gas.md, "Headline comparison": execution gas of one margin() call, measured with a
+    # gasleft() probe inside eth_call on RH testnet. Stylus = the Novation risk kernel; Solidity =
+    # the hand-optimized baseline (BSMarginSol), same 39-scenario grid and integer algorithms.
     rows = [
-        (1, 131615, 52363), (4, 410442, 68509), (8, 780061, 90179), (16, 1520541, 131738),
-        (32, 2995000, 215756), (64, 5952285, 386324), (128, 11872957, 726891),
-        (256, 23698810, 1406348), (336, 31083410, 1831848),
+        (1, 109700, 42597), (8, 745420, 76352), (32, 2922648, 199415), (64, 5828423, 351072),
+        (128, 11646851, 685075), (256, 23269339, 1323108),
     ]
     return {
-        "source": "spikes/stylus-bs-gas/RESULTS.md (RH testnet, L2 gas = estimate - L1 component)",
-        "capNote": "Solidity hits the 32M per-tx gas cap at about 343-347 positions; Stylus does N=352 in 1.92M gas.",
+        "source": "docs/gas.md (RH testnet, execution gas of one margin() call, gasleft() probe)",
+        "capNote": "Hand-optimized Solidity reaches the 32M per-tx gas limit at about 345 positions for one evaluation.",
         "rows": [{"positions": n, "solidityOptimized": s, "stylus": y} for n, s, y in rows],
     }
 

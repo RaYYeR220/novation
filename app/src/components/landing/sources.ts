@@ -1,4 +1,4 @@
-import { CONTRACTS, testnetAddress } from './site';
+import { CONTRACTS, GAS_DOC_URL, shortAddress, testnetAddress } from './site';
 
 export interface SourceLink {
   label: string;
@@ -26,12 +26,12 @@ export const SOURCES: readonly Source[] = [
   },
   {
     id: 'tvl',
-    text: 'Robinhood Chain TVL about $1.0B on Sep 24, 2026, of which tokenized equities were about $125M.',
+    text: 'Robinhood Chain value locked about $1.00B on Sep 24, 2026 (DefiLlama). Tokenized assets, stock tokens among them, about $124.8M on DefiLlama’s broad count; about $32M on the narrower measure the same article cites.',
     links: [{ label: 'cryptoticker.io', href: 'https://cryptoticker.io/en/robinhood-chain-memecoins-explained/' }],
   },
   {
     id: 'feeds',
-    text: 'Chainlink equity feeds on Robinhood Chain follow 24/5 US market hours and have no heartbeat off-hours. In 13 weeks of on-chain round history for NVDA, TSLA, AAPL and SPY there was no round between Friday afternoon and the forced round at Sunday 20:00 ET.',
+    text: 'Chainlink equity feeds on Robinhood Chain follow 24/5 US market hours and have no heartbeat off-hours. In 13 weeks of on-chain round history for NVDA, TSLA, AAPL and SPY there was no round on a Saturday or on a Sunday before 20:00 ET, and rounds after the Friday 16:00 ET close were rare.',
     links: [
       { label: 'data.chain.link', href: 'https://data.chain.link' },
       { label: 'docs.robinhood.com/chain/oracles-and-price-feeds', href: 'https://docs.robinhood.com/chain/oracles-and-price-feeds' },
@@ -39,19 +39,21 @@ export const SOURCES: readonly Source[] = [
   },
   {
     id: 'bench',
-    text: 'Black-Scholes margin over 39 scenarios, eth_estimateGas on Robinhood Chain testnet (chain 46630), L2 gas. Both contracts return identical integers on 659 on-chain cases. The per-transaction gas cap of 32,000,000 is ArbGasInfo.getMaxTxGasLimit() on the same chain. Marginal cost from 1 to 128 positions: 92,452 gas per position in Solidity, 5,311 in Stylus.',
+    text: 'Execution gas of one margin() call on Robinhood Chain testnet (chain 46630), measured with a gasleft() probe inside eth_call. Stylus: the Novation risk kernel, on a book spread over 8 underlyings. Solidity: a hand-optimized version of the same 39-scenario grid and integer math, on a one-underlying book, without the short-option minimum the kernel adds. Marginal cost about 5,000 gas per position on Stylus and 92,452 in Solidity. The 32,000,000 per-transaction limit is ArbGasInfo.getMaxTxGasLimit() on the same chain.',
     links: [
-      { label: `Solidity ${CONTRACTS.benchSolidity.slice(0, 6)}…`, href: testnetAddress(CONTRACTS.benchSolidity) },
-      { label: `Stylus ${CONTRACTS.benchStylus.slice(0, 6)}…`, href: testnetAddress(CONTRACTS.benchStylus) },
-    ],
+      { label: `Kernel ${shortAddress(CONTRACTS.kernel)}`, href: testnetAddress(CONTRACTS.kernel) },
+      { label: `Solidity baseline ${shortAddress(CONTRACTS.benchSolidity)}`, href: testnetAddress(CONTRACTS.benchSolidity) },
+      { label: 'docs/gas.md', href: GAS_DOC_URL },
+    ].filter((l) => l.href),
   },
   {
     id: 'kernel',
-    text: 'The Novation risk kernel (Stylus) and its plain Solidity reference, deployed on Robinhood Chain testnet. Byte-identical return data at 4, 8 and 32 positions; gas from eth_estimateGas on margin(). The reference fails above the 50M call allowance at 64 positions and more.',
+    text: 'The Novation risk kernel (Stylus) and KernelReference, its plain Solidity twin, deployed on Robinhood Chain testnet. Byte-identical return data on margin() books of 4, 8 and 32 positions. Gas from eth_estimateGas on margin() on Sep 30, 2026, one-underlying books, including intrinsic, calldata and L1 costs. At 64 positions and more the reference needs more than the RPC’s 50M call allowance.',
     links: [
-      { label: `Kernel ${CONTRACTS.kernel.slice(0, 6)}…`, href: testnetAddress(CONTRACTS.kernel) },
-      { label: `Reference ${CONTRACTS.kernelReference.slice(0, 6)}…`, href: testnetAddress(CONTRACTS.kernelReference) },
-    ],
+      { label: `Kernel ${shortAddress(CONTRACTS.kernel)}`, href: testnetAddress(CONTRACTS.kernel) },
+      { label: `Reference ${shortAddress(CONTRACTS.kernelReference)}`, href: testnetAddress(CONTRACTS.kernelReference) },
+      { label: 'docs/gas.md', href: GAS_DOC_URL },
+    ].filter((l) => l.href),
   },
   {
     id: 'demo',
