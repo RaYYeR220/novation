@@ -1,0 +1,215 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" width="1200" height="800" role="img" aria-labelledby="t d">
+  <title id="t">Novation architecture</title>
+  <desc id="d">Venues send trades to the Clearinghouse. The Clearinghouse prices every account through the Stylus risk kernel and reads prices, sessions and volatility from the MarketDataHub, which reads Chainlink equity feeds and stock-token state. SeriesRegistry, RiskParams and the InsuranceFund sit beside the Clearinghouse. The AuctionHouse and the off-chain services are in development.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8DA2C0"/>
+    </marker>
+    <marker id="arrowDim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7C8BA3"/>
+    </marker>
+    <style>
+      text { font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; fill: #E6EDF7; }
+      .h1 { font-size: 22px; font-weight: 700; }
+      .sub { font-size: 13px; fill: #9FB0C8; }
+      .name { font-size: 15px; font-weight: 700; }
+      .big { font-size: 18px; font-weight: 700; }
+      .small { font-size: 12px; fill: #B4C2D6; }
+      .tiny { font-size: 11px; fill: #9FB0C8; }
+      .label { font-size: 11.5px; fill: #AFC0D8; }
+      .band { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; fill: #7C8BA3; }
+      .edge { stroke: #8DA2C0; stroke-width: 1.6; fill: none; }
+      .edgeDim { stroke: #7C8BA3; stroke-width: 1.6; fill: none; stroke-dasharray: 6 5; }
+      .planned { stroke: #94A3B8; stroke-width: 1.6; stroke-dasharray: 7 5; fill: #0E1628; }
+      .external { stroke: #64748B; stroke-width: 1.2; fill: none; }
+    </style>
+  </defs>
+
+  <!-- background -->
+  <rect x="0" y="0" width="1200" height="800" rx="18" fill="#0B1220"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="798.5" rx="18" fill="none" stroke="#1F2A44" stroke-width="1.5"/>
+
+  <!-- title -->
+  <text x="40" y="50" class="h1">Novation</text>
+  <text x="40" y="73" class="sub">Portfolio-margined options on Robinhood Chain stock tokens</text>
+
+  <!-- legend -->
+  <g transform="translate(790,30)">
+    <rect x="0" y="0" width="370" height="64" rx="10" fill="#0F1830" stroke="#1F2A44"/>
+    <line x1="14" y1="20" x2="44" y2="20" stroke="#60A5FA" stroke-width="2"/>
+    <text x="52" y="24" class="tiny">implemented and tested</text>
+    <line x1="194" y1="20" x2="224" y2="20" stroke="#94A3B8" stroke-width="2" stroke-dasharray="6 4"/>
+    <text x="232" y="24" class="tiny">in development</text>
+    <circle cx="29" cy="45" r="5" fill="#34D399"/>
+    <text x="52" y="49" class="tiny">deployed on RH testnet</text>
+    <rect x="194" y="37" width="30" height="16" rx="4" class="external"/>
+    <text x="232" y="49" class="tiny">external dependency</text>
+  </g>
+
+  <!-- actors -->
+  <g>
+    <rect x="285" y="104" width="160" height="30" rx="15" class="external"/>
+    <text x="365" y="124" class="small" text-anchor="middle">Traders and LPs</text>
+    <rect x="520" y="104" width="160" height="30" rx="15" class="external"/>
+    <text x="600" y="124" class="small" text-anchor="middle">Market makers</text>
+    <rect x="745" y="104" width="190" height="30" rx="15" class="external"/>
+    <text x="840" y="124" class="small" text-anchor="middle">AI agents (risk budget)</text>
+  </g>
+  <path class="edge" d="M365,134 L365,166" marker-end="url(#arrow)"/>
+  <path class="edge" d="M600,134 L600,166" marker-end="url(#arrow)"/>
+  <path class="edge" d="M840,134 L840,166" marker-end="url(#arrow)"/>
+
+  <!-- venues band -->
+  <rect x="30" y="160" width="1140" height="86" rx="12" fill="#0F1830" stroke="#1A2540"/>
+  <text x="48" y="186" class="band">VENUES</text>
+  <text x="48" y="204" class="tiny">whitelist fixed</text>
+  <text x="48" y="219" class="tiny">at setup</text>
+  <g>
+    <rect x="260" y="172" width="210" height="62" rx="10" fill="#151C33" stroke="#A78BFA" stroke-width="1.6"/>
+    <text x="276" y="198" class="name">RfqVenue</text>
+    <text x="276" y="219" class="small">EIP-712 signed maker quotes</text>
+  </g>
+  <g>
+    <rect x="495" y="172" width="210" height="62" rx="10" fill="#151C33" stroke="#A78BFA" stroke-width="1.6"/>
+    <text x="511" y="198" class="name">CoveredCallVault</text>
+    <text x="511" y="219" class="small">ERC-4626, sells OTM calls</text>
+  </g>
+  <g>
+    <rect x="730" y="172" width="210" height="62" rx="10" fill="#151C33" stroke="#A78BFA" stroke-width="1.6"/>
+    <text x="746" y="198" class="name">PutWriteVault</text>
+    <text x="746" y="219" class="small">ERC-4626, cash-secured puts</text>
+  </g>
+
+  <!-- venues to clearinghouse -->
+  <path class="edge" d="M365,234 L365,296" marker-end="url(#arrow)"/>
+  <path class="edge" d="M600,234 L600,296" marker-end="url(#arrow)"/>
+  <path class="edge" d="M835,234 L835,296" marker-end="url(#arrow)"/>
+  <text x="610" y="270" class="label">trade(): both sides margined after the move</text>
+
+  <!-- clearinghouse -->
+  <rect x="260" y="300" width="680" height="160" rx="12" fill="#111A2E" stroke="#60A5FA" stroke-width="2"/>
+  <text x="280" y="330" class="big">Clearinghouse</text>
+  <text x="418" y="330" class="small">Solidity, immutable, no proxy</text>
+  <text x="280" y="353" class="small">Subaccounts · USDG cash (index-scaled) · stock-token collateral · up to 256 positions and 8 underlyings</text>
+  <g>
+    <rect x="276" y="372" width="150" height="70" rx="8" fill="#16223B" stroke="#3B5B8F"/>
+    <text x="290" y="398" class="name">MarginLogic</text>
+    <text x="290" y="420" class="tiny">equity · IM · MM</text>
+    <rect x="438" y="372" width="150" height="70" rx="8" fill="#16223B" stroke="#3B5B8F"/>
+    <text x="452" y="398" class="name">TradeLogic</text>
+    <text x="452" y="420" class="tiny">opening rules · fees</text>
+    <rect x="600" y="372" width="160" height="70" rx="8" fill="#16223B" stroke="#3B5B8F"/>
+    <text x="614" y="398" class="name">SettlementLogic</text>
+    <text x="614" y="420" class="tiny">expiry pool · waterfall</text>
+    <rect x="772" y="372" width="152" height="70" rx="8" fill="#16223B" stroke="#3B5B8F"/>
+    <text x="786" y="398" class="name">Agent policies</text>
+    <text x="786" y="420" class="tiny">on-chain risk budgets</text>
+  </g>
+
+  <!-- left column -->
+  <g>
+    <rect x="30" y="300" width="196" height="72" rx="10" fill="#111A2E" stroke="#93C5FD" stroke-width="1.6"/>
+    <text x="46" y="326" class="name">SeriesRegistry</text>
+    <text x="46" y="346" class="tiny">weekly NYSE-close expiries</text>
+    <text x="46" y="361" class="tiny">one settlement price per expiry</text>
+  </g>
+  <g>
+    <rect x="30" y="388" width="196" height="72" rx="10" fill="#111A2E" stroke="#93C5FD" stroke-width="1.6"/>
+    <text x="46" y="414" class="name">RiskParams</text>
+    <text x="46" y="434" class="tiny">hard-coded bounds, timelock</text>
+    <text x="46" y="449" class="tiny">guardian may pause opening only</text>
+  </g>
+  <path class="edge" d="M258,336 L228,336" marker-end="url(#arrow)"/>
+  <path class="edge" d="M228,424 L258,424" marker-end="url(#arrow)"/>
+
+  <!-- right column -->
+  <g>
+    <rect x="974" y="300" width="196" height="72" rx="10" fill="#111A2E" stroke="#93C5FD" stroke-width="1.6"/>
+    <text x="990" y="326" class="name">InsuranceFund</text>
+    <text x="990" y="346" class="tiny">USDG backstop, fee share</text>
+    <text x="990" y="361" class="tiny">bridges settlement shortfalls</text>
+  </g>
+  <g>
+    <rect x="974" y="388" width="196" height="72" rx="10" class="planned"/>
+    <text x="990" y="414" class="name">AuctionHouse</text>
+    <text x="990" y="434" class="tiny">Dutch-auction liquidations</text>
+    <text x="990" y="449" class="tiny">deficit collateral sales</text>
+  </g>
+  <path class="edge" d="M942,336 L972,336" marker-end="url(#arrow)"/>
+  <path class="edgeDim" d="M942,424 L972,424" marker-start="url(#arrowDim)" marker-end="url(#arrowDim)"/>
+
+  <!-- clearinghouse to kernel and hub -->
+  <path class="edge" d="M420,460 L420,530" marker-end="url(#arrow)"/>
+  <text x="430" y="500" class="label">staticcall margin()</text>
+  <path class="edge" d="M800,460 L800,530" marker-end="url(#arrow)"/>
+  <text x="810" y="492" class="label">spot · session</text>
+  <text x="810" y="508" class="label">mark vol</text>
+
+  <!-- core band -->
+  <!-- risk kernel -->
+  <g>
+    <rect x="260" y="534" width="320" height="132" rx="12" fill="#0F2226" stroke="#2DD4BF" stroke-width="2"/>
+    <circle cx="560" cy="554" r="6" fill="#34D399"/>
+    <text x="278" y="562" class="big">Risk kernel</text>
+    <text x="384" y="562" class="small">Stylus · Rust to WASM</text>
+    <text x="278" y="587" class="small">39-scenario Black-Scholes revaluation</text>
+    <text x="278" y="606" class="small">of the whole book, every margin check</text>
+    <text x="278" y="630" class="tiny">margin · scenarioGrid · bsQuote · ewmaUpdate</text>
+    <text x="278" y="650" class="tiny">stateless, integer fixed-point, ~15x less gas</text>
+  </g>
+  <g>
+    <rect x="260" y="682" width="320" height="58" rx="10" fill="#111A2E" stroke="#5EAFA6" stroke-width="1.4"/>
+    <circle cx="560" cy="700" r="6" fill="#34D399"/>
+    <text x="278" y="705" class="name">KernelReference.sol</text>
+    <text x="278" y="726" class="tiny">bit-identical Solidity twin: parity and fork tests</text>
+  </g>
+  <path class="edgeDim" d="M420,666 L420,680" stroke-dasharray="3 3"/>
+
+  <!-- market data hub -->
+  <g>
+    <rect x="660" y="534" width="280" height="132" rx="12" fill="#221C0E" stroke="#FBBF24" stroke-width="2"/>
+    <text x="678" y="562" class="big">MarketDataHub</text>
+    <text x="678" y="587" class="small">Sessions and halts (NYSE calendar)</text>
+    <text x="678" y="606" class="small">Spot with per-session staleness</text>
+    <text x="678" y="630" class="tiny">Realized vol: EWMA ratio estimator</text>
+    <text x="678" y="650" class="tiny">Settlement-price proofs</text>
+  </g>
+  <path class="edge" d="M658,600 L582,600" marker-end="url(#arrow)"/>
+  <text x="620" y="590" class="label" text-anchor="middle">ewma</text>
+
+  <!-- externals under the hub -->
+  <g>
+    <rect x="660" y="700" width="134" height="52" rx="8" class="external"/>
+    <text x="727" y="722" class="small" text-anchor="middle">Chainlink</text>
+    <text x="727" y="739" class="tiny" text-anchor="middle">equity feeds</text>
+    <rect x="806" y="700" width="134" height="52" rx="8" class="external"/>
+    <text x="873" y="722" class="small" text-anchor="middle">Stock tokens</text>
+    <text x="873" y="739" class="tiny" text-anchor="middle">pause · ERC-8056</text>
+  </g>
+  <path class="edge" d="M727,700 L727,670" marker-end="url(#arrow)"/>
+  <path class="edge" d="M873,700 L873,670" marker-end="url(#arrow)"/>
+
+  <!-- off-chain services -->
+  <g>
+    <rect x="30" y="534" width="196" height="206" rx="12" class="planned"/>
+    <text x="46" y="560" class="band">OFF-CHAIN</text>
+    <text x="46" y="586" class="small">Keeper</text>
+    <text x="46" y="603" class="tiny">pokeVol, settle, claim</text>
+    <text x="46" y="630" class="small">TypeScript SDK, MCP server</text>
+    <text x="46" y="647" class="tiny">what-if margin for agents</text>
+    <text x="46" y="674" class="small">Indexer and web app</text>
+    <text x="46" y="691" class="tiny">portfolio, scenario heat map</text>
+    <text x="46" y="718" class="tiny">every call is permissionless</text>
+  </g>
+  <path class="edgeDim" d="M226,560 L300,464" marker-end="url(#arrowDim)"/>
+
+  <!-- USDG note -->
+  <g>
+    <rect x="974" y="534" width="196" height="132" rx="12" class="external"/>
+    <text x="990" y="560" class="band">SETTLEMENT ASSET</text>
+    <text x="990" y="586" class="small">USDG cash</text>
+    <text x="990" y="606" class="tiny">premiums, fees and payoffs</text>
+    <text x="990" y="633" class="small">Stock-token collateral</text>
+    <text x="990" y="653" class="tiny">valued at the Chainlink spot</text>
+  </g>
+</svg>
