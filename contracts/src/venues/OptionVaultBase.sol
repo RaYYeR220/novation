@@ -394,14 +394,15 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
     // ================================================================ async redemption
 
     /// @notice Moves `shares` into escrow for the current epoch; `receiver` claims their assets
-    /// after the roll that pays the epoch. Works while halted: nothing is priced here. From then on
-    /// the queue's claim is reserved: instant withdrawals and new sales can't use it.
+    /// after the roll that pays the epoch. Nothing is priced here, so it reads no price and doesn't
+    /// sync the vol: it works while halted and while the feed has rounds the vol can't fold in (a
+    /// bad round, a phase change), so a holder can always queue an exit. From then on the queue's
+    /// claim is reserved: instant withdrawals and new sales can't use it.
     function requestRedeem(uint256 shares, address receiver) external nonReentrant returns (uint256 requestId) {
         if (shares == 0) revert ZeroShares();
         if (receiver == address(0)) revert ZeroAddress();
         if (receiver == address(this)) revert BadReceiver();
         _requireCooledDown(msg.sender);
-        _syncVol();
         uint256 ep = epoch;
         PendingRedeem storage p = _pending[receiver];
         _fold(receiver, p);

@@ -5,6 +5,7 @@ import {VaultFixture, DeficitSaleRecorder} from "./VaultFixture.sol";
 import {CHErrors} from "../../src/core/ClearinghouseStorage.sol";
 import {AccountState} from "../../src/interfaces/IClearinghouse.sol";
 import {GlobalParams} from "../../src/interfaces/IRiskParams.sol";
+import {MarketDataHub} from "../../src/core/MarketDataHub.sol";
 import {OptionVaultBase, VaultConfig} from "../../src/venues/OptionVaultBase.sol";
 import {CoveredCallVault} from "../../src/venues/CoveredCallVault.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -633,8 +634,8 @@ contract CoveredCallVaultTest is VaultFixture {
         vm.expectRevert(OptionVaultBase.VolNotCurrent.selector);
         vault.withdraw(1e18, alice, alice);
         vm.prank(alice);
-        vm.expectRevert(OptionVaultBase.VolNotCurrent.selector);
-        vault.requestRedeem(1e24, alice);
+        vault.requestRedeem(1e24, alice); // queuing an exit prices nothing: it always works
+        assertEq(vault.pendingRedeem(alice), 1e24);
         hub.syncVol(address(nvda)); // anyone can catch it up
         _buy(vault, call190w2, 1e18);
 
@@ -650,6 +651,24 @@ contract CoveredCallVaultTest is VaultFixture {
         _setPrice(address(nvda), 180e18); // the next print revives it on the next operation
         vm.prank(taker);
         vault.sellBack(call190w2, 1e18, 0, takerId);
+    }
+
+    /// A feed round the vol can't fold in (here a zero answer) stops every priced vault operation,
+    /// but holders can still queue their exit.
+    function test_requestRedeemNotBlockedByBadRound() public {
+        _vaultDeposit(vault, alice, 10e18);
+        _cooldown();
+        _setPrice(address(nvda), 0);
+        vm.expectRevert(MarketDataHub.InvalidRound.selector);
+        hub.syncVol(address(nvda));
+        vm.prank(alice);
+        vm.expectRevert(MarketDataHub.InvalidRound.selector);
+        vault.withdraw(1e18, alice, alice);
+
+        vm.prank(alice);
+        vault.requestRedeem(4e24, alice);
+        assertEq(vault.pendingRedeem(alice), 4e24);
+        assertEq(vault.escrowedShares(), 4e24);
     }
 
     function test_queueReservedFromCapacityAndFreeAssets() public {
