@@ -6,8 +6,8 @@ import {MockAuctionHouse} from "../utils/MockAuctionHouse.sol";
 import {TradeParams} from "../../src/interfaces/IClearinghouse.sol";
 import {GlobalParams} from "../../src/interfaces/IRiskParams.sol";
 
-/// @notice Issues the stateful suite (test/invariant) runs into, reduced to plain tests. Each is
-/// skipped until its fix lands; remove the skip to reproduce.
+/// @notice Issues the stateful suite (test/invariant) ran into, reduced to plain tests. A test is
+/// skipped while its fix is pending and runs as a regression test once it lands.
 contract InvariantRegressionsTest is Fixture {
     MockAuctionHouse internal ah;
 
@@ -20,17 +20,15 @@ contract InvariantRegressionsTest is Fixture {
         params.setGlobals(g);
     }
 
-    /// A socialized debt that isn't a whole number of USDG units can never be repaid in full:
+    /// A socialized debt that isn't a whole number of USDG units could never be repaid in full:
     /// repayDeficit pays the InsuranceFund in whole units only (SettlementLogic._toSocial floors
-    /// the payment), so the sub-unit rest of the debt stays on the account for good. Its
-    /// deficitTotal never returns to zero: the defaulter can't withdraw what it deposits later,
-    /// can't open a position, and its deficit sale never ends, however much cash it brings.
+    /// the payment), so the sub-unit rest of the debt stayed on the account for good. Its
+    /// deficitTotal never returned to zero: the defaulter couldn't withdraw what it deposited
+    /// later, couldn't open a position, and its deficit sale never ended.
     ///
-    /// Expected fix: book the socialized debt rounded up to a whole unit in socializeRemainder
-    /// (as the InsuranceFund's bridge already is), or let the last repayment of a debt below
-    /// one unit clear it from the account's cash.
+    /// Fixed: socializeRemainder books the socialized debt rounded up to a whole unit, as the
+    /// InsuranceFund's bridge already is.
     function test_socializedDebtRepayableInFull() public {
-        vm.skip(true, "known issue: the sub-unit rest of a socialized debt can never be repaid");
         address alice = _user("alice");
         address bob = _user("bob");
         uint256 a = _fund(alice, 300 * USDG, 0);
@@ -59,9 +57,10 @@ contract InvariantRegressionsTest is Fixture {
         assertEq(pending, 20.2518518394e18);
         assertEq(total, pending);
 
-        // nothing left to sell: the remainder is socialized and alice keeps owing it
+        // nothing left to sell: the remainder is socialized and alice keeps owing it, rounded up
+        // to a whole USDG unit
         ch.socializeRemainder(a, e);
-        assertEq(ch.socializedDebtOf(a), 20.2518518394e18);
+        assertEq(ch.socializedDebtOf(a), 20.251852e18);
 
         // alice brings 100 USDG, far more than she owes, and repays
         _deposit(alice, a, address(usdg), 100 * USDG);
