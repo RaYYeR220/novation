@@ -3,12 +3,15 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import {
+  expiriesOf,
   getAgentPolicy,
   getRfqDomain,
   getSpot,
   getUnderlyingParams,
+  listSeries,
   randomNonce,
   signQuote,
+  simulatePushRound,
   simulateRevokeAgent,
   whatIfTrade,
   WAD,
@@ -60,8 +63,11 @@ d('MCP tool handlers on a local chain', () => {
     await fundAgent(L);
     ro = session(L, { account: id });
 
-    // the first NVDA call the covered-call vault offers, from get_chain itself
-    const chain = await tools.getChain(ro, { underlying: 'NVDA', type: 'call' });
+    // the first NVDA call the covered-call vault offers, from get_chain itself, on an expiry at
+    // least two days out (the vault's delta band leaves nothing to offer an hour before a close)
+    const t0 = Number((await L.client.getBlock()).timestamp);
+    const expiry = expiriesOf(await listSeries(L.ctx, { underlying: L.ctx.deployment.tokens.NVDA!, liveAt: t0 + 2 * 86400 }))[0]!;
+    const chain = await tools.getChain(ro, { underlying: 'NVDA', type: 'call', expiry: String(expiry) });
     const offered = chain.series?.find((x) => x.vaultAsk !== null);
     expect(offered).toBeDefined();
     callId = offered!.seriesId;
@@ -135,7 +141,8 @@ d('MCP tool handlers on a local chain', () => {
     expect(u.underlyings.every((x) => x.tradeable && x.spot! > 0)).toBe(true);
     expect(u.summary).toMatch(/^4 underlyings: NVDA \d/);
 
-    const chain: R = await tools.getChain(ro, { underlying: 'nvda', type: 'call', qty: 1 });
+    // the call's own expiry (two days out or more): the nearest may be too close to its close for the vault
+    const chain: R = await tools.getChain(ro, { underlying: 'nvda', type: 'call', qty: 1, expiry: String((await ro.n.registry.getSeries(callId)).expiry) });
     expect(chain.summary).toMatch(/^NVDA \d{4}-\d\d-\d\d: 8 series, [1-9] with a vault ask/);
     expect(chain.series.length).toBe(8);
     const row = chain.series.find((x: R) => x.seriesId === callId);
@@ -255,6 +262,21 @@ d('MCP tool handlers on a local chain', () => {
     expect((await tools.portfolio(agent, {})).positions).toEqual([]);
     const ok = await tools.explainRefusal(agent, { tx_hash: sold.txHash as string });
     expect(ok.status).toBe('success');
+  });
+
+  it('catches a vol that is more than one sync behind its feed up, then trades', async () => {
+    const feed = L.ctx.deployment.feeds.NVDA as `0x${string}`;
+    const maker = L.wallets[1]!;
+    const t = await blockTime(L);
+    const px = (await getSpot(L.ctx, L.ctx.deployment.tokens.NVDA!)).price / 10n ** 10n;
+    for (let i = 0; i < 66; i++) await send(L, maker.wallet, (await simulatePushRound(L.ctx, maker.account.address, feed, px, BigInt(t))).request);
+    const nonce = await L.client.getTransactionCount({ address: AGENT });
+    const fill = await tools.buyFromVault(agent, { series_id: callId, qty: 1 });
+    expect(fill.status).toBe('filled');
+    expect(String(fill.note)).toMatch(/VolNotCurrent/);
+    // the vault wouldn't quote on the stale vol: two catch-up steps (64 rounds, then the rest), then the trade
+    expect(await L.client.getTransactionCount({ address: AGENT })).toBe(nonce + 3);
+    expect((await tools.sellToVault(agent, { series_id: callId, qty: 1 })).status).toBe('filled');
   });
 
   it("fills a maker's signed RFQ quote and refuses a tampered one", async () => {

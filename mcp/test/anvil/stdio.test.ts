@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { inject } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { getSpot, getUnderlyingParams, whatIfTrade, WAD } from '@novation/sdk';
+import { expiriesOf, getSpot, getUnderlyingParams, listSeries, whatIfTrade, WAD } from '@novation/sdk';
 import { READ_TOOLS, tools, TRADE_TOOLS } from '../../src/index';
 import { AGENT, AGENT_KEY, blockTime, fundAgent, grant, local, openAccount, OWNER_KEY, rpcUrl, session, type Local } from './fixture';
 
@@ -44,7 +44,10 @@ d('MCP server over stdio (real client, real server process)', () => {
     const cc = L.ctx.deployment.vaults.find((v) => v.type === 'coveredCall' && v.underlying === 'NVDA')!.address;
     const ro = session(L, { account: id });
     const spot = (await getSpot(L.ctx, NVDA)).price;
-    callId = (await tools.getChain(ro, { underlying: 'NVDA', type: 'call' })).series!.find((x) => x.vaultAsk !== null)!.seriesId;
+    // an expiry at least two days out: the vault's delta band leaves nothing to offer near a close
+    const t0 = Number((await L.client.getBlock()).timestamp);
+    const expiry = expiriesOf(await listSeries(L.ctx, { underlying: NVDA, liveAt: t0 + 2 * 86400 }))[0]!;
+    callId = (await tools.getChain(ro, { underlying: 'NVDA', type: 'call', expiry: String(expiry) })).series!.find((x) => x.vaultAsk !== null)!.seriesId;
     const premium = await ro.n.vault.getVaultQuote(cc, callId, WAD, true);
     budget = ((await whatIfTrade(L.ctx, { account: id, seriesId: callId, qty: WAD, premium, spot })).after.im * 3n) / 2n;
     const idx = (await getUnderlyingParams(L.ctx, NVDA)).index;
