@@ -2,7 +2,7 @@
 
 An RFQ market maker for Novation. It prices weekly options off the hub's mark vol, checks that a fill would keep its own account above initial margin, and only then signs an EIP-712 quote that any taker can fill through `RfqVenue`. The relay is one web-standard handler, `(Request) => Promise<Response>`, so the same code runs behind `node:http` locally or as a Next.js route handler.
 
-Live on Robinhood Chain testnet: maker `0xFa29A382CF892496A70CC95327072FDAcDD39555`, subaccount `7`. A taker filled a quote served by this relay in [0x883c803d…](https://explorer.testnet.chain.robinhood.com/tx/0x883c803d27356c5d1a6d368090fc845b0d8a3848539cfbb85ab7c9d62e3988c5): 1 NVDA 240 call expiring 2026-10-02, at 4.151995 USDG.
+Live on Robinhood Chain testnet: maker `0xFa29A382CF892496A70CC95327072FDAcDD39555`, subaccount `10`. A taker filled a quote served by this relay in [0x594f2c80…](https://explorer.testnet.chain.robinhood.com/tx/0x594f2c802ebcb359d230d3bca807f854550b6d1bee466827bd6e97f69dc2d3ae): 1 NVDA 245 call expiring 2026-10-09, at 17.000235 USDG. On the previous core deployment: subaccount `7`, fill [0x883c803d…](https://explorer.testnet.chain.robinhood.com/tx/0x883c803d27356c5d1a6d368090fc845b0d8a3848539cfbb85ab7c9d62e3988c5).
 
 ## Run it
 
@@ -61,7 +61,7 @@ Every value is range-checked when the relay starts: spreads, slopes, session add
                "maxQty": "1000000000000000000", "price": "4151995000000000000",
                "deadline": "1790875446", "nonce": "7628…3696" },
     "signature": "0x…", "hash": "0xfe9f…0719", "premium": "4151995000000000000",
-    "chainId": 46630, "venue": "0x56562573b74A6cD6ca96cfb794A63625A48edf08", "expiresAt": 1790875446,
+    "chainId": 46630, "venue": "0x1aFD874fdd3914fB6958F282769dAC546993ED82", "expiresAt": 1790875446,
     "display": { "price": 4.151995, "qty": 1, "premium": 4.151995, "vol": 1.5623, "mark": 3.8261, "spot": 230.2283, "session": "REGULAR" }
   }],
   "refusals": [{ "side": "sell", "code": "NoBid", "message": "…" }]

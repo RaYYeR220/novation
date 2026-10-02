@@ -47,7 +47,7 @@ library SettlementLogic {
         CHStorage storage $ = CHS.s();
 
         // 1-2. positions of this expiry and their payoffs, rounded against the account
-        Position[] storage ps = $.positions[id];
+        Position[] memory ps = CHS.positionsOf(id);
         uint256 n = ps.length;
         uint32[] memory sids = new uint32[](n);
         int256[] memory qtys = new int256[](n);
@@ -84,6 +84,7 @@ library SettlementLogic {
         // 4. net receiver: a claim on the pool
         if (net >= 0) {
             uint256 amt = uint256(net);
+            if (amt != 0 && $.claimable[id][expiry] == 0) $.claimExpiries[id].push(expiry);
             $.claimable[id][expiry] += amt;
             $.totalClaimable[expiry] += amt;
             $.claimableTotal[id] += amt; // keeps counting in the account's equity until claimed
@@ -139,11 +140,7 @@ library SettlementLogic {
 
         // the claim leaves the account's equity at face; only `pay` comes back as cash, so an
         // impaired payout realizes the difference as a loss
-        $.claimable[id][expiry] = 0;
-        $.totalClaimable[expiry] -= amt;
-        $.claimableTotal[id] -= amt;
-        $.pool[expiry] = poolWad - pay;
-        CHS.credit(id, pay);
+        CHS.payClaim(id, expiry, amt, pay);
         if (pay < amt) emit ClaimHaircut(id, expiry, amt, pay);
         emit IClearinghouse.Claimed(id, expiry, pay);
     }
@@ -227,7 +224,7 @@ library SettlementLogic {
     function socializeRemainder(Deps memory d, uint256 id, uint64 expiry) external {
         CHStorage storage $ = CHS.s();
         if ($.defPending[id][expiry] == 0) revert CHErrors.NothingToSocialize();
-        if ($.positions[id].length != 0) revert CHErrors.AccountNotEmpty(id);
+        if (CHS.positionCount(id) != 0) revert CHErrors.AccountNotEmpty(id);
         if (
             $.collateralTokens[id].length != 0
                 && MarginLogic.collateralValue(d, id) > int256(uint256(d.params.globals().dustEquity))

@@ -1,179 +1,163 @@
 {
   "chainId": 46630,
-  "date": "2026-10-01T17:37:58.489Z",
-  "clearinghouse": "0xe799DF9b96a4809c411D3F90f67C5261a245ABB2",
+  "date": "2026-10-02T11:18:33.354Z",
+  "clearinghouse": "0x0b0F4e67DcA3B846859Af452576e8E09316D1949",
   "actors": {
     "owner": "0xC8Cf2e5e58Fef20388cFbF68f5ECDC3b7951BcD9",
     "agent": "0xCd9C3F7cd47d1b20b9b58BF9aa2c34BE0f8D7D8C",
     "derivation": "keccak256(deployerKey ‖ \"agent-owner\"), keccak256(deployerKey ‖ \"agent\")"
   },
-  "account": "9",
+  "account": "12",
   "series": {
-    "id": 5,
-    "label": "NVDA 2026-10-02 255 C"
+    "id": 129,
+    "label": "NVDA 2026-10-02 250 C"
   },
   "policy": {
-    "budget": 1.53888,
+    "budget": 0.767935,
     "premiumCap": 25,
     "allowed": [
       "NVDA"
     ],
-    "expiresAt": "2026-10-08T17:37:38.000Z"
+    "expiresAt": "2026-10-09T11:18:13.000Z"
   },
   "result": {
-    "inBudgetFill": "0x0307e2d54fd130e1858ce85cc1dfd72e37bedc0434f9429abbe213f8388b36fc",
+    "inBudgetFill": "0xf17910855569d9d6fed1b5ef3676ac48599e955b3dc889ee7bdc5d7d1f109542",
     "refusedInSimulation": {
       "code": "AgentRiskBudgetExceeded",
       "message": "Worst-case loss after this trade exceeds the agent's risk budget.",
       "numbers": {
-        "id": 9,
-        "worstLoss": 4.018316,
-        "budget": 1.53888
+        "id": 12,
+        "worstLoss": 2.037482,
+        "budget": 0.767935
       }
     },
-    "minedRefusal": "0x2aa5a4ceaf099d14136d921b29b5bc2bce8b52f618b25e4935b04494210f1064",
+    "minedRefusal": "0x43941aae0c18d7d004d052fd4baa72ccbb74fddd9ffe0d9e6d4dcb57407b42fe",
     "explained": {
       "code": "AgentRiskBudgetExceeded",
       "message": "Worst-case loss after this trade exceeds the agent's risk budget.",
       "numbers": {
-        "id": 9,
-        "worstLoss": 4.018164,
-        "budget": 1.53888
+        "id": 12,
+        "worstLoss": 2.037235,
+        "budget": 0.767935
       }
     }
   },
   "txs": [
     {
-      "label": "fund owner with 0.0001 ETH of gas",
-      "tx": "0x07c2fe8cd830e4db5ba96baa7bbed19d161087c647602ad58a519ad523e66085",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x07c2fe8cd830e4db5ba96baa7bbed19d161087c647602ad58a519ad523e66085",
-      "status": "success",
-      "gasUsed": 23535,
-      "block": 127239019
-    },
-    {
-      "label": "fund agent with 0.0002 ETH of gas",
-      "tx": "0xba42f20b8a2a352f626dfd4187b6edc362eb7ab7ee73cc3c31636f91d7077d2b",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xba42f20b8a2a352f626dfd4187b6edc362eb7ab7ee73cc3c31636f91d7077d2b",
-      "status": "success",
-      "gasUsed": 23535,
-      "block": 127239033
-    },
-    {
       "label": "owner mints 100 mock USDG",
-      "tx": "0xcc49ca60b48f40679467237241563aa3b853be3c9ae101084d5078ea1feb74a9",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xcc49ca60b48f40679467237241563aa3b853be3c9ae101084d5078ea1feb74a9",
+      "tx": "0x4170cbe9e204ebd5bb7f4155ece665a4ad80c02b03692ee1f75dcdd55ad63c64",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x4170cbe9e204ebd5bb7f4155ece665a4ad80c02b03692ee1f75dcdd55ad63c64",
       "status": "success",
-      "gasUsed": 54807,
-      "block": 127239286
+      "gasUsed": 57688,
+      "block": 127568477
     },
     {
       "label": "owner approves the clearinghouse",
-      "tx": "0x101ddc711a933d6aeb7918996c0f132fc3b68d71a32769b83e490732651f8a1b",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x101ddc711a933d6aeb7918996c0f132fc3b68d71a32769b83e490732651f8a1b",
+      "tx": "0x1062ddd9f16c03c36675ec3837274f5d82302c125a21790da4947564b42bfced",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x1062ddd9f16c03c36675ec3837274f5d82302c125a21790da4947564b42bfced",
       "status": "success",
-      "gasUsed": 50115,
-      "block": 127239302
+      "gasUsed": 52996,
+      "block": 127568496
     },
     {
-      "label": "owner creates subaccount 9",
-      "tx": "0x457af00eb8ec01192c49bf3c7fd60ad89c2242b2f18aa696a02012a3c1a777b0",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x457af00eb8ec01192c49bf3c7fd60ad89c2242b2f18aa696a02012a3c1a777b0",
+      "label": "owner creates subaccount 12",
+      "tx": "0x1deb5b9050fa814de21060742cf349701afdb8642fe1fe0a62db3e55bb1c0fb1",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x1deb5b9050fa814de21060742cf349701afdb8642fe1fe0a62db3e55bb1c0fb1",
       "status": "success",
-      "gasUsed": 98186,
-      "block": 127239326
+      "gasUsed": 100081,
+      "block": 127568514
     },
     {
       "label": "owner deposits 100 USDG",
-      "tx": "0x2c0b5e7950149b50f99c5814548105c0d82a0cbf3035dbfdb2c1139cb25b8acb",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x2c0b5e7950149b50f99c5814548105c0d82a0cbf3035dbfdb2c1139cb25b8acb",
+      "tx": "0xcb3750d8319b2e504fb1f08f891fcb9d98e0a70c8cbc96591102be0dadef8089",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xcb3750d8319b2e504fb1f08f891fcb9d98e0a70c8cbc96591102be0dadef8089",
       "status": "success",
-      "gasUsed": 76163,
-      "block": 127239357
+      "gasUsed": 79619,
+      "block": 127568533
     },
     {
-      "label": "owner grants the agent: budget 1.53888 USDG (1.5x one call), premium cap 25 USDG, NVDA only, 7 days",
-      "tx": "0xa383afcdde154f0847e0151ec52546e8d5be30bcab1ccad5a2dbbe0b1bad2e7e",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xa383afcdde154f0847e0151ec52546e8d5be30bcab1ccad5a2dbbe0b1bad2e7e",
+      "label": "owner grants the agent: budget 0.767935 USDG (1.5x one call), premium cap 25 USDG, NVDA only, 7 days",
+      "tx": "0xc7d90edd69dd78944f0983bbf5008b7518e931b7f3a609347a4c100236a69202",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xc7d90edd69dd78944f0983bbf5008b7518e931b7f3a609347a4c100236a69202",
       "status": "success",
-      "gasUsed": 79235,
-      "block": 127239399
+      "gasUsed": 83610,
+      "block": 127568590
     },
     {
       "label": "agent buys 1 call through MCP (in budget)",
-      "tx": "0x0307e2d54fd130e1858ce85cc1dfd72e37bedc0434f9429abbe213f8388b36fc",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x0307e2d54fd130e1858ce85cc1dfd72e37bedc0434f9429abbe213f8388b36fc",
+      "tx": "0xf17910855569d9d6fed1b5ef3676ac48599e955b3dc889ee7bdc5d7d1f109542",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xf17910855569d9d6fed1b5ef3676ac48599e955b3dc889ee7bdc5d7d1f109542",
       "status": "success",
-      "gasUsed": 879466,
-      "block": 127239434
+      "gasUsed": 849536,
+      "block": 127568658
     },
     {
       "label": "agent buys 3 more calls through MCP with send_even_if_refused (over budget, reverts on-chain)",
-      "tx": "0x2aa5a4ceaf099d14136d921b29b5bc2bce8b52f618b25e4935b04494210f1064",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x2aa5a4ceaf099d14136d921b29b5bc2bce8b52f618b25e4935b04494210f1064",
+      "tx": "0x43941aae0c18d7d004d052fd4baa72ccbb74fddd9ffe0d9e6d4dcb57407b42fe",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x43941aae0c18d7d004d052fd4baa72ccbb74fddd9ffe0d9e6d4dcb57407b42fe",
       "status": "reverted",
-      "gasUsed": 758442,
-      "block": 127239461
+      "gasUsed": 778547,
+      "block": 127568695
     }
   ],
   "transcript": [
     {
       "tool": "risk_budget",
       "arguments": {},
-      "summary": "budget 1.53888 USDG, used 0, headroom 1.53888 USDG; premium cap 25 USDG; NVDA allowed until 2026-10-08T17:37:38Z"
+      "summary": "budget 0.767935 USDG, used 0, headroom 0.767935 USDG; premium cap 25 USDG; NVDA allowed until 2026-10-09T11:18:13Z"
     },
     {
       "tool": "what_if_margin",
       "arguments": {
-        "series_id": 5,
+        "series_id": 129,
         "qty": 1
       },
-      "summary": "PASSES: initial margin 0 -> 1.025784 USDG, budget 1.53888 USDG"
+      "summary": "PASSES: initial margin 0 -> 0.51174 USDG, budget 0.767935 USDG"
     },
     {
       "tool": "buy_from_vault",
       "arguments": {
-        "series_id": 5,
+        "series_id": 129,
         "qty": 1
       },
-      "summary": "FILLED: buy 1 NVDA 2026-10-02 255 C for 1.256553 USDG (fee 0.069068); initial margin 1.004617 of budget 1.53888 USDG; tx 0x0307e2d54fd130e1858ce85cc1dfd72e37bedc0434f9429abbe213f8388b36fc"
+      "summary": "FILLED: buy 1 NVDA 2026-10-02 250 C for 0.67934 USDG (fee 0.070507); initial margin 0.509432 of budget 0.767935 USDG; tx 0xf17910855569d9d6fed1b5ef3676ac48599e955b3dc889ee7bdc5d7d1f109542"
     },
     {
       "tool": "what_if_margin",
       "arguments": {
-        "series_id": 5,
+        "series_id": 129,
         "qty": 3
       },
-      "summary": "WOULD BE REFUSED (AgentRiskBudgetExceeded): worst-case loss (initial margin) after 4.018393 vs budget 1.53888 USDG"
+      "summary": "WOULD BE REFUSED (AgentRiskBudgetExceeded): worst-case loss (initial margin) after 2.037606 vs budget 0.767935 USDG"
     },
     {
       "tool": "buy_from_vault",
       "arguments": {
-        "series_id": 5,
+        "series_id": 129,
         "qty": 3
       },
-      "summary": "REFUSED (not sent): AgentRiskBudgetExceeded: worst-case loss after the trade 4.018316 USDG > the agent's budget 1.53888 USDG. The simulation of this exact transaction reverted, so nothing was signed or sent."
+      "summary": "REFUSED (not sent): AgentRiskBudgetExceeded: worst-case loss after the trade 2.037482 USDG > the agent's budget 0.767935 USDG. The simulation of this exact transaction reverted, so nothing was signed or sent."
     },
     {
       "tool": "buy_from_vault",
       "arguments": {
-        "series_id": 5,
+        "series_id": 129,
         "qty": 3,
         "send_even_if_refused": true
       },
-      "summary": "REFUSED ON-CHAIN: AgentRiskBudgetExceeded: worst-case loss after the trade 4.018164 USDG > the agent's budget 1.53888 USDG. The transaction was mined and reverted: 0x2aa5a4ceaf099d14136d921b29b5bc2bce8b52f618b25e4935b04494210f1064"
+      "summary": "REFUSED ON-CHAIN: AgentRiskBudgetExceeded: worst-case loss after the trade 2.037235 USDG > the agent's budget 0.767935 USDG. The transaction was mined and reverted: 0x43941aae0c18d7d004d052fd4baa72ccbb74fddd9ffe0d9e6d4dcb57407b42fe"
     },
     {
       "tool": "explain_refusal",
       "arguments": {
-        "tx_hash": "0x2aa5a4ceaf099d14136d921b29b5bc2bce8b52f618b25e4935b04494210f1064"
+        "tx_hash": "0x43941aae0c18d7d004d052fd4baa72ccbb74fddd9ffe0d9e6d4dcb57407b42fe"
       },
-      "summary": "0x2aa5a4ceaf099d14136d921b29b5bc2bce8b52f618b25e4935b04494210f1064 was refused on-chain: AgentRiskBudgetExceeded: worst-case loss after the trade 4.018164 USDG > the agent's budget 1.53888 USDG"
+      "summary": "0x43941aae0c18d7d004d052fd4baa72ccbb74fddd9ffe0d9e6d4dcb57407b42fe was refused on-chain: AgentRiskBudgetExceeded: worst-case loss after the trade 2.037235 USDG > the agent's budget 0.767935 USDG"
     },
     {
       "tool": "portfolio",
       "arguments": {},
-      "summary": "account 9: equity 99.678881 USDG, initial margin 1.004503 USDG, 1 position(s); worst scenario -1.004503 USDG"
+      "summary": "account 12: equity 99.7594 USDG, initial margin 0.509247 USDG, 1 position(s); worst scenario -0.509247 USDG"
     }
   ]
 }

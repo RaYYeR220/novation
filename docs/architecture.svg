@@ -90,7 +90,7 @@
   <rect x="260" y="300" width="680" height="160" rx="12" fill="#111A2E" stroke="#60A5FA" stroke-width="2"/>
   <text x="280" y="330" class="big">Clearinghouse</text>
   <text x="418" y="330" class="small">Solidity, immutable, no proxy</text>
-  <text x="280" y="353" class="small">Subaccounts · USDG cash (index-scaled) · stock-token collateral · up to 256 positions and 8 underlyings</text>
+  <text x="280" y="353" class="small">Subaccounts · USDG cash (index-scaled) · stock-token collateral · up to 256 positions and 4 underlyings</text>
   <g>
     <rect x="276" y="372" width="150" height="70" rx="8" fill="#16223B" stroke="#3B5B8F"/>
     <text x="290" y="398" class="name">MarginLogic</text>

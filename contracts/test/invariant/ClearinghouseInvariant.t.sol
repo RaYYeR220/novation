@@ -77,7 +77,7 @@ contract ClearinghouseInvariantTest is Fixture {
         _target(Handler.withdraw.selector, 1);
         _target(Handler.grantAgent.selector, 1);
         _target(Handler.vaultDeposit.selector, 1);
-        _target(Handler.vaultRedeem.selector, 1);
+        _target(Handler.vaultExit.selector, 2);
         _target(Handler.vaultRequestRedeem.selector, 1);
         _target(Handler.vaultRoll.selector, 1);
         _target(Handler.syncVol.selector, 1);
@@ -88,6 +88,8 @@ contract ClearinghouseInvariantTest is Fixture {
         _target(Handler.claimAll.selector, 1);
         _target(Handler.startLiquidation.selector, 1);
         _target(Handler.bidLiquidation.selector, 2);
+        _target(Handler.endLiquidation.selector, 1);
+        _target(Handler.markUnpriced.selector, 1);
         _target(Handler.bidDeficit.selector, 2);
         _target(Handler.socializeIfEligible.selector, 1);
         _target(Handler.repayDeficit.selector, 1);
@@ -360,8 +362,11 @@ contract ClearinghouseInvariantTest is Fixture {
 
     // ================================================================ ghost checks
 
-    /// A vault's share price doesn't move on a deposit or a redemption beyond rounding (checked by
-    /// the handler around each one).
+    /// A vault's share price doesn't move on a deposit or an exit beyond rounding, and an exit
+    /// (redeem, redeemInKind or withdraw; the covered-call vault pays in kind, its stock plus a
+    /// USDG leg floored to whole units) pays, both legs at spot, at most what the burned shares
+    /// are worth and at most one USDG unit less: that rest may lift the share price for the
+    /// holders who stay, never lower it (checked by the handler around each one).
     function invariant_vaultSharePriceStableOnEntryExit() public view {
         assertEq(handler.violations("sharePrice"), 0, handler.firstViolation("sharePrice"));
     }
@@ -369,8 +374,8 @@ contract ClearinghouseInvariantTest is Fixture {
     /// Settlement can't be blocked or used to move value: a priced expiry always settles in the
     /// registry, settleAccount always goes through and moves equity by less than one USDG unit,
     /// a complete pool always pays its claims, every run ends with every expiry settled and
-    /// nothing pending, and every debt can then be repaid from cash (but for the sub-unit rest of
-    /// a socialized debt, see InvariantRegressions.t.sol).
+    /// nothing pending, and every debt can then be repaid from cash; a price-outage record always
+    /// matches whether the hub gives the token a usable price.
     function invariant_settlementNeverBlocked() public view {
         assertEq(handler.violations("liveness"), 0, handler.firstViolation("liveness"));
     }
@@ -445,7 +450,7 @@ contract ClearinghouseInvariantTest is Fixture {
     /// and run with -vv; the last run's log holds the totals). The running totals live in
     /// environment variables of the forge process, the only state that survives between runs.
     function _summary() internal {
-        string[26] memory ops = [
+        string[33] memory ops = [
             "deposit",
             "withdraw",
             "withdrawToMargin",
@@ -456,8 +461,12 @@ contract ClearinghouseInvariantTest is Fixture {
             "vaultSellBack",
             "vaultDeposit",
             "vaultRedeem",
+            "vaultRedeemInKind",
+            "vaultWithdraw",
+            "exitCashLeg",
             "vaultRequestRedeem",
             "vaultRoll",
+            "claimRedeemedCash",
             "movePrice",
             "adverseMove",
             "warp",
@@ -468,10 +477,13 @@ contract ClearinghouseInvariantTest is Fixture {
             "claim",
             "liquidationStart",
             "liquidationBid",
+            "liquidationEnd",
             "deficitBid",
             "socialize",
             "repayDeficit",
-            "socialDebtSubUnitRest"
+            "repayAtEnd",
+            "markUnpriced",
+            "markPriced"
         ];
         for (uint256 i = 0; i < ops.length; ++i) {
             console2.log(ops[i], _accumulate(ops[i], handler.count(bytes32(bytes(ops[i])))));

@@ -321,7 +321,7 @@ d('keeper on a local chain', () => {
     const proofs = fresh.filter((x) => x.job === 'settleExpiry' && x.msg === 'tx').map((x) => [x.underlying, x.proof]);
     expect(proofs).toEqual(expect.arrayContaining([['NVDA', 'nextRound'], ['TSLA', 'phaseChange'], ['AAPL', 'latestRound'], ['SPY', 'latestRound']]));
     // the TSLA vol was re-anchored on the new phase
-    expect(labels(sent)).toContain('rebaseVol TSLA');
+    expect(labels(sent)).toContain('syncAndRebaseVol TSLA');
 
     // 2. accounts: payers (the keeper's short, the vault through its roll) before receivers
     const settled = fresh.filter((x) => x.job === 'settleAccount' && x.msg === 'tx');

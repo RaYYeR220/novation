@@ -558,6 +558,22 @@ contract MarketDataHubTest is Test {
         hub.settlementPrice(address(token), uint64(EXPIRY), _roundId(2, 1));
     }
 
+    /// Review PoC: during an aggregator migration the old phase can keep printing after the new
+    /// one already holds the true last print before the close. An old-phase hint whose successor
+    /// printed after the close must not prove (proof (i)) while the later phase began before it.
+    function test_settlementOldPhaseRoundRejectedDuringMigration() public {
+        feed.pushRound(170e8, EXPIRY - 2 hours); // (1,1), the old aggregator
+        feed.setPhase(2);
+        feed.pushRound(200e8, EXPIRY - 5 minutes); // (2,1), the true last print
+        feed.setPhase(1);
+        feed.pushRound(171e8, EXPIRY + 1 hours); // (1,2), the old aggregator keeps printing
+        feed.setPhase(2);
+        vm.warp(EXPIRY + 2 hours);
+        vm.expectRevert(MarketDataHub.NextRoundMissing.selector);
+        hub.settlementPrice(address(token), uint64(EXPIRY), _roundId(1, 1));
+        assertEq(hub.settlementPrice(address(token), uint64(EXPIRY), _roundId(2, 1)), 200e18);
+    }
+
     function test_settlementRejectsOldPhaseHintWithoutProof() public {
         feed.pushRound(150e8, EXPIRY - 300); // (1,1)
         feed.pushRound(151e8, EXPIRY - 100); // (1,2) real last pre-close print
@@ -669,6 +685,42 @@ contract MarketDataHubTest is Test {
         feed.pushRound(155e8, EXPIRY + 10 hours); // (2,1)
         vm.warp(EXPIRY + 72 hours);
         assertEq(hub.settlementPriceFallback(address(token), uint64(EXPIRY), _roundId(2, 1)), 155e18);
+    }
+
+    /// Review PoC (B, R-1): a stale pre-close print (600) and an in-band first post-close print (540).
+    /// The fallback settles at 540 from 72 hours on; the last resort used to also settle at 600 from
+    /// day 7, so whoever called first chose the price. It now refuses while the fallback applies.
+    function test_lastResortRefusedWhileFallbackApplies() public {
+        feed.pushRound(600e8, EXPIRY - 2 days); // (1,1) stale, in band
+        feed.pushRound(540e8, EXPIRY + 10 hours); // (1,2) first after, in band
+        vm.warp(EXPIRY + 7 days);
+        assertEq(hub.settlementPriceFallback(address(token), uint64(EXPIRY), _roundId(1, 2)), 540e18);
+        vm.expectRevert(MarketDataHub.FallbackApplies.selector);
+        hub.settlementPriceLastResort(address(token), uint64(EXPIRY), _roundId(1, 1));
+    }
+
+    /// The same across an aggregator migration: round 1 of the next phase is the first print after
+    /// the close.
+    function test_lastResortRefusedWhileFallbackAppliesAcrossPhases() public {
+        feed.pushRound(600e8, EXPIRY - 2 days); // (1,1) stale, last of phase 1
+        feed.setPhase(2);
+        feed.pushRound(540e8, EXPIRY + 10 hours); // (2,1)
+        vm.warp(EXPIRY + 7 days);
+        assertEq(hub.settlementPriceFallback(address(token), uint64(EXPIRY), _roundId(2, 1)), 540e18);
+        vm.expectRevert(MarketDataHub.FallbackApplies.selector);
+        hub.settlementPriceLastResort(address(token), uint64(EXPIRY), _roundId(1, 1));
+    }
+
+    /// With an implausible first post-close print the fallback can't settle, and the last resort
+    /// does, at the last in-band pre-close print.
+    function test_lastResortWhenFirstAfterImplausible() public {
+        feed.pushRound(600e8, EXPIRY - 2 days);
+        feed.pushRound(1e8, EXPIRY + 10 hours); // $1
+        feed.pushRound(540e8, EXPIRY + 11 hours); // later in-band prints don't count
+        vm.warp(EXPIRY + 7 days);
+        vm.expectRevert(MarketDataHub.ImplausiblePrice.selector);
+        hub.settlementPriceFallback(address(token), uint64(EXPIRY), _roundId(1, 2));
+        assertEq(hub.settlementPriceLastResort(address(token), uint64(EXPIRY), _roundId(1, 1)), 600e18);
     }
 
     function test_fallbackRejectsImplausibleFirstAfter() public {
@@ -969,6 +1021,89 @@ contract MarketDataHubTest is Test {
         assertEq(lastId, _roundId(2, 3));
     }
 
+    function test_syncVolUpToFoldsAtMostMaxRounds() public {
+        vm.warp(REGULAR_TS);
+        feed.pushRound(150e8, REGULAR_TS);
+        hub.initVol(address(token));
+        assertTrue(hub.syncVolUpTo(address(token), 4)); // nothing new: current
+        for (uint64 i = 1; i <= 6; i++) {
+            feed.pushRound(150e8, REGULAR_TS + 60 * i);
+        }
+        assertFalse(hub.syncVolUpTo(address(token), 4));
+        (,, uint80 lastId,,,) = hub.volState(address(token));
+        assertEq(lastId, _roundId(1, 5));
+        assertTrue(hub.syncVolUpTo(address(token), 4));
+        (,, lastId,,,) = hub.volState(address(token));
+        assertEq(lastId, _roundId(1, 7));
+        vm.expectRevert(MarketDataHub.BadRoundCount.selector);
+        hub.syncVolUpTo(address(token), 0);
+        vm.expectRevert(MarketDataHub.BadRoundCount.selector);
+        hub.syncVolUpTo(address(token), 65);
+        feed.setPhase(2);
+        feed.pushRound(150e8, REGULAR_TS + 600);
+        assertFalse(hub.syncVolUpTo(address(token), 4)); // a phase change waits for rebaseVol
+    }
+
+    /// Review (B, R-2): after an aggregator migration the old aggregator may still print. pokeVol
+    /// then rebaseVol in two transactions races it (a new old-phase round makes rebaseVol revert
+    /// PhaseNotExhausted); syncAndRebaseVol folds the rest of the old phase and rebases in one call.
+    function test_syncAndRebaseVolIsAtomic() public {
+        vm.warp(REGULAR_TS);
+        feed.pushRound(150e8, REGULAR_TS);
+        hub.initVol(address(token));
+        vm.expectRevert(MarketDataHub.NoPhaseChange.selector);
+        hub.syncAndRebaseVol(address(token));
+
+        feed.pushRound(151e8, REGULAR_TS + 10); // (1,2)
+        feed.pushRound(152e8, REGULAR_TS + 20); // (1,3)
+        feed.setPhase(2);
+        feed.pushRound(153e8, REGULAR_TS + 30); // (2,1)
+        // the race: a keeper folds phase 1, then the old aggregator prints once more
+        uint256 snap = vm.snapshotState();
+        _pokeN(2, 2);
+        feed.setPhase(1);
+        feed.pushRound(154e8, REGULAR_TS + 40); // (1,4)
+        feed.setPhase(2);
+        vm.expectRevert(MarketDataHub.PhaseNotExhausted.selector);
+        hub.rebaseVol(address(token));
+        vm.revertToState(snap);
+
+        // in one call: phase 1 folded to its end, then the anchor moves to (2,1)
+        uint256 snap2 = vm.snapshotState();
+        _pokeN(2, 2);
+        bytes memory folded = _volSnapshot();
+        vm.revertToState(snap2);
+        vm.expectEmit(true, false, false, true, address(hub));
+        emit IMarketDataHub.VolRebased(address(token), _roundId(1, 3), _roundId(2, 1));
+        assertTrue(hub.syncAndRebaseVol(address(token)));
+        (uint256 r2, uint256 dt, uint80 lastId, uint256 px, uint64 at,) = hub.volState(address(token));
+        (uint256 r2f, uint256 dtf,,,,) = abi.decode(folded, (uint256, uint256, uint80, uint256, uint64, uint64));
+        assertEq(r2, r2f);
+        assertEq(dt, dtf);
+        assertEq(lastId, _roundId(2, 1));
+        assertEq(px, 153e18);
+        assertEq(at, REGULAR_TS + 30);
+        assertTrue(hub.volCurrent(address(token)));
+    }
+
+    /// More than 64 rounds left in the old phase: one call folds 64 and doesn't rebase yet.
+    function test_syncAndRebaseVolLongTail() public {
+        vm.warp(REGULAR_TS);
+        feed.pushRound(150e8, REGULAR_TS);
+        hub.initVol(address(token));
+        for (uint64 i = 1; i <= 65; i++) {
+            feed.pushRound(150e8, REGULAR_TS + i);
+        }
+        feed.setPhase(2);
+        feed.pushRound(151e8, REGULAR_TS + 100);
+        assertFalse(hub.syncAndRebaseVol(address(token)));
+        (,, uint80 lastId,,,) = hub.volState(address(token));
+        assertEq(lastId, _roundId(1, 65));
+        assertTrue(hub.syncAndRebaseVol(address(token)));
+        (,, lastId,,,) = hub.volState(address(token));
+        assertEq(lastId, _roundId(2, 1));
+    }
+
     function test_syncVolRequiresInit() public {
         vm.expectRevert(MarketDataHub.NotInitialized.selector);
         hub.syncVol(address(token));
@@ -986,8 +1121,141 @@ contract MarketDataHubTest is Test {
         assertLt(v, 1.5e18);
         assertGt(v, 0.35e18);
 
-        vm.warp(block.timestamp + 3601); // past volStaleness
+        // past volStaleness with nothing new printed (a weekend): the estimate is still current
+        uint256 t = REGULAR_TS + 3600 * 64 + 3601;
+        vm.warp(t);
+        assertTrue(hub.volCurrent(address(token)));
+        assertEq(hub.markVol(address(token)), v);
+
+        // a round printed but not folded in (the first of the week): the estimate stays until that
+        // round has waited unfolded for volStaleness, counted from its own timestamp
+        feed.pushRound(150e8, t);
+        assertFalse(hub.volCurrent(address(token)));
+        assertFalse(hub.volStale(address(token)));
+        assertEq(hub.markVol(address(token)), v);
+        vm.warp(t + 3600);
+        feed.pushRound(150e8, t + 3600); // a later print doesn't restart the age
+        assertEq(hub.markVol(address(token)), v);
+        vm.warp(t + 3601);
+        assertTrue(hub.volStale(address(token)));
         assertEq(hub.markVol(address(token)), 1.5e18);
+        // anyone lifts it by folding
+        hub.syncVol(address(token));
+        assertTrue(hub.volCurrent(address(token)));
+        assertFalse(hub.volStale(address(token)));
+        assertLt(hub.markVol(address(token)), 1.5e18);
+    }
+
+    /// A partial fold leaves the oldest unfolded round as the one that ages: a backlog whose head
+    /// is older than volStaleness is still stale after a fold that didn't reach past it.
+    function test_markVolAgeFromOldestUnfoldedRound() public {
+        vm.warp(REGULAR_TS);
+        feed.pushRound(150e8, REGULAR_TS);
+        hub.initVol(address(token));
+        feed.pushRound(151e8, REGULAR_TS + 10); // (1,2)
+        vm.warp(REGULAR_TS + 3000);
+        feed.pushRound(150e8, REGULAR_TS + 3000); // (1,3)
+        vm.warp(REGULAR_TS + 3611);
+        assertTrue(hub.volStale(address(token))); // (1,2) is 3601 s old
+        _pokeN(2, 1);
+        assertFalse(hub.volStale(address(token))); // now (1,3) ages: 611 s
+        vm.warp(REGULAR_TS + 3000 + 3601);
+        assertTrue(hub.volStale(address(token)));
+        assertEq(hub.markVol(address(token)), 1.5e18);
+    }
+
+    /// After an aggregator migration the stored phase has no next round: the age counts from round
+    /// 1 of the new phase, so the migration doesn't read volCap before anyone can rebase.
+    function test_markVolAcrossPhaseChange() public {
+        vm.warp(REGULAR_TS);
+        feed.pushRound(150e8, REGULAR_TS);
+        hub.initVol(address(token));
+        for (uint64 i = 0; i < 64; i++) {
+            feed.pushRound(150e8, REGULAR_TS + 60 * (i + 1));
+        }
+        hub.syncVol(address(token));
+        uint256 v = hub.markVol(address(token));
+        assertLt(v, 1.5e18);
+
+        uint256 t = REGULAR_TS + 60 * 64 + 7200; // the old phase went quiet long ago
+        vm.warp(t);
+        feed.setPhase(2);
+        feed.pushRound(151e8, t); // (2,1)
+        assertFalse(hub.volCurrent(address(token)));
+        assertFalse(hub.volStale(address(token)));
+        assertEq(hub.markVol(address(token)), v);
+        vm.warp(t + 3601);
+        assertTrue(hub.volStale(address(token)));
+        assertEq(hub.markVol(address(token)), 1.5e18);
+        hub.rebaseVol(address(token));
+        assertTrue(hub.volCurrent(address(token)));
+        assertEq(hub.markVol(address(token)), v);
+    }
+
+    /// The old phase still has unfolded rounds after the migration: those age first.
+    function test_markVolPhaseChangeOldPhaseBacklogAges() public {
+        vm.warp(REGULAR_TS);
+        feed.pushRound(150e8, REGULAR_TS);
+        hub.initVol(address(token));
+        feed.pushRound(151e8, REGULAR_TS + 10); // (1,2), never folded
+        vm.warp(REGULAR_TS + 3000);
+        feed.setPhase(2);
+        feed.pushRound(152e8, REGULAR_TS + 3000); // (2,1)
+        vm.warp(REGULAR_TS + 3611);
+        assertTrue(hub.volStale(address(token))); // (1,2) is 3601 s old, (2,1) only 611 s
+        _pokeN(2, 1); // the rest of phase 1
+        assertFalse(hub.volStale(address(token))); // now (2,1) ages
+    }
+
+    /// A feed whose calls fail has no round to age: stale (markVol never reverts on it).
+    function test_markVolUnreadableFeedIsStale() public {
+        vm.warp(REGULAR_TS);
+        feed.pushRound(150e8, REGULAR_TS);
+        hub.initVol(address(token));
+        vm.mockCallRevert(address(feed), abi.encodeWithSelector(MockAggregator.latestRoundData.selector), "");
+        vm.mockCallRevert(address(feed), abi.encodeWithSelector(MockAggregator.getRoundData.selector), "");
+        assertTrue(hub.volStale(address(token)));
+        assertEq(hub.markVol(address(token)), 1.5e18);
+    }
+
+    /// A bad print (no positive answer) is skipped: the anchor moves past it, the next good round's
+    /// return spans it, and the estimate never sticks on it.
+    function test_badRoundIsSkipped() public {
+        vm.warp(REGULAR_TS);
+        feed.pushRound(150e8, REGULAR_TS);
+        hub.initVol(address(token));
+        (uint256 r2a, uint256 dta,,,,) = hub.volState(address(token));
+        feed.pushRound(0, REGULAR_TS + 60);
+        hub.syncVol(address(token)); // only the bad print: the anchor moves, nothing else
+        (uint256 r2b, uint256 dtb, uint80 last,, uint64 at,) = hub.volState(address(token));
+        assertEq(last, _roundId(1, 2));
+        assertEq(r2b, r2a);
+        assertEq(dtb, dta);
+        assertEq(at, REGULAR_TS);
+        assertTrue(hub.volCurrent(address(token)));
+
+        feed.pushRound(-5, REGULAR_TS + 120);
+        feed.pushRound(160e8, REGULAR_TS + 180);
+        hub.syncVol(address(token));
+        (,, last,,,) = hub.volState(address(token));
+        assertEq(last, _roundId(1, 4));
+        // the same as folding the good round alone, its time span counted from the last good one
+        (uint256 r2, uint256 dt) = _ewmaOne(r2a, dta, 150e18, 160e18, 180);
+        (r2b, dtb,,,,) = hub.volState(address(token));
+        assertEq(r2b, r2);
+        assertEq(dtb, dt);
+    }
+
+    function _ewmaOne(uint256 r2, uint256 dt, uint256 p0, uint256 p1, uint256 span)
+        internal
+        view
+        returns (uint256, uint256)
+    {
+        uint256[] memory ps = new uint256[](1);
+        uint256[] memory ds = new uint256[](1);
+        ps[0] = p1;
+        ds[0] = span;
+        return kernel.ewmaUpdate(r2, dt, p0, ps, ds, 0.97e18);
     }
 
     function test_markVolClampsToFloor() public {

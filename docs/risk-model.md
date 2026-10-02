@@ -165,8 +165,9 @@ The gaps are kept. A return across a weekend or a holiday enters with its real �
 The estimator also fails closed:
 
 - A new underlying starts from the prior `(volCap² × 1 day, 1 day)`, so it reads `volCap` (to within integer rounding) until real rounds accumulate.
-- If nobody pokes it for `volStaleness` (48 hours), mark volatility falls back to `volCap`.
-- Rounds must be consecutive in the feed's current phase. Ids that are already processed are skipped, so a front-running poke can't make a keeper's batch revert. After a Chainlink phase change, `rebaseVol` moves the anchor to the new phase once the old one is exhausted.
+- Mark volatility falls back to `volCap` only when the estimate is stale (`volStale`): a round the feed printed has waited unfolded for longer than `volStaleness` (48 hours), counted from that round's own timestamp. A feed that prints nothing (every weekend, 48 hours and more) leaves the estimate current, and the first print of the week keeps it until it is folded in, so the marks don't jump at the reopen. After an aggregator migration the age counts from round 1 of the new phase, so the migration itself doesn't read `volCap` before anyone can rebase. `volCap` isn't a conservative mark for every book (it inflates a long-vol book's equity), so it is kept for an estimate nobody keeps up with; anyone lifts it with `syncVol`. A liquidation folds up to 8 new rounds per underlying itself and needs a current estimate (a longer backlog takes a `syncVol` first), on the bidder's account too; a withdrawal from an account with positions syncs every underlying of the account and reverts while an estimate it prices is still behind; a trade syncs every underlying of both sides, and its `equity >= IM` check counts only at current estimates; a trade syncs the traded underlying first and allows the pure-reduction exemption only at a current estimate.
+- A bad print (no positive answer, or stamped before its predecessor) is skipped: the next good round's return and time span cover it.
+- Rounds must be consecutive in the feed's current phase. Ids that are already processed are skipped, so a front-running poke can't make a keeper's batch revert. After a Chainlink phase change, `rebaseVol` moves the anchor to the new phase once the old one is exhausted; `syncAndRebaseVol` folds what is left of the old phase and rebases in the same call, so an old aggregator that keeps printing can't slip a round in between.
 
 Per-underlying floors and caps are set at listing; the test suite uses 35% to 150% for NVDA and 12% to 80% for SPY.
 
@@ -182,14 +183,15 @@ Robinhood Chain's equity feeds publish no round at the Friday close. The settlem
 
 | Proof | Condition |
 |---|---|
-| (i) Next round | The next round in the same phase exists and was printed after the close. |
+| (i) Next round | The next round in the same phase exists and was printed after the close; if the feed has moved to a later phase, that phase's first round was printed after the close too (during an aggregator migration the old phase can keep printing while the new one holds the true last print). |
 | (ii) Latest round | The hint is still the feed's latest round and the current time is strictly after the close. Any later round must print at or after now, so after the close. Requiring strictly after closes a race with a round printed in the same second as the close. |
 | (iii) Phase change | The feed moved to a new aggregator phase after the close: the hint's phase has no further round, and round 1 of the next phase was printed after the close. |
 | (iv) Fallback | Only via `settlementPriceFallback`, and only 72 hours after the close. The caller names the first round printed after the close. It is accepted when its predecessor, the last pre-close print, is older than `maxSettlementLag` or outside the band; the predecessor is found across a phase boundary if needed. The settlement price is then the first post-close print, which must be in the band. |
+| (v) Last resort | Only via `settlementPriceLastResort` (registry `settleExpiryLastResort`), and only 7 days after the close. The hint must be the last print at or before the close, proven by (i), (ii) or (iii), but without the `maxSettlementLag` bound, and in the band. It settles a feed that stopped printing before the close (and may never print again), and a stale pre-close print whose first post-close print is implausible. It is refused while the first print after the close is in the band, since (i) to (iii) or the fallback then give the price: no expiry has two valid prices. |
 
 Proof (ii) is the one used in practice: the feeds rarely print between the Friday close and Sunday 20:00 ET, so the last pre-close round is almost always still the latest one right after the close, and settlement can happen within minutes. If a post-close round does appear first, proof (i) covers it.
 
-There is no admin override. If the feed prints nothing after the close, settlement waits for its next round. If no proof can ever pass, for example a stale pre-close print followed by an implausible first post-close print, that underlying's expiry can't be settled, and the claims of that expiry stay frozen; this is the cost of having no override, and it is listed in [SECURITY.md](../SECURITY.md#known-limitations). Round ids are phase-aware (`phase << 64 | aggregatorRound`), and a round that doesn't exist reads as zeros, as on the real feeds. `SeriesRegistry` stores one settlement price per underlying and expiry, once.
+There is no admin override. If the feed prints nothing after the close, settlement waits for its next round, and 7 days after the close the last resort settles at the last pre-close print. Only a last pre-close print outside the band can still leave that underlying's expiry unsettled, and the claims of that expiry frozen, until the band is widened; this is the cost of having no override, and it is listed in [SECURITY.md](../SECURITY.md#known-limitations). Round ids are phase-aware (`phase << 64 | aggregatorRound`), and a round that doesn't exist reads as zeros, as on the real feeds. `SeriesRegistry` stores one settlement price per underlying and expiry, once.
 
 ## Settlement and the default waterfall
 
@@ -211,7 +213,7 @@ The clearinghouse keeps these properties at all times: its USDG balance covers a
 
 ## Liquidation
 
-Liquidations run in the `AuctionHouse`; its parameters live in `RiskParams`. An account becomes liquidatable when `equity < MM`. Anyone can start a Dutch auction, in which bidders take over a fraction of the account's positions, collateral and cash at a discount that grows linearly from `startDiscount` (2%) to `maxDiscount` (12%) over `auctionDuration` (30 minutes). A bid takes at most `maxFractionPerBid` (50%) unless the account is insolvent or below `dustEquity` (5 USDG). The bidder must pass its own IM check after the takeover, and `liquidationPenalty` (1%) goes to the InsuranceFund.
+Liquidations run in the `AuctionHouse`; its parameters live in `RiskParams`. An account becomes liquidatable when `equity < MM`. Anyone can start a Dutch auction, in which bidders take over a fraction of the account's positions, collateral, cash and unpaid settlement claims at a discount that grows linearly from `startDiscount` (2%) to `maxDiscount` (12%) over `auctionDuration` (30 minutes). A bid takes at most `maxFractionPerBid` (50%) unless the account is insolvent or below `dustEquity` (5 USDG). The bidder must pass its own IM check after the takeover, and `liquidationPenalty` (1%) goes to the InsuranceFund.
 
 Auctions take no bids unless every underlying of the account, collateral-only ones included, is in a REGULAR or EXTENDED session with a usable price: they pause over weekends and holidays, while an underlying is HALTED and while a feed can't be priced, so an honest account whose collateral loses its price for a while (valued at 0 in the margin) isn't sold off. The weekend shock range is wider precisely so that accounts reach Monday without a fire sale into a market with no price.
 
@@ -263,4 +265,4 @@ Global:
 | `rate` | 0% | 0% to 20% |
 | `minTradeQty` | 0.01 contracts | 0.001 to 1 |
 
-Hard-coded in the contracts and not governable: 39 scenarios, at most 256 positions and 8 underlyings per subaccount, a 90% cap on the shock range, the 72-hour settlement fallback delay and the one-hour post-change multiplier halt.
+Hard-coded in the contracts and not governable: 39 scenarios, at most 256 positions and 4 underlyings per subaccount, unpaid claims on at most 16 expiries in a liquidation bid, a 90% cap on the shock range, the 72-hour settlement fallback delay and the one-hour post-change multiplier halt.

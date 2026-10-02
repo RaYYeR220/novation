@@ -16,18 +16,24 @@ import {Session, WAD} from "../types/Types.sol";
 /// Liquidation. Anyone starts one on an account below maintenance margin. For auctionDuration
 /// the discount ramps linearly from startDiscount to maxDiscount; after that the auction is over
 /// and anyone may start a new one if the account is still liquidatable. A bid takes over a
-/// fraction of the account's book (positions, collateral, cash). If the book is worth something,
-/// the bidder pays for its share less the discount and the account pays a penalty to the
-/// InsuranceFund; if not, the fund pays the bidder to take it. The bidder must meet initial margin
-/// afterwards, and the account must not be left riskier (initial margin may not rise). The
-/// auction ends once the account is healthy again or has no positions left. A bid moves its
-/// fraction of every position.
+/// fraction of the account's book (positions, collateral, cash and unpaid settlement claims; a
+/// claim its pool can pay now is paid into the account's cash first, and both sides may hold
+/// claims on at most MAX_CLAIM_EXPIRIES expiries, see AuctionHookLogic.transferFraction). If
+/// the book is worth something, the bidder pays for its share less the discount and the account
+/// pays a penalty to the InsuranceFund; if not, the fund pays the bidder to take it. The bidder
+/// must meet initial margin afterwards, and the account must not be left riskier (initial margin
+/// may not rise). The auction ends once the account is healthy again or has no live positions
+/// left. A bid moves its fraction of every position.
 ///
-/// Gas: a 50% bid on an account at the 256-position cap (bidder receiving all 256) measures
-/// 23,221,375 gas outside the kernel: transferFraction 16.50M, three margin procedures 4.13M
-/// (without the kernel), the live-book check 2.19M, the rest 0.40M. Its three kernel calls cost
-/// about 1.66M each on the Stylus kernel (256 positions, measured on the Robinhood Chain
-/// testnet), so the whole bid is about 28.2M gas, under Arbitrum's 32M per-transaction limit.
+/// Gas: the most expensive bid the caps allow (test_gas_liquidation256_worst, measured cold) is a
+/// 50% bid on an insolvent account at the 256-position cap over 4 underlyings, collateral in all
+/// 4, unpaid claims on 16 expiries that all move and 8 unfolded rounds on every feed, into an
+/// empty bidder. It costs 19.02M gas outside the kernel: transferFraction 11.75M, the three margin
+/// procedures 6.55M without the kernel (the first one cold, 3.27M), the price checks and vol
+/// catch-up 0.58M, the rest 0.14M. With the Stylus kernel (three margin calls at 256 positions,
+/// about 1.40M each on the Robinhood Chain testnet, and four small ewmaUpdate calls) the
+/// transaction is about 23.4M gas, and about 0.2M more on mainnet's feeds: under Arbitrum's 32M
+/// per-transaction limit with room to spare.
 ///
 /// Deficit sale. The clearinghouse starts one when settlement leaves an account owing an expiry
 /// pool or the fund. Bidders buy the account's stock collateral at spot less the discount; the
@@ -37,9 +43,14 @@ import {Session, WAD} from "../types/Types.sol";
 ///
 /// No fire sales without live prices: every bid (and the start of a liquidation) needs a REGULAR
 /// or EXTENDED session and a usable price for every underlying involved, so auctions pause over
-/// weekends, holidays, halts and oracle outages, including a collateral-only token's. Nor on
-/// a book the registry hasn't priced yet: a liquidation needs a live (unexpired) position and
-/// waits while any expired series of the account awaits its settlement price.
+/// weekends, holidays, halts and oracle outages, including a collateral-only token's. Every
+/// underlying's vol must have folded the feed's latest round: a liquidation folds up to 8 new
+/// rounds itself (a longer backlog takes a syncVol first), so every liquidation is priced at the
+/// one current estimate, never at one that missed the latest prints (the first of the week's
+/// included) and never with a choice between the two. The same holds for the underlyings of the
+/// bidder's own account, which its health check after the bid prices.
+/// Nor on a book the registry hasn't priced yet: a liquidation needs a live (unexpired) position
+/// and waits while any expired series of the account awaits its settlement price.
 ///
 /// The discount clock counts market time only: the seconds inside the NYSE 24/5 window (REGULAR or
 /// EXTENDED by the calendar), not weekends or holidays. An auction that runs into a closed session
@@ -73,10 +84,14 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
     error ExceedsDeficit();
     error BidRaisesRisk(uint256 imAfter, uint256 imBefore);
     error StillLiquidatable();
+    error VolNotCurrent(address underlying);
 
     /// @dev Settlement differences this small are rounding of the marks (a few wei per position),
     /// not lots: they are dropped so that an account without cash can still be taken over.
     int256 private constant RESIDUE_DUST = 1e6;
+    /// @dev Feed rounds a liquidation folds into each underlying's vol itself (syncVolUpTo); a
+    /// longer backlog takes a syncVol first (permissionless). Bounds the bid's gas.
+    uint256 private constant LIQUIDATION_VOL_ROUNDS = 8;
 
     event DeficitSaleEnded(uint256 indexed id, uint64 indexed expiry);
 
@@ -104,8 +119,7 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
         (, bool active) = _liquidationDiscount(id, params.globals());
         if (active) revert AuctionActive();
         _requireAccountTradable(id);
-        _requireLiveBook(id);
-        if (!ch.accountState(id).liquidatable) revert NotLiquidatable();
+        if (!_liveBookState(id).liquidatable) revert NotLiquidatable();
         liquidationStartedAt[id] = uint64(block.timestamp);
         emit LiquidationStarted(id, uint64(block.timestamp));
     }
@@ -127,16 +141,16 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
         (uint256 d, bool active) = _liquidationDiscount(id, g);
         if (!active) revert AuctionNotActive();
         _requireAccountTradable(id);
-        _requireLiveBook(id);
-        AccountState memory st = ch.accountState(id);
+        AccountState memory st = _liveBookState(id);
         if (!st.liquidatable) revert NotLiquidatable();
         if (fractionWad > g.maxFractionPerBid && st.equity > uint256(g.dustEquity).toInt256()) {
             revert FractionTooLarge();
         }
 
-        (int256 value, uint256 claims) = _transferableEquity(st, id);
+        int256 value = _transferableEquity(st);
+        _requireVolsCurrent(bidderId);
         ch.transferFraction(id, bidderId, fractionWad);
-        AccountState memory moved = ch.accountState(id);
+        (AccountState memory moved, uint256 liveLeft,) = ch.liquidationState(id);
         // a bid must not leave the account riskier (e.g. take its hedges whole and few liabilities)
         if (moved.im > st.im) revert BidRaisesRisk(moved.im, st.im);
         // Positions move in whole lots (no sub-minimum lots), so the bidder can get a little more or
@@ -154,11 +168,10 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
             _settle(id, bidderId, paidWad);
             ch.chargePenalty(id, _mulWad(g.liquidationPenalty, _mulWad(fractionWad, uint256(value))));
         } else {
-            // the book is worth nothing or less: the fund pays the bidder to take its fraction, for
-            // the part of the loss the account's own claims don't cover, plus the discount on
-            // maintenance; the lot difference stays between the account and the bidder
-            int256 net = value + claims.toInt256();
-            uint256 shortfall = net < 0 ? uint256(-net) : 0;
+            // the book, its unpaid claims included, is worth nothing or less: the fund pays the
+            // bidder to take its fraction of the loss, plus the discount on maintenance; the lot
+            // difference stays between the account and the bidder
+            uint256 shortfall = uint256(-value);
             _settle(id, bidderId, extra);
             uint256 bonus = _mulWad(fractionWad, shortfall + _mulWad(d, st.mm));
             paidWad = extra - ch.insurancePay(bidderId, bonus).toInt256();
@@ -169,7 +182,7 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
         emit LiquidationBid(id, bidderId, fractionWad, paidWad, d);
         // payments only changed the account's cash: equity moves with it, margin doesn't
         int256 equityNow = moved.equity - moved.cash.toInt256() + ch.cashOf(id).toInt256();
-        if (equityNow >= moved.im.toInt256() || ch.positionsOf(id).length == 0) {
+        if (equityNow >= moved.im.toInt256() || liveLeft == 0) {
             delete liquidationStartedAt[id];
             emit LiquidationEnded(id);
         }
@@ -182,6 +195,10 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
     /// session: it only reads margin.
     function endLiquidation(uint256 id) external nonReentrant {
         if (liquidationStartedAt[id] == 0) revert AuctionNotActive();
+        address[] memory us = ch.underlyingsOf(id);
+        for (uint256 i = 0; i < us.length; ++i) {
+            try hub.syncVol(us[i]) {} catch {}
+        }
         if (ch.accountState(id).liquidatable) revert StillLiquidatable();
         delete liquidationStartedAt[id];
         emit LiquidationEnded(id);
@@ -235,6 +252,7 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
 
         ch.transferCash(bidderId, id, paidWad);
         ch.transferCollateral(id, bidderId, token, tokenWad);
+        _requireVolsCurrent(bidderId);
         ch.applyDeficitProceeds(id, expiry);
         if (social != 0) ch.repayDeficit(id);
         if (!ch.accountState(bidderId).healthy) revert BidderUnhealthy();
@@ -247,6 +265,18 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
         }
     }
 
+    /// @notice Permissionless: ends the deficit sale of (`id`, `expiry`) once the account owes
+    /// nothing more for it, neither on the expiry nor as residual socialized debt (repaid by its
+    /// own cash through repayDeficit rather than by a bid). A later deficit on the same expiry then
+    /// starts a fresh ramp instead of reusing the old start at maxDiscount.
+    function endDeficitSale(uint256 id, uint64 expiry) external nonReentrant {
+        if (saleStartedAt[id][expiry] == 0) revert SaleNotActive();
+        (, uint256 bridged, uint256 pending) = ch.deficitOf(id, expiry);
+        if (bridged + pending + ch.socializedDebtOf(id) != 0) revert ExceedsDeficit();
+        delete saleStartedAt[id][expiry];
+        emit DeficitSaleEnded(id, expiry);
+    }
+
     /// @return discountWad the current discount (it stays at maxDiscount after auctionDuration)
     /// @return active whether the sale is running
     function deficitDiscount(uint256 id, uint64 expiry) external view returns (uint256 discountWad, bool active) {
@@ -255,16 +285,12 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
 
     // ================================================================ internal
 
-    /// @dev What a takeover can move: equity before the deficit (it stays with the account, and a
-    /// payment into the account goes towards it) and without unpaid settlement claims (they stay
-    /// with the account too). Returns that value and the claims.
-    function _transferableEquity(AccountState memory st, uint256 id)
-        internal
-        view
-        returns (int256 value, uint256 claims)
-    {
-        claims = ch.claimableTotalOf(id);
-        value = st.equity + st.deficit.toInt256() - claims.toInt256();
+    /// @dev What a takeover moves: equity before the deficit (the deficit stays with the account,
+    /// and a payment into the account goes towards it). Unpaid settlement claims count at face in
+    /// equity and move with the fraction (transferFraction), so the price and the transfer agree:
+    /// a book whose claims cover its losses is solvent and the fund pays nothing for it.
+    function _transferableEquity(AccountState memory st) internal pure returns (int256) {
+        return st.equity + st.deficit.toInt256();
     }
 
     /// @dev A positive amount goes from the bidder to the account, a negative one the other way.
@@ -281,17 +307,47 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
         if (owed != 0) revert BidderInDeficit();
     }
 
-    /// @dev At least one unexpired position, and no expired series still waiting for the
-    /// registry's settlement price.
-    function _requireLiveBook(uint256 id) private view {
-        (uint256 live, uint256 awaiting) = ch.positionStatus(id);
+    /// @dev The account's state, from a pass over the book that also requires at least one
+    /// unexpired position and no expired series still waiting for the registry's settlement price.
+    function _liveBookState(uint256 id) private view returns (AccountState memory st) {
+        uint256 live;
+        uint256 awaiting;
+        (st, live, awaiting) = ch.liquidationState(id);
         if (live == 0 || awaiting != 0) revert NotLiquidatable();
     }
 
-    function _requireAccountTradable(uint256 id) private view {
+    /// @dev Every underlying of the account trades (see _requireTradable) and its vol estimate has
+    /// folded in the feed's latest round: each one folds up to LIQUIDATION_VOL_ROUNDS new rounds
+    /// first (permissionless; a longer backlog, or a failure, leaves it behind and the call
+    /// reverts VolNotCurrent until someone runs syncVol). Every liquidation is then priced at the
+    /// one current estimate: nobody can pick between it and an estimate that hasn't folded the
+    /// latest prints yet (the first of the week's included).
+    function _requireAccountTradable(uint256 id) private {
         address[] memory us = ch.underlyingsOf(id);
         for (uint256 i = 0; i < us.length; ++i) {
-            _requireTradable(us[i]);
+            address u = us[i];
+            _requireTradable(u);
+            if (!_syncVol(u)) revert VolNotCurrent(u);
+        }
+    }
+
+    /// @dev Every underlying of the bidder's own account has folded its feed's latest round (each
+    /// folds up to LIQUIDATION_VOL_ROUNDS itself), so its health check after the bid isn't priced
+    /// at an estimate that missed a print. Called on the bidder's account before a liquidation
+    /// moves the book in (whose underlyings _requireAccountTradable has already synced), and after
+    /// a deficit sale moves the token in.
+    function _requireVolsCurrent(uint256 bidderId) private {
+        address[] memory us = ch.underlyingsOf(bidderId);
+        for (uint256 i = 0; i < us.length; ++i) {
+            if (!_syncVol(us[i])) revert VolNotCurrent(us[i]);
+        }
+    }
+
+    function _syncVol(address u) private returns (bool current) {
+        try hub.syncVolUpTo(u, LIQUIDATION_VOL_ROUNDS) returns (bool c) {
+            return c;
+        } catch {
+            return false;
         }
     }
 

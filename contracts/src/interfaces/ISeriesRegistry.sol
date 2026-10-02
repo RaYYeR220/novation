@@ -12,5 +12,6 @@ interface ISeriesRegistry {
     function seriesCount() external view returns (uint32);
     function settleExpiry(address u, uint64 expiry, uint80 roundIdHint) external returns (uint256 price);
     function settleExpiryFallback(address u, uint64 expiry, uint80 firstAfterHint) external returns (uint256 price);
+    function settleExpiryLastResort(address u, uint64 expiry, uint80 roundIdHint) external returns (uint256 price); // 7 days after expiry, no lag bound
     function settlementPriceOf(address u, uint64 expiry) external view returns (uint256 price, bool settled);
 }

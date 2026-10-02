@@ -4,7 +4,8 @@ pragma solidity 0.8.30;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {CHS, CHStorage, CHErrors, Account, Deps} from "../ClearinghouseStorage.sol";
-import {Position, Series, WAD} from "../../types/Types.sol";
+import {IClearinghouse} from "../../interfaces/IClearinghouse.sol";
+import {Series, WAD, MAX_CLAIM_EXPIRIES} from "../../types/Types.sol";
 
 /// @notice The ledger moves behind the auction house: liquidation takeovers, deficit-sale
 /// payments, penalties and insurance payouts. Linked into the Clearinghouse and run against its
@@ -17,23 +18,33 @@ library AuctionHookLogic {
     ///  - every position: trunc(qty * f), adjusted to whole lots so that no side is left with a
     ///    position below minTradeQty (see _lot); the receiver must not end up with one either;
     ///  - each collateral token: floor(amount * f);
+    ///  - each unpaid settlement claim: one its pool can pay now (as claim would, pool not
+    ///    impaired) is paid into the account's cash first and moves as cash; any other moves
+    ///    floor(claim * f), so the receiver holds its share of what the account is owed along with
+    ///    its share of the book (a bid is priced on equity, and equity counts unpaid claims at
+    ///    face; a claim left behind would let a bid take liabilities the claims cover while the
+    ///    InsuranceFund pays the bidder for them). Paying a claim at face leaves equity unchanged
+    ///    (an impaired pool's would not, so those move). Both accounts must hold claims on at most
+    ///    MAX_CLAIM_EXPIRIES expiries (TooManyClaimExpiries: anyone can claim the ready ones first);
     ///  - cash: floor(cashNorm * f) of index-scaled norm, so the cash index doesn't round it.
-    /// Unpaid settlement claims and the deficit stay with `fromId`.
+    /// The deficit stays with `fromId`.
     /// Every position moves on every transfer (no window an owner could arrange its book around);
-    /// at the 256-position cap a 50% transfer costs about 16.5M gas, see AuctionHouse.
+    /// at the 256-position cap a 50% transfer into an empty account costs about 11.8M gas, see
+    /// AuctionHouse.
     function transferFraction(Deps memory d, uint256 fromId, uint256 toId, uint256 f) external {
         if (fromId == toId) revert CHErrors.SelfTrade();
         if (f == 0 || f > WAD) revert CHErrors.InvalidFraction();
         CHStorage storage $ = CHS.s();
         uint256 minQty = d.params.globals().minTradeQty;
 
-        // positions: copy first, movePosition reorders the array when a position closes
-        Position[] memory ps = $.positions[fromId];
-        for (uint256 i = 0; i < ps.length; ++i) {
-            int256 q = ps[i].qty;
+        // positions: copy the list first, movePosition reorders it when a position closes
+        uint32[] memory sids = $.positionSeries[fromId];
+        mapping(uint32 => uint256) storage pos = $.position[fromId];
+        for (uint256 i = 0; i < sids.length; ++i) {
+            uint32 sid = sids[i];
+            int256 q = CHS.qtyIn(pos[sid]);
             int256 m = _lot(q, q * int256(f) / int256(WAD), minQty);
             if (m == 0) continue;
-            uint32 sid = ps[i].seriesId;
             Series memory s = d.registry.series(sid);
             CHS.movePosition(fromId, sid, -m, s);
             (, int256 newQty) = CHS.movePosition(toId, sid, m, s);
@@ -48,6 +59,32 @@ library AuctionHookLogic {
             uint256 amt = $.collateral[fromId][toks[i]] * f / WAD;
             CHS.removeCollateral(fromId, toks[i], amt);
             CHS.addCollateral(toId, toks[i], amt);
+        }
+
+        // unpaid claims, before the cash: copy first, a claim that is paid or moves whole leaves
+        // the list
+        uint64[] memory es = $.claimExpiries[fromId];
+        if (es.length > MAX_CLAIM_EXPIRIES) revert CHErrors.TooManyClaimExpiries(fromId);
+        for (uint256 i = 0; i < es.length; ++i) {
+            uint64 e = es[i];
+            uint256 c = $.claimable[fromId][e];
+            if ($.unsettledShortQty[e] == 0 && $.pending[e] == 0 && !$.impaired[e] && $.pool[e] >= c) {
+                CHS.payClaim(fromId, e, c, c);
+                emit IClearinghouse.Claimed(fromId, e, c);
+                continue;
+            }
+            uint256 m = c * f / WAD;
+            if (m == 0) continue;
+            $.claimable[fromId][e] = c - m;
+            if (c == m) CHS.dropExpiry($.claimExpiries[fromId], e);
+            uint256 t = $.claimable[toId][e];
+            if (t == 0) {
+                $.claimExpiries[toId].push(e);
+                if ($.claimExpiries[toId].length > MAX_CLAIM_EXPIRIES) revert CHErrors.TooManyClaimExpiries(toId);
+            }
+            $.claimable[toId][e] = t + m;
+            $.claimableTotal[fromId] -= m;
+            $.claimableTotal[toId] += m;
         }
 
         // cash
@@ -92,29 +129,12 @@ library AuctionHookLogic {
         CHS.credit(toId, paid);
     }
 
-    /// @notice The account's underlyings: every registered underlying it holds as collateral or
-    /// has a position on (expired positions included until settleAccount closes them).
-    function underlyingsOf(Deps memory d, uint256 id) external view returns (address[] memory us) {
-        CHStorage storage $ = CHS.s();
-        uint256 n = d.params.underlyingCount();
-        us = new address[](n);
-        uint256 k;
-        for (uint256 i = 0; i < n; ++i) {
-            address u = d.params.underlyingAt(uint8(i));
-            if ($.positionsOn[id][u] != 0 || $.collateral[id][u] != 0) us[k++] = u;
-        }
-        assembly ("memory-safe") {
-            mstore(us, k)
-        }
-    }
-
     /// @notice live: positions whose series hasn't expired; awaiting: expired positions whose
     /// (underlying, expiry) the registry hasn't settled yet (valued on spot until it does).
     function positionStatus(Deps memory d, uint256 id) external view returns (uint256 live, uint256 awaiting) {
-        Position[] storage ps = CHS.s().positions[id];
-        uint256 n = ps.length;
-        for (uint256 i = 0; i < n; ++i) {
-            Series memory s = d.registry.series(ps[i].seriesId);
+        uint32[] memory sids = CHS.s().positionSeries[id];
+        for (uint256 i = 0; i < sids.length; ++i) {
+            Series memory s = d.registry.series(sids[i]);
             if (s.expiry > block.timestamp) {
                 ++live;
             } else {

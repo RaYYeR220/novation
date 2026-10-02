@@ -103,7 +103,12 @@ Every job can run again safely: it reads the chain and sends only what is still 
    - enough unlocked assets (`freeAssets`, which is net of the queue, above zero).
 
    A roll that would do nothing is never sent. After a roll it sent, the job waits `--roll-every` before rolling the same vault again. A vault whose cash already covers a deficit has it applied first with `repayDeficit`.
-5. **liquidation.**
+5. **syncVol.**
+   - It runs before liquidations. The auction house folds at most 8 new rounds per underlying itself and refuses a liquidation over a longer backlog (`VolNotCurrent`), so the keeper catches up first.
+   - For each underlying where the feed has a round the hub hasn't folded in, the job calls `MarketDataHub.syncVol`, which folds up to 64 rounds per call.
+   - It does nothing while an underlying is up to date, was poked within `--sync-vol-every`, or the balance is below the gas reserve.
+   - When the feed has moved to a new aggregator phase, it calls `syncAndRebaseVol`, which folds what is left of the old phase (up to 64 rounds per call) and re-anchors on the new phase in one transaction, so the old aggregator can't print in between.
+6. **liquidation.**
    - Any account below maintenance margin with a live book gets its Dutch auction started. A restart waits 6 hours per account unless a keeper bid went through since the last start. So an account nobody takes over doesn't cost a start every 30 minutes. That includes the case where the keeper can't bid, and the case where its bids keep failing in simulation.
    - Bidding is opt-in. It comes from the keeper's own subaccount (`setup`), and it is capped at 2000 USDG per bid and `--bid-cap` in total.
    - A bid goes in as soon as an auction starts, so at the start discount. It takes `maxFractionPerBid` of the book, or all of it once equity is dust. The fraction is halved while the bidder would end up below initial margin.
@@ -113,10 +118,6 @@ Every job can run again safely: it reads the chain and sends only what is still 
    - Cash that already covers a deficit, from a deposit or a claim, only counts once it is applied. The job calls `repayDeficit` before it drops the sale.
    - A repay is skipped when all that is left is a sub-unit of socialized debt, which whole-unit repays can never take. It also waits 6 hours after a repay that left the debt unchanged, and a repeat repay waits while the balance is below the gas reserve.
    - Anyone may make all of these calls.
-6. **syncVol.**
-   - For each underlying where the feed has a round the hub hasn't folded in, the job calls `MarketDataHub.syncVol`, which folds up to 64 rounds per call.
-   - It does nothing while an underlying is up to date, was poked within `--sync-vol-every`, or the balance is below the gas reserve.
-   - When the feed has moved to a new aggregator phase, it first folds what is left of the old phase with `pokeVol`, then calls `rebaseVol`.
 7. **listSeries.**
    - This job keeps the weekly grid listed for the next two weekly expiries, within the registry's `maxWeeksOut`. It skips an expiry that closes within `--min-list-tenor`.
    - The grid is a call and a put at spot × (1 ± 5/10/15/20%) on the strike step, the same grid as the seed script. That puts the nearest strikes right at the vaults' `minOtm` of 5%.

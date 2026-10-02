@@ -230,7 +230,9 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
     }
 
     /// @notice The underlying trades normally: its price is readable, plausible and fresh, the hub
-    /// doesn't report it HALTED, and its mark vol (which the vault prices and marks at) was updated
+    /// doesn't report it HALTED, the market is open (not a weekend or holiday: quotes, sell-backs,
+    /// deposits, exits and roll payouts all wait for it; queuing an exit doesn't), and its mark vol
+    /// (which the vault prices and marks at) was updated
     /// within its volStaleness and has folded in the feed's latest round. Every operation syncs
     /// the vol first (hub.syncVol), so a view can read false here while the next operation runs.
     function isLive() public view returns (bool ok) {
@@ -639,13 +641,15 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         return totalAssets() != 0;
     }
 
-    /// @dev Spot and session of the underlying; ok only if the hub reports it tradeable and its
-    /// mark vol is fresh. Never reverts.
+    /// @dev Spot and session of the underlying; ok only if the hub reports it tradeable, the market
+    /// is open (REGULAR or EXTENDED: over a weekend or holiday the price is Friday's, and selling
+    /// options, buying them back or letting LPs in and out at it would hand anyone who knows more
+    /// than that print the gap) and its mark vol is fresh. Never reverts.
     function _liveSpot() private view returns (uint256 spot, Session sess, bool ok) {
         try hub.spot(underlying) returns (uint256 p, Session ss, bool o) {
             (spot, sess, ok) = (p, ss, o);
         } catch {}
-        if (!ok) return (spot, sess, false);
+        if (!ok || sess == Session.WEEKEND || sess == Session.HOLIDAY) return (spot, sess, false);
         UnderlyingParams memory up = params.underlying(underlying);
         (,, uint80 lastId,,, uint64 lastPokeTs) = hub.volState(underlying);
         ok = uint256(lastPokeTs) + up.volStaleness >= block.timestamp && _latestRound(up.feed) == lastId;

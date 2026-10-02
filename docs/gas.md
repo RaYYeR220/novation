@@ -105,9 +105,34 @@ The kernel redeployed from the current source, same script, 2026-10-01 (parity: 
 
 ### Under the 32M transaction cap
 
-[`tools/e2e/scenario.py`](../tools/e2e/scenario.py) repeats the 256-position estimate with the gas allowance set to the chain's 32,000,000 per-transaction limit. The Stylus kernel returns 1,663,660. `KernelReference` fails with "gas required exceeds allowance (32000000)": in checked Solidity, one margin evaluation of this book can't be sent as a transaction. The result is the `gasProof` entry in [`tools/e2e/out/46630.json`](../tools/e2e/out/46630.json).
+[`tools/e2e/scenario.py`](../tools/e2e/scenario.py) repeats the 256-position estimate with the gas allowance set to the chain's 32,000,000 per-transaction limit. The Stylus kernel returns 1,672,511. `KernelReference` fails with "gas required exceeds allowance (32000000)": in checked Solidity, one margin evaluation of this book can't be sent as a transaction. The result is the `gasProof` entry in [`tools/e2e/out/46630.json`](../tools/e2e/out/46630.json).
 
 At the transaction level, fixed costs paid by both sides narrow the ratio for small books. The baseline's 32-position estimate was 3,037,754 gas including L1, 11.6x the Stylus kernel's 262,876 on the 32-position book above. At 256 positions it was 23,939,893, 14.4x the kernel's 1,664,367. The two books differ, but both hold one underlying and the same number of positions.
+
+## Worst-case liquidation bid
+
+Method: [`test_gas_liquidation256_worst`](../contracts/test/core/LiquidationGas.t.sol), a local Foundry run on mocks. The book is built in `setUp`, so the measured bid starts cold, as a real transaction does. Every kernel call is replayed against `KernelReference` to take its gas out, and the Stylus kernel's cost is added back: 1.40M per margin call at 256 positions (measured on the Robinhood Chain testnet) and 40,000 per `ewmaUpdate` call, program init included.
+
+The book is the most expensive the caps allow: a 50% bid on an insolvent account (the InsuranceFund pays the bidder) at the 256-position cap, spread over 4 underlyings with collateral in all 4, 64 underlyings registered, unpaid claims on 16 expiries whose pools can't pay yet (so they all move), 8 rounds printed on every feed since the last fold (the bid folds them), and an empty bidder, so every position, token and claim lands in fresh storage.
+
+| Part | Gas |
+|---|---|
+| `transferFraction` (positions, collateral, claims, cash) | 11,751,221 |
+| First margin procedure, cold, without the kernel (state and live-book status in one pass) | 3,274,756 |
+| Second and third margin procedures (account after, bidder), without the kernel | 3,274,241 |
+| Price checks and vol catch-up (4 underlyings, 8 rounds each), without the kernel | 577,144 |
+| Rest (bidder checks and its vol, InsuranceFund payout, discount clock) | 142,689 |
+| **Outside the kernel** | **19,020,051** |
+| Stylus kernel: 3 margin calls and 4 `ewmaUpdate` calls | 4,360,000 |
+| Intrinsic gas and calldata | 23,112 |
+| **Transaction** | **23,403,163** |
+
+On mainnet the price reads go through the Robinhood feed proxies and USDG is the real token, which adds about 0.2M (deltas measured against the mocks), so about 23.6M against Arbitrum's 32M limit. Variants measured the same way come out lower: a bidder already holding the 4 tokens (its vol syncs are no-ops, its slots aren't fresh) 23.17M; a quarter of the book expired and settled in the registry 19.11M outside the kernel, about 1.4k more per such position (a `settlementPriceOf` per pass) while each leaves the Stylus input, about 5k per margin call. What keeps it there:
+
+- at most 4 underlyings per account, kept as a list, so the bid doesn't search all 64 registered underlyings;
+- one margin pass gives the bid both the account's state and whether its book is live (`liquidationState`);
+- a position takes one storage slot per series (quantity and place in the list) plus an eighth of a slot in a packed list of series, so a bid writes one fresh slot per position into an empty bidder instead of two;
+- a bid folds at most 8 new rounds per underlying (a longer backlog takes a `syncVol` first) and takes over claims on at most 16 expiries.
 
 ## Other kernel functions
 

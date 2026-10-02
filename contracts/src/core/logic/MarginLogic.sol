@@ -74,10 +74,38 @@ library MarginLogic {
         KPosition[] ps;
         int256 settledValue;
         uint256 mmRatio;
+        uint256 live; // positions whose series hasn't expired
+        uint256 awaiting; // expired positions whose (underlying, expiry) the registry hasn't settled
+        address volBehind; // checked runs only: a priced underlying whose vol isn't current
     }
 
-    function accountState(Deps memory d, uint256 id) external view returns (AccountState memory) {
-        return _state(d, id, 0, 0, 0);
+    function accountState(Deps memory d, uint256 id) external view returns (AccountState memory st) {
+        (st,,,) = _state(d, id, 0, 0, 0, false);
+    }
+
+    /// @notice accountState that also names an underlying the margin prices whose vol estimate
+    /// hasn't folded the feed's latest round (address(0) if there is none). For the checks that let
+    /// an account take something out on its margin (a withdrawal, a trade's equity >= IM, a
+    /// bidder's health), run after syncing the account's underlyings (CHS.syncVols): an estimate
+    /// that is still behind, say the first print after a weekend gap not folded in, must not price
+    /// them, so the caller refuses or takes the stricter path.
+    function accountStateChecked(Deps memory d, uint256 id)
+        external
+        view
+        returns (AccountState memory st, address volBehind)
+    {
+        (st,,, volBehind) = _state(d, id, 0, 0, 0, true);
+    }
+
+    /// @notice accountState plus, from the same pass over the book, the positions that are live
+    /// (series not expired) and the expired ones whose (underlying, expiry) the registry hasn't
+    /// settled yet (valued on spot until it does). What a liquidation checks.
+    function liquidationState(Deps memory d, uint256 id)
+        external
+        view
+        returns (AccountState memory st, uint256 live, uint256 awaiting)
+    {
+        (st, live, awaiting,) = _state(d, id, 0, 0, 0, false);
     }
 
     /// @notice accountState as if `qtyDelta` were added to `seriesId` (a virtual position if the
@@ -86,9 +114,9 @@ library MarginLogic {
     function accountStateWith(Deps memory d, uint256 id, uint32 seriesId, int256 qtyDelta, int256 cashDelta)
         external
         view
-        returns (AccountState memory)
+        returns (AccountState memory st)
     {
-        return _state(d, id, seriesId, qtyDelta, cashDelta);
+        (st,,,) = _state(d, id, seriesId, qtyDelta, cashDelta, false);
     }
 
     /// @notice The account's collateral at spot, for the socialization dust test. Unlike the margin
@@ -128,16 +156,16 @@ library MarginLogic {
 
     /// @notice Correlated portfolio PnL per scenario (39 values) of the account's live risk.
     function scenarioGrid(Deps memory d, uint256 id) external view returns (int256[] memory) {
-        Input memory inp = _input(d, id, _book(id, 0, 0));
+        Input memory inp = _input(d, id, _book(id, 0, 0), false);
         return d.kernel.scenarioGrid(inp.p, inp.us, inp.ps);
     }
 
     // ---------------------------------------------------------------- procedure
 
-    function _state(Deps memory d, uint256 id, uint32 seriesId, int256 qtyDelta, int256 cashDelta)
+    function _state(Deps memory d, uint256 id, uint32 seriesId, int256 qtyDelta, int256 cashDelta, bool checkVol)
         private
         view
-        returns (AccountState memory st)
+        returns (AccountState memory st, uint256 live, uint256 awaiting, address volBehind)
     {
         uint256 cash = CHS.cashOf(id);
         if (cashDelta < 0) {
@@ -158,10 +186,10 @@ library MarginLogic {
             st.settledValue = claims;
             st.equity = cash.toInt256() + st.mtm + claims;
             st.healthy = true;
-            return st;
+            return (st, 0, 0, address(0));
         }
 
-        Input memory inp = _input(d, id, book);
+        Input memory inp = _input(d, id, book, checkVol);
         (KMarginOut memory out,) = d.kernel.margin(inp.p, inp.us, inp.ps);
         st.mtm = out.mtm;
         st.settledValue = inp.settledValue + claims;
@@ -171,15 +199,18 @@ library MarginLogic {
         st.worstScenario = out.worstScenario;
         st.healthy = st.equity >= st.im.toInt256();
         st.liquidatable = st.equity < st.mm.toInt256();
+        live = inp.live;
+        awaiting = inp.awaiting;
+        volBehind = inp.volBehind;
     }
 
     /// @dev Stored positions with the what-if change applied; zero quantities are dropped.
     function _book(uint256 id, uint32 seriesId, int256 qtyDelta) private view returns (Book memory b) {
         CHStorage storage $ = CHS.s();
-        Position[] storage ps = $.positions[id];
-        uint256 n = ps.length;
-        uint256 slot1 = qtyDelta == 0 ? 0 : $.posIndex[id][seriesId];
-        bool virtualNew = qtyDelta != 0 && slot1 == 0;
+        uint32[] memory sids = $.positionSeries[id];
+        mapping(uint32 => uint256) storage pos = $.position[id];
+        uint256 n = sids.length;
+        bool virtualNew = qtyDelta != 0 && pos[seriesId] == 0;
         uint256 cap = virtualNew ? n + 1 : n;
         if (cap > MAX_POSITIONS) revert CHErrors.TooManyPositions();
 
@@ -187,11 +218,11 @@ library MarginLogic {
         b.qtys = new int256[](cap);
         uint256 m;
         for (uint256 i = 0; i < n; ++i) {
-            Position memory p = ps[i];
-            int256 q = p.qty;
-            if (i + 1 == slot1) q += qtyDelta;
+            uint32 sid = sids[i];
+            int256 q = CHS.qtyIn(pos[sid]);
+            if (sid == seriesId) q += qtyDelta;
             if (q == 0) continue;
-            b.seriesIds[m] = p.seriesId;
+            b.seriesIds[m] = sid;
             b.qtys[m] = q;
             ++m;
         }
@@ -200,10 +231,10 @@ library MarginLogic {
             b.qtys[m] = qtyDelta;
             ++m;
         }
-        uint32[] memory sids = b.seriesIds;
+        uint32[] memory ids = b.seriesIds;
         int256[] memory qtys = b.qtys;
         assembly ("memory-safe") {
-            mstore(sids, m)
+            mstore(ids, m)
             mstore(qtys, m)
         }
     }
@@ -215,7 +246,11 @@ library MarginLogic {
     /// their underlying is not needed, so its oracle can't block the account). Collateral-only
     /// underlyings the hub can't price are dropped (see the library notes); the kept ones keep
     /// their relative order and the position indices are remapped onto them.
-    function _input(Deps memory d, uint256 id, Book memory book) private view returns (Input memory inp) {
+    function _input(Deps memory d, uint256 id, Book memory book, bool checkVol)
+        private
+        view
+        returns (Input memory inp)
+    {
         CHStorage storage $ = CHS.s();
         GlobalParams memory g = d.params.globals();
         inp.p = KParams({
@@ -247,6 +282,9 @@ library MarginLogic {
                     inp.settledValue += Payoff.settled(s, price, qty);
                     continue;
                 }
+                ++inp.awaiting;
+            } else {
+                ++inp.live;
             }
             uint256 ui;
             while (ui < nu && us[ui] != s.underlying) ++ui;
@@ -267,6 +305,7 @@ library MarginLogic {
         for (uint256 i = 0; i < nu; ++i) {
             (bool priced, KUnderlying memory k) = _underlying(d, us[i], $.collateral[id][us[i]], hasPosition[i]);
             if (!priced) continue;
+            if (checkVol && inp.volBehind == address(0) && !d.hub.volCurrent(us[i])) inp.volBehind = us[i];
             newIndex[i] = kept;
             kus[kept++] = k;
         }

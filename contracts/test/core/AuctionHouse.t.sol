@@ -12,14 +12,33 @@ import {IRiskParams} from "../../src/interfaces/IRiskParams.sol";
 import {IMarketDataHub} from "../../src/interfaces/IMarketDataHub.sol";
 import {FixedPointMath as F} from "../../src/libraries/FixedPointMath.sol";
 import {NyseCalendar} from "../../src/libraries/NyseCalendar.sol";
-import {Position, Session} from "../../src/types/Types.sol";
+import {Position, Session, MAX_CLAIM_EXPIRIES} from "../../src/types/Types.sol";
 import {console2} from "forge-std/console2.sol";
 
-/// @notice Test-only. Etched over the clearinghouse for one call to set an account's total of
-/// unpaid claims (no per-expiry claim, no pool).
+/// @notice Test-only. Etched over the clearinghouse for one call to give an account an unpaid
+/// claim on an expiry (the claim books only: no pool behind it).
 contract SettlementSeeder {
-    function setClaimableTotal(uint256 id, uint256 wad) external {
-        CHS.s().claimableTotal[id] = wad;
+    function setClaim(uint256 id, uint64 expiry, uint256 wad) external {
+        CHStorage storage $ = CHS.s();
+        if ($.claimable[id][expiry] == 0) $.claimExpiries[id].push(expiry);
+        $.claimable[id][expiry] += wad;
+        $.claimableTotal[id] += wad;
+        $.totalClaimable[expiry] += wad;
+    }
+
+    /// @dev Sets the account's cash (cash index 1e18), keeping the total in step.
+    function setCash(uint256 id, uint256 wad) external {
+        CHStorage storage $ = CHS.s();
+        $.totalCashNorm = $.totalCashNorm - $.accounts[id].cashNorm + wad;
+        $.accounts[id].cashNorm = wad;
+    }
+
+    function dropClaim(uint256 id, uint64 expiry, uint256 wad) external {
+        CHStorage storage $ = CHS.s();
+        $.claimable[id][expiry] -= wad;
+        if ($.claimable[id][expiry] == 0) CHS.dropExpiry($.claimExpiries[id], expiry);
+        $.claimableTotal[id] -= wad;
+        $.totalClaimable[expiry] -= wad;
     }
 }
 
@@ -685,7 +704,7 @@ contract AuctionHouseTest is Fixture {
 
         // past the close, before the registry has the settlement price
         vm.warp(e1 + 60);
-        (uint256 live, uint256 awaiting) = ch.positionStatus(a);
+        (uint256 live, uint256 awaiting) = _status(a);
         assertEq(live, 1);
         assertEq(awaiting, 1);
         vm.prank(carol);
@@ -697,58 +716,550 @@ contract AuctionHouseTest is Fixture {
         // settled: the live book can be bid on, the expired-only one goes through settleAccount
         uint80 rid = feedOf[address(nvda)].pushRound(int256(100e8), e1);
         registry.settleExpiry(address(nvda), e1, rid);
-        (live, awaiting) = ch.positionStatus(a);
+        (live, awaiting) = _status(a);
         assertEq(awaiting, 0);
         vm.prank(carol);
         ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
         assertTrue(ch.accountState(dead).liquidatable);
-        (live, awaiting) = ch.positionStatus(dead);
+        (live, awaiting) = _status(dead);
         assertEq(live + awaiting, 0);
         vm.expectRevert(AuctionHouse.NotLiquidatable.selector);
         ah.startLiquidation(dead);
     }
 
-    /// Unpaid settlement claims count in equity but stay with the account (a claim belongs to its
-    /// expiry pool entry, transferFraction doesn't move it): the bidder pays only for the rest.
-    function test_claimsStayWithAccount() public {
+    /// Unpaid settlement claims count in equity and move with the fraction: the bidder pays for
+    /// its share of them and holds that share afterwards.
+    function test_claimsMoveWithTheFraction() public {
         uint256 a = _liquidatable();
         uint256 c = _fund(carol, 10_000 * USDG, 0);
-        _cheatClaimableTotal(a, 20e18);
+        _cheatClaim(a, e1, 20e18 + 1);
         AccountState memory st = ch.accountState(a);
         assertTrue(st.liquidatable);
         ah.startLiquidation(a);
 
-        int256 transferable = st.equity + int256(st.deficit) - 20e18;
-        assertGt(transferable, 0);
-        uint256 pay = F.mulWadUp(F.mulWadUp(0.5e18, uint256(transferable)), 0.98e18);
+        int256 value = st.equity + int256(st.deficit); // the claim included
+        uint256 pay = F.mulWadUp(F.mulWadUp(0.5e18, uint256(value)), 0.98e18);
         vm.prank(carol);
         assertEq(ah.bidLiquidation(a, 0.5e18, c, int256(pay)), int256(pay));
-        assertEq(ch.claimableTotalOf(a), 20e18);
-        assertEq(ch.claimableTotalOf(c), 0);
+        assertEq(ch.claimable(c, e1), 10e18); // floor(claim * f)
+        assertEq(ch.claimable(a, e1), 10e18 + 1);
+        assertEq(ch.claimableTotalOf(a), 10e18 + 1);
+        assertEq(ch.claimableTotalOf(c), 10e18);
+        assertEq(ch.claimExpiriesOf(c).length, 1);
+        assertEq(ch.claimExpiriesOf(a).length, 1);
     }
 
-    /// A book worth less than nothing next to a claim: the fund only covers what the claim doesn't.
-    function test_claimsReduceInsuranceBonus() public {
+    /// A liquidation folds up to eight new feed rounds per underlying into the vol itself; a longer
+    /// backlog must be folded first (syncVol, permissionless), which bounds a bid's gas.
+    function test_liquidationVolBacklogBounded() public {
+        (uint256 a,) = _shortPuts(520 * USDG);
+        hub.syncVol(address(nvda));
+        for (uint256 i; i < 9; ++i) {
+            _setPrice(address(nvda), 150e18);
+        }
+        assertTrue(ch.accountState(a).liquidatable);
+        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.VolNotCurrent.selector, address(nvda)));
+        ah.startLiquidation(a);
+        hub.syncVol(address(nvda));
+        for (uint256 i; i < 8; ++i) {
+            _setPrice(address(nvda), 150e18);
+        }
+        ah.startLiquidation(a);
+        assertTrue(hub.volCurrent(address(nvda)));
+    }
+
+    /// A bid takes over claims on at most MAX_CLAIM_EXPIRIES expiries, on both sides: a longer
+    /// list must first be cut by claiming the ready ones (permissionless), which bounds the bid's
+    /// gas; a bidder already holding that many takes no claim on a further expiry.
+    function test_bidClaimExpiriesCapped() public {
+        uint256 a = _liquidatable();
+        uint256 c = _fund(carol, 10_000 * USDG, 0);
+        uint64 e = e1;
+        for (uint256 i; i < MAX_CLAIM_EXPIRIES + 1; ++i) {
+            _cheatClaim(a, e, 1e18); // no pool behind it: blocked, it moves
+            e -= 7 days;
+        }
+        ah.startLiquidation(a);
+        uint256 snap = vm.snapshotState();
+        vm.prank(carol);
+        vm.expectRevert(abi.encodeWithSelector(CHErrors.TooManyClaimExpiries.selector, a));
+        ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
+
+        // sixteen move, but not into a bidder that would then hold claims on more than sixteen
+        vm.revertToState(snap);
+        _cheatClaimPaid(a, e1, 1e18);
+        assertEq(ch.claimExpiriesOf(a).length, MAX_CLAIM_EXPIRIES);
+        _cheatClaim(c, e - 7 days, 1e18);
+        vm.prank(carol);
+        vm.expectRevert(abi.encodeWithSelector(CHErrors.TooManyClaimExpiries.selector, c));
+        ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
+        uint256 c2 = _fund(carol, 10_000 * USDG, 0);
+        vm.prank(carol);
+        ah.bidLiquidation(a, 0.5e18, c2, type(int256).max);
+        assertEq(ch.claimExpiriesOf(c2).length, MAX_CLAIM_EXPIRIES);
+    }
+
+    /// A book worth less than nothing even with its claim: the fund covers the rest of the loss of
+    /// the bidder's fraction plus the discount on maintenance, and the claim's share moves.
+    function test_claimsCountInTheBook() public {
         (uint256 a,) = _shortPuts(520 * USDG);
         usdg.mint(address(insurance), 1_000 * USDG);
         _setPrice(address(nvda), 90e18);
         uint256 c = _fund(carol, 10_000 * USDG, 0);
-        _cheatClaimableTotal(a, 300e18);
+        _cheatClaim(a, e1, 100e18);
         AccountState memory st = ch.accountState(a);
         assertTrue(st.liquidatable);
         ah.startLiquidation(a);
 
-        int256 transferable = st.equity + int256(st.deficit) - 300e18;
-        assertLt(transferable, 0);
-        int256 net = transferable + 300e18; // book plus claim
-        uint256 shortfall = net < 0 ? uint256(-net) : 0;
-        uint256 bonus = _mw(0.5e18, shortfall + _mw(0.02e18, st.mm));
+        int256 value = st.equity + int256(st.deficit); // the claim included
+        assertLt(value, 0);
+        uint256 bonus = _mw(0.5e18, uint256(-value) + _mw(0.02e18, st.mm));
         int256 paid = -int256(bonus / USDG_SCALE * USDG_SCALE);
         vm.prank(carol);
         assertEq(ah.bidLiquidation(a, 0.5e18, c, 0), paid);
-        assertEq(ch.claimableTotalOf(a), 300e18);
-        // never more than the uncovered shortfall plus the discount on maintenance margin
-        assertLe(uint256(-paid), _mw(0.5e18, uint256(-transferable) + _mw(0.02e18, st.mm)));
+        assertEq(ch.claimableTotalOf(a), 50e18);
+        assertEq(ch.claimableTotalOf(c), 50e18);
+    }
+
+    /// Review PoC: an owner holds an unpaid claim, writes puts against it, takes its cash out and
+    /// lets the account be liquidated by its own bidder. With the claim left behind, the fund paid
+    /// the bidder a discount on a book the claim covered. Now the claim counts in the book and goes
+    /// with the fraction (this one is ready: the bid pays it into the account's cash, half of which
+    /// moves): the book is solvent, the bidder pays for it and the fund pays nothing.
+    function test_claimBackedBookCantDrainFund() public {
+        address att = _user("att");
+        uint256 a = _fund(att, 100 * USDG, 0);
+        uint256 l = _fund(att, 10_000 * USDG, 0);
+        uint256 b = _fund(att, 10_000 * USDG, 0);
+        usdg.mint(address(insurance), 10_000 * USDG);
+        uint32 c180 = _list(address(nvda), e1, 180e18, true);
+        _trade(a, att, l, att, c180, 10e18, 20e18); // A long 10 e1 calls
+        vm.warp(e1 + 60);
+        _settleExpiry(address(nvda), e1, 260e18);
+        _setPrice(address(nvda), 180e18);
+        ch.settleAccount(a, e1);
+        ch.settleAccount(l, e1);
+        assertEq(ch.claimable(a, e1), 800e18); // never collected
+
+        // A writes puts against the claim and withdraws its cash
+        _trade(l, att, a, att, put170, 10e18, 1e18);
+        uint256 cashUnits = ch.cashOf(a) / USDG_SCALE;
+        vm.prank(att);
+        ch.withdraw(a, address(usdg), cashUnits, att);
+        assertTrue(ch.accountState(a).healthy);
+
+        _setPrice(address(nvda), 130e18);
+        assertTrue(ch.accountState(a).liquidatable);
+        int256 before = _attackerTotal(att, a, l, b);
+        uint256 fund0 = usdg.balanceOf(address(insurance));
+        ah.startLiquidation(a);
+        vm.warp(vm.getBlockTimestamp() + 1800); // the full discount
+        _setPrice(address(nvda), 130e18);
+        uint256 cashA = ch.cashOf(a);
+        uint256 cashB = ch.cashOf(b);
+        vm.prank(att);
+        int256 paid = ah.bidLiquidation(a, 0.5e18, b, type(int256).max);
+
+        assertGt(paid, 0); // the bidder pays for a solvent book
+        assertGe(usdg.balanceOf(address(insurance)), fund0); // the fund pays nothing (a penalty in)
+        // the claim was paid into A's cash, and half of that cash moved
+        assertEq(ch.claimable(a, e1), 0);
+        assertEq(ch.claimable(b, e1), 0);
+        assertEq(ch.claimExpiriesOf(a).length, 0);
+        assertEq(ch.claimExpiriesOf(b).length, 0);
+        assertEq(int256(ch.cashOf(b)), int256(cashB + (cashA + 800e18) / 2) - paid);
+        assertLe(_attackerTotal(att, a, l, b), before);
+    }
+
+    /// The one-transaction variant at a Friday close: settle the expiry, turn the account's
+    /// payoff into a claim (its pool isn't ready yet, so nobody can claim it), start the auction
+    /// and bid at once. The claim moves with the bid all the same.
+    function test_claimBackedBookAtTheCloseCantDrainFund() public {
+        address att = _user("att");
+        uint256 a = _fund(att, 2_000 * USDG, 0);
+        uint256 l = _fund(att, 10_000 * USDG, 0);
+        uint256 b = _fund(att, 10_000 * USDG, 0);
+        usdg.mint(address(insurance), 10_000 * USDG);
+        uint32 c180 = _list(address(nvda), e1, 180e18, true);
+        _trade(a, att, l, att, c180, 10e18, 20e18);
+        _trade(l, att, a, att, put170, 10e18, 1e18); // margined by A's cash before the close
+
+        // at the close, in one go: settle, turn A's payoff into a claim, take the cash out
+        vm.warp(e1 + 1);
+        _settleExpiry(address(nvda), e1, 260e18);
+        _setPrice(address(nvda), 260e18);
+        ch.settleAccount(a, e1); // L's short is still open: the claim can't be paid out yet
+        vm.expectRevert(CHErrors.PoolNotReady.selector);
+        ch.claim(a, e1);
+        uint256 cashUnits = ch.cashOf(a) / USDG_SCALE;
+        vm.prank(att);
+        ch.withdraw(a, address(usdg), cashUnits, att);
+        uint256 px = 130e18; // a drop that makes A liquidatable
+        _setPrice(address(nvda), px);
+        while (!ch.accountState(a).liquidatable) {
+            px -= 5e18;
+            _setPrice(address(nvda), px);
+        }
+        uint256 fund0 = usdg.balanceOf(address(insurance));
+        int256 before = _attackerTotal(att, a, l, b);
+        ah.startLiquidation(a);
+        vm.prank(att);
+        ah.bidLiquidation(a, 0.5e18, b, type(int256).max);
+        assertGe(usdg.balanceOf(address(insurance)), fund0);
+        assertEq(ch.claimable(b, e1), ch.claimable(a, e1));
+        assertLe(_attackerTotal(att, a, l, b), before);
+    }
+
+    // ================================================================ vol at the weekly reopen
+
+    uint256 constant FRI_1930_EDT = 1_790_379_000; // 2026-09-25 19:30 EDT: the week's last print
+    uint256 constant SUN_1959_EDT = 1_790_553_540; // 2026-09-27 19:59 EDT: still the weekend
+    uint256 constant SUN_2001_EDT = 1_790_553_660; // 2026-09-27 20:01 EDT: just after the reopen
+
+    /// Review PoC (A, H-1; C, F-1 PoC 1): the vol estimate went stale over the weekend (no round
+    /// for 48 hours), so at the reopen every option was marked at volCap until someone folded the
+    /// first print, and a liquidator could start and bid on a healthy short book in that window.
+    /// The estimate is now stale only once a printed round has waited unfolded for volStaleness,
+    /// so the reopen print keeps it; and should nobody fold for that long, a liquidation folds
+    /// every underlying first: the book is valued at its real vol.
+    function test_reopenDoesNotLiquidateAtVolCap() public {
+        _calmNvdaVol();
+        uint256 a = _fund(alice, 280 * USDG, 0);
+        uint256 b = _fund(bob, 10_000 * USDG, 0);
+        _trade(a, alice, b, bob, put170, -10e18, 5e18);
+        uint256 c = _fund(carol, 10_000 * USDG, 0);
+
+        vm.warp(FRI_1930_EDT);
+        _setPrice(address(nvda), 180e18);
+        hub.syncVol(address(nvda));
+        AccountState memory fri = ch.accountState(a);
+        assertGe(fri.equity, 2 * int256(fri.im));
+
+        // Sunday before the reopen: 48 hours without a round, the estimate is still current
+        vm.warp(SUN_1959_EDT);
+        assertEq(hub.markVol(address(nvda)), 0.35e18);
+
+        // the first print of the week, at the same price, not folded yet: still the estimate
+        vm.warp(SUN_2001_EDT);
+        _setPrice(address(nvda), 180e18);
+        assertFalse(hub.volCurrent(address(nvda)));
+        assertEq(hub.markVol(address(nvda)), 0.35e18);
+        assertTrue(ch.accountState(a).healthy);
+        vm.expectRevert(AuctionHouse.NotLiquidatable.selector);
+        ah.startLiquidation(a);
+
+        // nobody folds it for volStaleness (48 hours): the view falls back to volCap, a
+        // liquidation folds it in first, and then the book is healthy
+        _printUnfoldedFor48Hours(180e18);
+        assertEq(hub.markVol(address(nvda)), 1.5e18);
+        assertTrue(ch.accountState(a).liquidatable);
+        vm.expectRevert(AuctionHouse.NotLiquidatable.selector);
+        ah.startLiquidation(a);
+        hub.syncVol(address(nvda));
+        assertTrue(ch.accountState(a).healthy);
+        vm.prank(carol);
+        vm.expectRevert(AuctionHouse.AuctionNotActive.selector);
+        ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
+    }
+
+    /// Review PoC (C, F-1 PoC 2): the self-liquidation drain at the reopen. An account margined at
+    /// 1.15x IM at its real vol reads deeply negative at volCap; its owner's own bidder took 100%
+    /// of it and the fund paid the bidder. The reopen print now keeps the estimate, and where the
+    /// view does read volCap (a print left unfolded for 48 hours) the liquidation values the book
+    /// at the real vol.
+    function test_reopenSelfLiquidationCantDrainFund() public {
+        _calmNvdaVol();
+        uint64 far = e2;
+        for (uint256 i; i < 3; ++i) {
+            far = uint64(NyseCalendar.nextWeeklyExpiry(far));
+        }
+        uint32 put125 = _list(address(nvda), far, 125e18, false);
+        address att = _user("att");
+        uint256 a = _fund(att, 3_000 * USDG, 0);
+        uint256 cc = _fund(att, 10_000 * USDG, 0);
+        uint256 b = _fund(att, 10_000 * USDG, 0);
+        usdg.mint(address(insurance), 5_000 * USDG);
+        _trade(a, att, cc, att, put125, -100e18, 50e18);
+        AccountState memory st = ch.accountState(a);
+        uint256 keep = uint256(st.equity - int256(st.im * 115 / 100)) / USDG_SCALE;
+        vm.prank(att);
+        ch.withdraw(a, address(usdg), keep, att);
+
+        vm.warp(FRI_1930_EDT);
+        _setPrice(address(nvda), 180e18);
+        hub.syncVol(address(nvda));
+        assertTrue(ch.accountState(a).healthy);
+
+        vm.warp(SUN_2001_EDT);
+        _setPrice(address(nvda), 180e18);
+        assertTrue(ch.accountState(a).healthy); // the estimate, not volCap
+        _printUnfoldedFor48Hours(180e18);
+        assertLt(ch.accountState(a).equity, 0); // at volCap marks
+        uint256 fund0 = usdg.balanceOf(address(insurance));
+        vm.prank(att);
+        vm.expectRevert(AuctionHouse.NotLiquidatable.selector);
+        ah.startLiquidation(a);
+        assertEq(usdg.balanceOf(address(insurance)), fund0);
+        hub.syncVol(address(nvda)); // the reverted call's sync is undone with it
+        assertTrue(ch.accountState(a).healthy);
+        b;
+    }
+
+    /// Review PoC (A, H-1 impact B): in the stale window an underwater account bought back its
+    /// far out-of-the-money shorts "at mark", the volCap mark, paying value to a colluder while the
+    /// pure-reduction rule saw equity unchanged. The window now needs a print left unfolded for
+    /// 48 hours, and a trade folds the traded underlying's vol first, so the buyback is priced
+    /// against the real mark and refused.
+    function test_reopenBuybackAtStaleMarkRefused() public {
+        _calmNvdaVol();
+        uint256 a = _fund(alice, 280 * USDG, 0);
+        uint256 d = _fund(dave, 10_000 * USDG, 0);
+        _trade(a, alice, d, dave, put170, -10e18, 5e18);
+        _trade(a, alice, d, dave, put150, -30e18, 3e18);
+
+        vm.warp(FRI_1930_EDT);
+        _setPrice(address(nvda), 160e18);
+        hub.syncVol(address(nvda));
+
+        vm.warp(SUN_2001_EDT);
+        _setPrice(address(nvda), 160e18);
+        _printUnfoldedFor48Hours(160e18); // not folded for 48 hours: the view marks at volCap
+        AccountState memory pre = ch.accountState(a);
+        AccountState memory post = ch.marginAfter(a, put150, 30e18, 0);
+        uint256 staleMark = uint256(post.mtm - pre.mtm); // 30 puts at the volCap mark
+        vm.expectPartialRevert(CHErrors.InsufficientMargin.selector);
+        _trade(a, alice, d, dave, put150, 30e18, staleMark);
+
+        // at the real mark alice is underwater: the stale price would have handed dave the gap
+        hub.syncVol(address(nvda));
+        AccountState memory fair = ch.accountState(a);
+        assertFalse(fair.healthy);
+        uint256 fairMark = uint256(ch.marginAfter(a, put150, 30e18, 0).mtm - fair.mtm);
+        assertGt(staleMark, fairMark);
+    }
+
+    /// Review PoC (A, R-1): volCap is not conservative for a long-vol book, it inflates its equity.
+    /// With the reopen print not yet folded the view used to mark NVDA at volCap, and an owner long
+    /// NVDA straddles (short SPY straddles) withdrew far more than its margin allowed at the real
+    /// vol. The reopen print now keeps the estimate: the withdrawal is capped at what the account
+    /// could take with NVDA folded in.
+    function test_reopenWithdrawCappedAtFairMargin() public {
+        uint32 nc = _list(address(nvda), e2, 180e18, true);
+        uint32 np = _list(address(nvda), e2, 180e18, false);
+        uint32 sc = _list(address(spy), e2, 600e18, true);
+        uint32 sp = _list(address(spy), e2, 600e18, false);
+        _calmVols();
+        uint256 a = _fund(alice, 400_000 * USDG, 0);
+        uint256 d = _fund(dave, 10_000_000 * USDG, 0);
+        _tradeAtMark(a, d, nc, 2_000e18);
+        _tradeAtMark(a, d, np, 2_000e18);
+        _tradeAtMark(a, d, sc, -400e18);
+        _tradeAtMark(a, d, sp, -400e18);
+
+        vm.warp(FRI_1930_EDT);
+        _setPrice(address(nvda), 180e18);
+        _setPrice(address(spy), 600e18);
+        hub.syncVol(address(nvda));
+        hub.syncVol(address(spy));
+
+        // Sunday 20:01: SPY printed and folded, NVDA printed and not folded yet
+        vm.warp(SUN_2001_EDT);
+        _setPrice(address(spy), 600e18);
+        hub.syncVol(address(spy));
+        _setPrice(address(nvda), 180e18);
+        assertFalse(hub.volCurrent(address(nvda)));
+        assertFalse(hub.volStale(address(nvda)));
+        AccountState memory stale = ch.accountState(a);
+
+        uint256 snap = vm.snapshotState();
+        hub.syncVol(address(nvda));
+        AccountState memory fair = ch.accountState(a);
+        vm.revertToState(snap);
+        uint256 fairMax = uint256(fair.equity - int256(fair.im)) / USDG_SCALE;
+        assertLe(stale.equity - int256(stale.im), fair.equity - int256(fair.im));
+
+        vm.prank(alice);
+        vm.expectPartialRevert(CHErrors.InsufficientMargin.selector);
+        ch.withdraw(a, address(usdg), fairMax + 1, alice);
+        vm.prank(alice);
+        ch.withdraw(a, address(usdg), fairMax, alice);
+        hub.syncVol(address(nvda));
+        assertTrue(ch.accountState(a).healthy);
+        assertFalse(ch.accountState(a).liquidatable);
+    }
+
+    /// Review PoC (A, R2-M1): the EWMA counts a weekend gap with its real time span, so folding the
+    /// first print after a 10% gap (180 -> 198) lifts NVDA's estimate from 0.35 to about 0.9. A
+    /// short-vega book that withdrew before anyone folded that print was margined at 0.35. A
+    /// withdrawal now syncs every underlying of the account first: it is capped at what the folded
+    /// vol allows.
+    function test_reopenGapWithdrawCappedAtFoldedVol() public {
+        (uint256 a, uint32 sp) = _shortVegaAtReopenGap();
+        AccountState memory stale = ch.accountState(a); // the view: the gap print not folded in
+        uint256 snap = vm.snapshotState();
+        hub.syncVol(address(nvda));
+        uint256 folded = hub.markVol(address(nvda));
+        AccountState memory fair = ch.accountState(a);
+        vm.revertToState(snap);
+        assertGt(folded, 0.85e18);
+        int256 staleRoom = stale.equity - int256(stale.im);
+        int256 fairRoom = fair.equity - int256(fair.im);
+        assertGt(staleRoom, fairRoom + 10_000e18); // what the pre-fold estimate would have let out
+        uint256 fairMax = uint256(fairRoom) / USDG_SCALE;
+
+        vm.prank(alice);
+        vm.expectPartialRevert(CHErrors.InsufficientMargin.selector);
+        ch.withdraw(a, address(usdg), fairMax + 1, alice);
+        vm.prank(alice);
+        ch.withdraw(a, address(usdg), fairMax, alice);
+        assertTrue(hub.volCurrent(address(nvda))); // the withdrawal folded the gap print in
+        assertEq(hub.markVol(address(nvda)), folded);
+        assertTrue(ch.accountState(a).healthy);
+        sp;
+    }
+
+    /// The same book trading: a trade folds every underlying of both sides first, so an opening
+    /// trade on SPY is checked at NVDA's folded vol, under which the book is below initial margin.
+    function test_reopenGapOpeningTradeCheckedAtFoldedVol() public {
+        (uint256 a, uint32 sp) = _shortVegaAtReopenGap();
+        // leave the book healthy at the pre-fold estimate and short of IM at the folded one
+        AccountState memory stale = ch.accountState(a);
+        uint256 snap = vm.snapshotState();
+        hub.syncVol(address(nvda));
+        AccountState memory fair = ch.accountState(a);
+        vm.revertToState(snap);
+        int256 staleRoom = stale.equity - int256(stale.im);
+        int256 gap = staleRoom - (fair.equity - int256(fair.im));
+        uint256 cut = uint256(staleRoom - gap / 2) / USDG_SCALE;
+        uint256 d = ch.subaccountsOf(dave)[0];
+        _setCash(a, ch.cashOf(a) - cut * USDG_SCALE);
+        assertTrue(ch.accountState(a).healthy);
+
+        // a small opening SPY short at mark passes in the view, not in the trade
+        int256 premium = ch.accountState(a).mtm - ch.marginAfter(a, sp, -1e18, 0).mtm;
+        AccountState memory what = ch.marginAfter(a, sp, -1e18, premium);
+        assertTrue(what.healthy);
+        vm.expectPartialRevert(CHErrors.InsufficientMargin.selector);
+        _trade(a, alice, d, dave, sp, -1e18, uint256(premium));
+        hub.syncVol(address(nvda));
+        assertFalse(ch.accountState(a).healthy);
+    }
+
+    /// A bid also folds the bidder's own underlyings before its health check (here SPY, which the
+    /// auctioned NVDA book doesn't hold), up to eight rounds each; a longer backlog takes a
+    /// syncVol first.
+    function test_bidSyncsTheBiddersOwnVols() public {
+        uint256 a = _liquidatable();
+        uint256 c = _fund(carol, 10_000 * USDG, 0);
+        uint256 d = _fund(dave, 100_000 * USDG, 0);
+        uint32 sp = _list(address(spy), e2, 600e18, false);
+        _trade(c, carol, d, dave, sp, -1e18, 30e18); // carol's own SPY short
+        ah.startLiquidation(a);
+        for (uint256 i; i < 9; ++i) {
+            _setPrice(address(spy), 600e18);
+        }
+        vm.prank(carol);
+        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.VolNotCurrent.selector, address(spy)));
+        ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
+        hub.syncVol(address(spy));
+        _setPrice(address(spy), 600e18);
+        assertFalse(hub.volCurrent(address(spy)));
+        vm.prank(carol);
+        ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
+        assertTrue(hub.volCurrent(address(spy)));
+    }
+
+    /// A withdrawal reverts rather than price its margin at an estimate it can't bring up to
+    /// date: here NVDA's feed has moved to a new aggregator, which syncVol can't follow until
+    /// syncAndRebaseVol.
+    function test_withdrawRefusedWhileVolBehind() public {
+        (uint256 a,) = _shortPuts(5_000 * USDG);
+        feedOf[address(nvda)].setPhase(2);
+        _setPrice(address(nvda), 180e18);
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(CHErrors.VolNotCurrent.selector, address(nvda)));
+        ch.withdraw(a, address(usdg), 1 * USDG, alice);
+        hub.syncAndRebaseVol(address(nvda));
+        vm.prank(alice);
+        ch.withdraw(a, address(usdg), 1 * USDG, alice);
+    }
+
+    /// @dev Calm vols; alice (400k USDG) short 2,000 NVDA 180 straddles to dave at mark; Friday's
+    /// last print 180, folded; Sunday 20:01 the first print is 198 (a 10% gap), not folded. Returns
+    /// alice's account and a listed SPY put.
+    function _shortVegaAtReopenGap() internal returns (uint256 a, uint32 sp) {
+        uint32 nc = _list(address(nvda), e2, 180e18, true);
+        uint32 np = _list(address(nvda), e2, 180e18, false);
+        sp = _list(address(spy), e2, 600e18, false);
+        _calmVols();
+        a = _fund(alice, 400_000 * USDG, 0);
+        uint256 d = _fund(dave, 10_000_000 * USDG, 0);
+        _tradeAtMark(a, d, nc, -2_000e18);
+        _tradeAtMark(a, d, np, -2_000e18);
+
+        vm.warp(FRI_1930_EDT);
+        _setPrice(address(nvda), 180e18);
+        _setPrice(address(spy), 600e18);
+        hub.syncVol(address(nvda));
+        hub.syncVol(address(spy));
+
+        vm.warp(SUN_2001_EDT);
+        _setPrice(address(spy), 600e18);
+        hub.syncVol(address(spy));
+        _setPrice(address(nvda), 198e18);
+        assertFalse(hub.volCurrent(address(nvda)));
+        assertEq(hub.markVol(address(nvda)), 0.35e18);
+    }
+
+    /// @dev `qty` of `sid` between `a` (taker) and `d` at the account's mark.
+    function _tradeAtMark(uint256 a, uint256 d, uint32 sid, int256 qty) internal {
+        int256 delta = ch.marginAfter(a, sid, qty, 0).mtm - ch.accountState(a).mtm;
+        uint256 premium = uint256(delta >= 0 ? delta : -delta);
+        _trade(a, alice, d, dave, sid, qty, premium);
+    }
+
+    /// @dev The NVDA reopen print (already pushed) left unfolded for volStaleness: another print
+    /// 48 hours later keeps the feed fresh while the oldest unfolded round has aged out.
+    function _printUnfoldedFor48Hours(uint256 px) internal {
+        vm.warp(vm.getBlockTimestamp() + 2 days + 1);
+        _setPrice(address(nvda), px);
+        assertTrue(hub.volStale(address(nvda)));
+    }
+
+    /// @dev 400 flat NVDA and SPY prints five minutes apart, folded: both at their vol floor.
+    function _calmVols() internal {
+        uint256 t = vm.getBlockTimestamp();
+        for (uint256 i = 1; i <= 400; ++i) {
+            vm.warp(t + i * 5 minutes);
+            _setPrice(address(nvda), 180e18);
+            _setPrice(address(spy), 600e18);
+            if (i % 64 == 0) {
+                hub.syncVol(address(nvda));
+                hub.syncVol(address(spy));
+            }
+        }
+        hub.syncVol(address(nvda));
+        hub.syncVol(address(spy));
+        assertEq(hub.markVol(address(nvda)), 0.35e18);
+        assertEq(hub.markVol(address(spy)), 0.12e18);
+    }
+
+    /// @dev 400 flat NVDA prints five minutes apart, folded: the EWMA vol falls to the 35% floor.
+    function _calmNvdaVol() internal {
+        uint256 t = vm.getBlockTimestamp();
+        for (uint256 i = 1; i <= 400; ++i) {
+            vm.warp(t + i * 5 minutes);
+            _setPrice(address(nvda), 180e18);
+            if (i % 64 == 0) hub.syncVol(address(nvda));
+        }
+        hub.syncVol(address(nvda));
+        assertEq(hub.markVol(address(nvda)), 0.35e18);
+    }
+
+    /// @dev What `att` holds: the three accounts' equity and its wallet's USDG.
+    function _attackerTotal(address att, uint256 a, uint256 l, uint256 b) internal view returns (int256) {
+        return ch.accountState(a).equity + ch.accountState(l).equity + ch.accountState(b).equity
+            + int256(usdg.balanceOf(att) * USDG_SCALE);
     }
 
     /// Gas of a 50% bid on an account at the 256-position cap, end to end (gate, book check, three
@@ -1111,6 +1622,30 @@ contract AuctionHouseTest is Fixture {
         _assertBacked(_ids(d, c, 0));
     }
 
+    /// A debt repaid by the account's own cash (repayDeficit), not by a bid, leaves the sale's start
+    /// behind; anyone can end that sale once nothing is owed, so a later deficit on the same expiry
+    /// starts a fresh ramp.
+    function test_deficitSaleEndedAfterRepayment() public {
+        uint256 d = _deficitAccount(300e18, 500e18);
+        vm.expectRevert(AuctionHouse.ExceedsDeficit.selector);
+        ah.endDeficitSale(d, e1);
+        vm.expectRevert(AuctionHouse.SaleNotActive.selector);
+        ah.endDeficitSale(d, e2);
+
+        _deposit(carol, d, address(usdg), 801 * USDG); // anyone may pay in
+        ch.repayDeficit(d);
+        (uint256 total,,) = ch.deficitOf(d, e1);
+        assertEq(total, 0);
+        (, bool active) = ah.deficitDiscount(d, e1);
+        assertTrue(active); // the stale start
+        vm.expectEmit(true, true, true, true, address(ah));
+        emit AuctionHouse.DeficitSaleEnded(d, e1);
+        ah.endDeficitSale(d, e1);
+        assertEq(ah.saleStartedAt(d, e1), 0);
+        (, active) = ah.deficitDiscount(d, e1);
+        assertFalse(active);
+    }
+
     function test_deficitSaleEndsWhenRepaid() public {
         uint256 d = _deficitAccount(300e18, 500e18);
         uint256 c = _fund(carol, 10_000 * USDG, 0);
@@ -1388,11 +1923,35 @@ contract AuctionHouseTest is Fixture {
         assertGe(spy.balanceOf(address(ch)), sp, "spy backing");
     }
 
-    /// @dev Sets only claimableTotal (no per-expiry claim, no pool): what a liquidation reads.
-    function _cheatClaimableTotal(uint256 id, uint256 wad) internal {
+    /// @dev Gives `id` an unpaid claim of `wad` on `expiry` (claim books only, no pool behind it).
+    /// @dev positionStatus, checked against the counts liquidationState takes from its margin pass.
+    function _status(uint256 id) internal view returns (uint256 live, uint256 awaiting) {
+        (live, awaiting) = ch.positionStatus(id);
+        (AccountState memory st, uint256 l, uint256 w) = ch.liquidationState(id);
+        assertEq(l, live, "live");
+        assertEq(w, awaiting, "awaiting");
+        assertEq(abi.encode(st), abi.encode(ch.accountState(id)));
+    }
+
+    function _setCash(uint256 id, uint256 wad) internal {
         bytes memory code = address(ch).code;
         vm.etch(address(ch), address(seeder).code);
-        SettlementSeeder(address(ch)).setClaimableTotal(id, wad);
+        SettlementSeeder(address(ch)).setCash(id, wad);
+        vm.etch(address(ch), code);
+    }
+
+    /// @dev Removes the account's claim on `expiry` (as if it had been paid out).
+    function _cheatClaimPaid(uint256 id, uint64 expiry, uint256 wad) internal {
+        bytes memory code = address(ch).code;
+        vm.etch(address(ch), address(seeder).code);
+        SettlementSeeder(address(ch)).dropClaim(id, expiry, wad);
+        vm.etch(address(ch), code);
+    }
+
+    function _cheatClaim(uint256 id, uint64 expiry, uint256 wad) internal {
+        bytes memory code = address(ch).code;
+        vm.etch(address(ch), address(seeder).code);
+        SettlementSeeder(address(ch)).setClaim(id, expiry, wad);
         vm.etch(address(ch), code);
     }
 

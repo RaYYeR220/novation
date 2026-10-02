@@ -35,8 +35,10 @@ struct CHStorage {
     mapping(address => uint256[]) owned;
     mapping(uint256 => mapping(address => uint256)) collateral; // WAD raw tokens
     mapping(uint256 => address[]) collateralTokens; // tokens with collateral > 0
-    mapping(uint256 => Position[]) positions;
-    mapping(uint256 => mapping(uint32 => uint256)) posIndex; // index + 1
+    // Positions (see CHS.movePosition): the account's series in a packed list, eight per slot, and
+    // per series one slot with its place in the list and its quantity.
+    mapping(uint256 => uint32[]) positionSeries;
+    mapping(uint256 => mapping(uint32 => uint256)) position; // (index + 1) << 128 | uint128(int128 qty)
     mapping(uint256 => mapping(address => AgentPolicy)) agents;
     mapping(address => bool) venues;
     address auctionHouse;
@@ -53,7 +55,7 @@ struct CHStorage {
     // Union-of-underlyings bookkeeping for the MAX_UNDERLYINGS cap: an underlying is in an
     // account's union while it has collateral > 0 or at least one open position on it.
     mapping(uint256 => mapping(address => uint256)) positionsOn; // open positions per underlying
-    mapping(uint256 => uint256) underlyingCount; // size of the union
+    mapping(uint256 => address[]) unionOf; // the union, in the order its underlyings entered it
     mapping(uint256 => uint256) claimableTotal; // sum over expiries of claimable[id][E], at face
     // What an account still owes after its deficit was socialized (the pool's part spread over
     // all cash, plus the fund's written-off bridge); repaid to the InsuranceFund. Part of
@@ -61,6 +63,7 @@ struct CHStorage {
     mapping(uint256 => uint256) socializedDebt;
     mapping(uint256 => uint64[]) deficitExpiries; // expiries where defPending or defBridged > 0
     mapping(address => PriceOutage) outages; // collateral tokens without a price, see markUnpriced
+    mapping(uint256 => uint64[]) claimExpiries; // expiries where claimable[id][E] > 0
 }
 
 /// @notice Dependencies handed to the logic libraries, built by the Clearinghouse from its
@@ -83,6 +86,8 @@ library CHErrors {
     error InsufficientCollateral(uint256 id, address token, uint256 collateral, uint256 wad);
     error TooManyPositions();
     error TooManyUnderlyings();
+    error TooManyClaimExpiries(uint256 id);
+    error VolNotCurrent(address underlying);
     // accounts and funds
     error UnknownAccount(uint256 id);
     error NotOwner(uint256 id, address caller);
@@ -144,6 +149,20 @@ library CHS {
         }
     }
 
+    // ---------------------------------------------------------------- expiry lists
+
+    /// @notice Removes `e` from an unordered expiry list (swap and pop); absent is a no-op.
+    function dropExpiry(uint64[] storage xs, uint64 e) internal {
+        uint256 n = xs.length;
+        for (uint256 i = 0; i < n; ++i) {
+            if (xs[i] == e) {
+                xs[i] = xs[n - 1];
+                xs.pop();
+                return;
+            }
+        }
+    }
+
     // ---------------------------------------------------------------- cash
 
     function cashOf(uint256 id) internal view returns (uint256) {
@@ -174,7 +193,7 @@ library CHS {
         CHStorage storage $ = s();
         uint256 prev = $.collateral[id][token];
         if (prev == 0) {
-            if ($.positionsOn[id][token] == 0) _enterUnion(id);
+            if ($.positionsOn[id][token] == 0) _enterUnion(id, token);
             $.collateralTokens[id].push(token);
         }
         $.collateral[id][token] = prev + wad;
@@ -197,61 +216,135 @@ library CHS {
                 break;
             }
         }
-        if ($.positionsOn[id][token] == 0) --$.underlyingCount[id];
+        if ($.positionsOn[id][token] == 0) _leaveUnion(id, token);
     }
 
     // ---------------------------------------------------------------- positions
 
+    /// @notice How many positions the account holds.
+    function positionCount(uint256 id) internal view returns (uint256) {
+        return s().positionSeries[id].length;
+    }
+
+    /// @notice The account's quantity in `seriesId` (0 if none).
+    function qtyOf(uint256 id, uint32 seriesId) internal view returns (int256) {
+        return qtyIn(s().position[id][seriesId]);
+    }
+
+    /// @notice The quantity held in a position slot.
+    function qtyIn(uint256 slot) internal pure returns (int256) {
+        return int128(uint128(slot));
+    }
+
+    /// @notice The account's positions, in list order (the order they were opened, except that
+    /// closing one moves the last into its place).
+    function positionsOf(uint256 id) internal view returns (Position[] memory ps) {
+        CHStorage storage $ = s();
+        uint32[] memory sids = $.positionSeries[id];
+        mapping(uint32 => uint256) storage pos = $.position[id];
+        ps = new Position[](sids.length);
+        for (uint256 i = 0; i < sids.length; ++i) {
+            ps[i] = Position({seriesId: sids[i], qty: int128(uint128(pos[sids[i]]))});
+        }
+    }
+
     /// @notice The only way to change a position. `series` must be registry.series(seriesId).
     /// Creates, resizes or deletes (at zero) the entry; keeps the position-count and underlying
     /// caps, the per-series long open interest and the per-expiry open short quantity in sync.
+    /// A new position costs one fresh slot (its quantity and place in the list) and an eighth of
+    /// one (the packed list of series), which keeps a liquidation bid moving a whole book into an
+    /// empty account within the gas limit.
     function movePosition(uint256 id, uint32 seriesId, int256 delta, Series memory series)
         internal
         returns (int256 oldQty, int256 newQty)
     {
         CHStorage storage $ = s();
-        Position[] storage ps = $.positions[id];
-        uint256 slot1 = $.posIndex[id][seriesId];
-        if (slot1 != 0) oldQty = ps[slot1 - 1].qty;
+        mapping(uint32 => uint256) storage pos = $.position[id];
+        uint256 slot = pos[seriesId];
+        uint256 slot1 = slot >> 128;
+        oldQty = qtyIn(slot);
         newQty = oldQty + delta;
         int128 q = SafeCast.toInt128(newQty);
 
         if (slot1 == 0) {
             if (newQty != 0) {
-                if (ps.length >= MAX_POSITIONS) revert CHErrors.TooManyPositions();
+                uint32[] storage sids = $.positionSeries[id];
+                if (sids.length >= MAX_POSITIONS) revert CHErrors.TooManyPositions();
                 uint256 refs = $.positionsOn[id][series.underlying];
-                if (refs == 0 && $.collateral[id][series.underlying] == 0) _enterUnion(id);
+                if (refs == 0 && $.collateral[id][series.underlying] == 0) _enterUnion(id, series.underlying);
                 $.positionsOn[id][series.underlying] = refs + 1;
-                ps.push(Position({seriesId: seriesId, qty: q}));
-                $.posIndex[id][seriesId] = ps.length;
+                sids.push(seriesId);
+                pos[seriesId] = _slot(sids.length, q);
             }
         } else if (newQty == 0) {
-            uint256 last = ps.length - 1;
+            uint32[] storage sids = $.positionSeries[id];
+            uint256 last = sids.length - 1;
             if (slot1 - 1 != last) {
-                Position memory moved = ps[last];
-                ps[slot1 - 1] = moved;
-                $.posIndex[id][moved.seriesId] = slot1;
+                uint32 moved = sids[last];
+                sids[slot1 - 1] = moved;
+                pos[moved] = _slot(slot1, int128(qtyIn(pos[moved])));
             }
-            ps.pop();
-            delete $.posIndex[id][seriesId];
+            sids.pop();
+            delete pos[seriesId];
             uint256 refs = $.positionsOn[id][series.underlying] - 1;
             $.positionsOn[id][series.underlying] = refs;
-            if (refs == 0 && $.collateral[id][series.underlying] == 0) --$.underlyingCount[id];
+            if (refs == 0 && $.collateral[id][series.underlying] == 0) _leaveUnion(id, series.underlying);
         } else {
-            ps[slot1 - 1].qty = q;
+            pos[seriesId] = _slot(slot1, q);
         }
 
         $.longOI[seriesId] = $.longOI[seriesId] + _pos(newQty) - _pos(oldQty);
         $.unsettledShortQty[series.expiry] = $.unsettledShortQty[series.expiry] + _pos(-newQty) - _pos(-oldQty);
     }
 
+    // ---------------------------------------------------------------- vol
+
+    /// @notice Folds the feeds' new rounds into the vol estimate of every underlying of the account
+    /// (MarketDataHub.syncVol, permissionless, up to 64 rounds each). A sync that fails leaves that
+    /// estimate behind, which MarginLogic.accountStateChecked then reports.
+    function syncVols(IMarketDataHub hub, uint256 id) internal {
+        address[] storage us = s().unionOf[id];
+        for (uint256 i = 0; i < us.length; ++i) {
+            try hub.syncVol(us[i]) {} catch {}
+        }
+    }
+
+    // ---------------------------------------------------------------- claims
+
+    /// @notice Pays `pay` of the account's claim `amt` on `expiry` from the pool into its cash
+    /// (less than `amt` only on an impaired pool) and closes the claim.
+    function payClaim(uint256 id, uint64 expiry, uint256 amt, uint256 pay) internal {
+        CHStorage storage $ = s();
+        $.claimable[id][expiry] = 0;
+        dropExpiry($.claimExpiries[id], expiry);
+        $.totalClaimable[expiry] -= amt;
+        $.claimableTotal[id] -= amt;
+        $.pool[expiry] -= pay;
+        credit(id, pay);
+    }
+
     // ---------------------------------------------------------------- private
 
-    function _enterUnion(uint256 id) private {
-        CHStorage storage $ = s();
-        uint256 n = $.underlyingCount[id];
-        if (n >= MAX_UNDERLYINGS) revert CHErrors.TooManyUnderlyings();
-        $.underlyingCount[id] = n + 1;
+    function _slot(uint256 slot1, int128 q) private pure returns (uint256) {
+        return slot1 << 128 | uint128(q);
+    }
+
+    function _enterUnion(uint256 id, address u) private {
+        address[] storage us = s().unionOf[id];
+        if (us.length >= MAX_UNDERLYINGS) revert CHErrors.TooManyUnderlyings();
+        us.push(u);
+    }
+
+    function _leaveUnion(uint256 id, address u) private {
+        address[] storage us = s().unionOf[id];
+        uint256 n = us.length; // <= MAX_UNDERLYINGS
+        for (uint256 i = 0; i < n; ++i) {
+            if (us[i] == u) {
+                us[i] = us[n - 1];
+                us.pop();
+                return;
+            }
+        }
     }
 
     function _pos(int256 x) private pure returns (uint256) {

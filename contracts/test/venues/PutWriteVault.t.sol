@@ -272,25 +272,31 @@ contract PutWriteVaultTest is VaultFixture {
         assertEq(vault.quote(put170, 1e18, false), bid0);
     }
 
-    function test_weekendQuoteHigher() public {
+    function test_extendedQuoteHigherAndWeekendClosed() public {
         PutWriteVault flat = _newPutWrite(_flatConfig());
         _vaultDeposit(vault, alice, 1700 * USDG);
         _vaultDeposit(flat, alice, 1700 * USDG);
         assertEq(vault.quote(put170w2, 1e18, true), flat.quote(put170w2, 1e18, true));
 
-        vm.warp(SATURDAY);
-        assertFalse(vault.isLive()); // the vol state is over two days old
+        uint256 wedEvening = T0 + 11 hours; // 21:00 EDT, EXTENDED
+        vm.warp(wedEvening);
         _refresh(180e18);
-        assertEq(uint8(hub.session(address(nvda))), uint8(Session.WEEKEND));
-        assertTrue(vault.isLive());
+        assertEq(uint8(hub.session(address(nvda))), uint8(Session.EXTENDED));
         uint256 ask = vault.quote(put170w2, 1e18, true);
         uint256 askFlat = flat.quote(put170w2, 1e18, true);
         assertGt(ask, askFlat);
-
         uint256 volFlat = _volQ(0.1e18); // 170 of 1700 locked after the sale
-        uint256 tau = e2 - SATURDAY; // not block.timestamp: via-ir may reuse a pre-warp read
-        (uint256 pxWk,,,,) = kernel.bsQuote(180e18, 170e18, tau, volFlat + WEEKEND_ADD, 0, false);
-        assertEq(ask, F.mulWadUp(pxWk, 1.02e18));
+        uint256 tau = e2 - wedEvening; // not block.timestamp: via-ir may reuse a pre-warp read
+        (uint256 pxEx,,,,) = kernel.bsQuote(180e18, 170e18, tau, volFlat + 0.05e18, 0, false);
+        assertEq(ask, F.mulWadUp(pxEx, 1.02e18));
+
+        vm.warp(SATURDAY);
+        _refresh(180e18);
+        assertEq(uint8(hub.session(address(nvda))), uint8(Session.WEEKEND));
+        assertFalse(vault.isLive());
+        vm.expectRevert(OptionVaultBase.VaultNotLive.selector);
+        vault.quote(put170w2, 1e18, true);
+        assertEq(vault.maxDeposit(bob), 0);
     }
 
     // ================================================================ live gate

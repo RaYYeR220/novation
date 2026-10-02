@@ -100,6 +100,19 @@ contract SeriesRegistry is ISeriesRegistry, ReentrancyGuardTransient {
         _store(u, expiry, price, firstAfterHint, true);
     }
 
+    /// @notice The last resort, 7 days after expiry (hub.settlementPriceLastResort): the last print
+    /// at or before the close without the lag bound, so a feed that died can't leave the expiry
+    /// unsettled for good. Recorded with fallbackUsed = true.
+    function settleExpiryLastResort(address u, uint64 expiry, uint80 roundIdHint)
+        external
+        nonReentrant
+        returns (uint256 price)
+    {
+        if (_settled[u][expiry]) revert AlreadySettled();
+        price = hub.settlementPriceLastResort(u, expiry, roundIdHint);
+        _store(u, expiry, price, roundIdHint, true);
+    }
+
     function settlementPriceOf(address u, uint64 expiry) external view returns (uint256 price, bool settled) {
         return (_settlePrice[u][expiry], _settled[u][expiry]);
     }

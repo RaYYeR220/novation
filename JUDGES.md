@@ -71,17 +71,19 @@ Robinhood Chain testnet, chain id 46630. Full list: [docs/deployments.md](docs/d
 | Risk kernel (Stylus) | [`0xAeE1D4F45AF43a9C4d52ADa65d423b1c0e67f0fd`](https://explorer.testnet.chain.robinhood.com/address/0xAeE1D4F45AF43a9C4d52ADa65d423b1c0e67f0fd) |
 | KernelReference (Solidity twin) | [`0xB7d9232c8ff46b4950d85ed639908c86C08750C6`](https://explorer.testnet.chain.robinhood.com/address/0xB7d9232c8ff46b4950d85ed639908c86C08750C6) |
 | Hand-optimized Solidity gas baseline | [`0x9F5a98A1E678b124998328cfa0056c90720ceCEe`](https://explorer.testnet.chain.robinhood.com/address/0x9F5a98A1E678b124998328cfa0056c90720ceCEe) |
-| RiskParams | [`0x5Ec7F77cee13E6c246F80AAaa466992210e17F6f`](https://explorer.testnet.chain.robinhood.com/address/0x5Ec7F77cee13E6c246F80AAaa466992210e17F6f) |
-| MarketDataHub | [`0x2BFFfa823cFcCfd703793320883134aC009a5a51`](https://explorer.testnet.chain.robinhood.com/address/0x2BFFfa823cFcCfd703793320883134aC009a5a51) |
-| SeriesRegistry | [`0x4A8bD72CD6e2Cd743c2f103447B47cFf0B22cC77`](https://explorer.testnet.chain.robinhood.com/address/0x4A8bD72CD6e2Cd743c2f103447B47cFf0B22cC77) |
-| InsuranceFund | [`0x9826E96ec14Ff888626E4c6Cf44224925671D1fF`](https://explorer.testnet.chain.robinhood.com/address/0x9826E96ec14Ff888626E4c6Cf44224925671D1fF) |
-| Clearinghouse (with MarginLogic, TradeLogic, SettlementLogic, AuctionHookLogic) | [`0xe799DF9b96a4809c411D3F90f67C5261a245ABB2`](https://explorer.testnet.chain.robinhood.com/address/0xe799DF9b96a4809c411D3F90f67C5261a245ABB2) |
-| AuctionHouse | [`0x0a7590A4C07604D738ab3DDe18306e3026a7Cf0B`](https://explorer.testnet.chain.robinhood.com/address/0x0a7590A4C07604D738ab3DDe18306e3026a7Cf0B) |
-| RfqVenue | [`0x56562573b74A6cD6ca96cfb794A63625A48edf08`](https://explorer.testnet.chain.robinhood.com/address/0x56562573b74A6cD6ca96cfb794A63625A48edf08) |
-| CoveredCallVault NVDA | [`0x5e36BbAc665244f623cf8195b7a753Ad61D8bacA`](https://explorer.testnet.chain.robinhood.com/address/0x5e36BbAc665244f623cf8195b7a753Ad61D8bacA) |
-| CoveredCallVault TSLA | [`0x684Fc5aE66267E8184704f6A3cE393f0c18B1095`](https://explorer.testnet.chain.robinhood.com/address/0x684Fc5aE66267E8184704f6A3cE393f0c18B1095) |
-| PutWriteVault NVDA | [`0x691E99fb5498570F4A0AB8a74aAAE3361c0E0a3a`](https://explorer.testnet.chain.robinhood.com/address/0x691E99fb5498570F4A0AB8a74aAAE3361c0E0a3a) |
-| TimelockController (60 s on testnet) | [`0x5eb54aa55f3e03b7F50b7aFD22F235FB0e85235F`](https://explorer.testnet.chain.robinhood.com/address/0x5eb54aa55f3e03b7F50b7aFD22F235FB0e85235F) |
+| RiskParams | [`0x113AbDCd234d00FfEA37D29A31BD1Fb2B035dcf1`](https://explorer.testnet.chain.robinhood.com/address/0x113AbDCd234d00FfEA37D29A31BD1Fb2B035dcf1) |
+| MarketDataHub | [`0xEcD2baaE3C13b526ffdBB8a8388609442C84d993`](https://explorer.testnet.chain.robinhood.com/address/0xEcD2baaE3C13b526ffdBB8a8388609442C84d993) |
+| SeriesRegistry | [`0x9C99381dE80518350fEaA09db17a064eD2180b7b`](https://explorer.testnet.chain.robinhood.com/address/0x9C99381dE80518350fEaA09db17a064eD2180b7b) |
+| InsuranceFund | [`0x531394f5a5D0c3D9e54d258c8825Fa70Fd645429`](https://explorer.testnet.chain.robinhood.com/address/0x531394f5a5D0c3D9e54d258c8825Fa70Fd645429) |
+| Clearinghouse (with MarginLogic, TradeLogic, SettlementLogic, AuctionHookLogic) | [`0x0b0F4e67DcA3B846859Af452576e8E09316D1949`](https://explorer.testnet.chain.robinhood.com/address/0x0b0F4e67DcA3B846859Af452576e8E09316D1949) |
+| AuctionHouse | [`0x4a132D6f83d9db88092A3D1F8B5985B30fd99Ad9`](https://explorer.testnet.chain.robinhood.com/address/0x4a132D6f83d9db88092A3D1F8B5985B30fd99Ad9) |
+| RfqVenue | [`0x1aFD874fdd3914fB6958F282769dAC546993ED82`](https://explorer.testnet.chain.robinhood.com/address/0x1aFD874fdd3914fB6958F282769dAC546993ED82) |
+| CoveredCallVault NVDA | [`0xCCF205358eF9bfd97335f0D7bD5240487bB64865`](https://explorer.testnet.chain.robinhood.com/address/0xCCF205358eF9bfd97335f0D7bD5240487bB64865) |
+| CoveredCallVault TSLA | [`0xF95EAbF20EE1D9034ABa1b240D0242B75e645BD5`](https://explorer.testnet.chain.robinhood.com/address/0xF95EAbF20EE1D9034ABa1b240D0242B75e645BD5) |
+| PutWriteVault NVDA | [`0x0FEee896be42E954c2881668da9035efc5dB0947`](https://explorer.testnet.chain.robinhood.com/address/0x0FEee896be42E954c2881668da9035efc5dB0947) |
+| TimelockController (60 s on testnet) | [`0xf60F96DF709B2dD958519329b4ab488C27e178b5`](https://explorer.testnet.chain.robinhood.com/address/0xf60F96DF709B2dD958519329b4ab488C27e178b5) |
+
+Previous core deployment (2026-10-01, before the contract polish), still on-chain and settling its Oct 2 positions: Clearinghouse [`0xe799…ABB2`](https://explorer.testnet.chain.robinhood.com/address/0xe799DF9b96a4809c411D3F90f67C5261a245ABB2), listed under `superseded` in [`contracts/deployments/46630.json`](contracts/deployments/46630.json). Its proofs stay valid: [agent over budget](https://explorer.testnet.chain.robinhood.com/tx/0xa411c8e1173e78c41e6c2f12611d553f54583cb1203eaf651bc9bc725e2c1b9a), [withdrawal below IM](https://explorer.testnet.chain.robinhood.com/tx/0xc947dc28bb91b5499f88ac89911507758d7447db5666720a8eb7d86dd77c3094), [corporate-action halt](https://explorer.testnet.chain.robinhood.com/tx/0x7756c29f080df6458613f129e8aa9b9dc5adadc3c098bb31edd04ecacb447c46), [MCP agent refusal](https://explorer.testnet.chain.robinhood.com/tx/0x2aa5a4ceaf099d14136d921b29b5bc2bce8b52f618b25e4935b04494210f1064), [mm-bot RFQ fill](https://explorer.testnet.chain.robinhood.com/tx/0x883c803d27356c5d1a6d368090fc845b0d8a3848539cfbb85ab7c9d62e3988c5).
 
 ## What is not done yet
 
@@ -96,4 +98,4 @@ Robinhood Chain testnet, chain id 46630. Full list: [docs/deployments.md](docs/d
 - [SECURITY.md](SECURITY.md): trust model, invariants, threats, review history, known limits
 - [CLAIMS.md](CLAIMS.md): each public claim with its evidence tier
 - [MOCKS.md](MOCKS.md): what is mocked on testnet and what is real
-- [mcp/README.md](mcp/README.md): the MCP server for AI agents under an on-chain risk budget, with an over-budget agent trade refused on testnet ([`0x2aa5a4ce…`](https://explorer.testnet.chain.robinhood.com/tx/0x2aa5a4ceaf099d14136d921b29b5bc2bce8b52f618b25e4935b04494210f1064))
+- [mcp/README.md](mcp/README.md): the MCP server for AI agents under an on-chain risk budget, with an over-budget agent trade refused on testnet ([`0x43941aae…`](https://explorer.testnet.chain.robinhood.com/tx/0x43941aae0c18d7d004d052fd4baa72ccbb74fddd9ffe0d9e6d4dcb57407b42fe))

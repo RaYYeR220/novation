@@ -33,8 +33,10 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
     error NotInitialized();
     error NoPhaseChange();
     error PhaseNotExhausted();
+    error FallbackApplies();
 
     uint256 private constant FALLBACK_DELAY = 72 hours;
+    uint256 private constant LAST_RESORT_DELAY = 7 days;
     uint256 private constant SEQ_GRACE = 3600;
     uint64 private constant MAX_ROUND_SEARCH = 1 << 40;
 
@@ -184,12 +186,18 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
 
     // ---- realized vol ----
 
+    /// @notice The mark vol: the EWMA estimate clamped to [volFloor, volCap]. It falls back to
+    /// volCap before initVol, and when the estimate is stale (volStale): a round the feed printed
+    /// has waited unfolded for longer than volStaleness. A feed that prints nothing (every
+    /// weekend, 48 hours and more) leaves the estimate current, and a print nobody has folded in
+    /// yet (the first of the week, at the reopen) keeps it until it is volStaleness old, so the
+    /// marks never jump to volCap just because a round arrived before anyone synced. volCap isn't
+    /// conservative for a long-vol book (it inflates its equity), so it is kept for its purpose:
+    /// an estimate nobody has kept up with.
     function markVol(address u) external view returns (uint256 vol) {
         VolState storage v = _vol[u];
         UnderlyingParams memory p = params.underlying(u);
-        if (!v.initialized || block.timestamp - v.lastPokeTs > p.volStaleness) {
-            return p.volCap;
-        }
+        if (!v.initialized || _stale(v, p)) return p.volCap;
         uint256 raw = F.sqrtWad(_divWad(v.r2, v.dt));
         if (raw < p.volFloor) return p.volFloor;
         if (raw > p.volCap) return p.volCap;
@@ -235,26 +243,42 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
     /// Venues call it before pricing, so the mark vol can't change between their trades in one
     /// transaction.
     function syncVol(address u) external nonReentrant {
+        _sync(u, 64);
+    }
+
+    /// @notice syncVol folding at most `maxRounds` (1 to 64) rounds, for callers that bound their
+    /// gas. Returns whether the estimate is then current (has folded the feed's latest round).
+    function syncVolUpTo(address u, uint256 maxRounds) external nonReentrant returns (bool current) {
+        if (maxRounds == 0 || maxRounds > 64) revert BadRoundCount();
+        return _sync(u, maxRounds);
+    }
+
+    function _sync(address u, uint256 maxRounds) private returns (bool current) {
         VolState storage v = _vol[u];
         if (!v.initialized) revert NotInitialized();
         UnderlyingParams memory p = params.underlying(u);
         (uint80 latest,,,,) = IAggregatorV3(p.feed).latestRoundData();
         uint80 last = v.lastRoundId;
-        if ((latest >> 64) != (last >> 64) || latest <= last) return;
+        if ((latest >> 64) != (last >> 64) || latest <= last) return latest == last;
         uint256 n = uint64(latest) - uint64(last);
-        if (n > 64) n = 64;
+        if (n > maxRounds) n = maxRounds;
         uint80[] memory ids = new uint80[](n);
         for (uint256 i = 0; i < n; ++i) {
             ids[i] = last + 1 + uint80(i);
         }
         _fold(u, v, p, ids);
+        return v.lastRoundId == latest;
     }
 
     function _fold(address u, VolState storage v, UnderlyingParams memory p, uint80[] memory ids) private {
         (uint256[] memory prices, uint256[] memory dts, uint80 lastId, uint256 lastAt) =
             _collect(IAggregatorV3(p.feed), v.lastRoundId, v.lastUpdatedAt, ids);
         uint256 m = prices.length;
-        if (m == 0) return;
+        if (m == 0) {
+            // only bad prints: the anchor moves past them, the estimate stays
+            if (lastId != v.lastRoundId) v.lastRoundId = lastId;
+            return;
+        }
 
         (uint256 r2, uint256 dt) = kernel.ewmaUpdate(v.r2, v.dt, v.lastPrice, prices, dts, p.lambda);
 
@@ -285,10 +309,13 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
             if ((id >> 64) == (startId >> 64) && id <= startId) continue;
             if ((id >> 64) != (prevId >> 64) || uint64(id) != uint64(prevId) + 1) revert NonConsecutiveRound();
             (int256 answer, uint256 updatedAt) = _round(feed, id);
-            if (answer <= 0 || updatedAt < prevAt) revert InvalidRound();
+            if (updatedAt == 0) revert InvalidRound(); // not printed (yet): the anchor can't pass it
+            prevId = id;
+            // a bad print (no positive answer, or stamped before its predecessor) is skipped: the
+            // next good round's return and time span cover it, and the estimate never sticks on it
+            if (answer <= 0 || updatedAt < prevAt) continue;
             prices[m] = uint256(answer) * mul;
             dts[m] = updatedAt - prevAt;
-            prevId = id;
             prevAt = updatedAt;
             ++m;
         }
@@ -304,8 +331,40 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
     function rebaseVol(address u) external nonReentrant {
         VolState storage v = _vol[u];
         if (!v.initialized) revert NotInitialized();
+        _rebase(u, v, IAggregatorV3(params.underlying(u).feed));
+    }
+
+    /// @notice Permissionless, after an aggregator migration (the feed's latest round is in a later
+    /// phase): folds what is left of the stored phase, up to 64 rounds, and if that exhausts it,
+    /// rebases onto the latest round, in one call. Separate pokeVol and rebaseVol calls race the
+    /// old aggregator while it still prints (rebaseVol reverts PhaseNotExhausted after any new
+    /// old-phase round); here nothing can print in between. Returns false when more than 64 rounds
+    /// were left (call again).
+    function syncAndRebaseVol(address u) external nonReentrant returns (bool rebased) {
+        VolState storage v = _vol[u];
+        if (!v.initialized) revert NotInitialized();
         UnderlyingParams memory p = params.underlying(u);
         IAggregatorV3 feed = IAggregatorV3(p.feed);
+        (uint80 latest,,,,) = feed.latestRoundData();
+        uint80 last = v.lastRoundId;
+        if ((latest >> 64) <= (last >> 64)) revert NoPhaseChange();
+        uint256 n;
+        while (n < 64 && _printedAt(p.feed, last + 1 + uint80(n)) != 0) {
+            ++n;
+        }
+        if (n != 0) {
+            uint80[] memory ids = new uint80[](n);
+            for (uint256 i = 0; i < n; ++i) {
+                ids[i] = last + 1 + uint80(i);
+            }
+            _fold(u, v, p, ids);
+            if (n == 64 && _printedAt(p.feed, last + 65) != 0) return false;
+        }
+        _rebase(u, v, feed);
+        return true;
+    }
+
+    function _rebase(address u, VolState storage v, IAggregatorV3 feed) private {
         (uint80 roundId, int256 answer,, uint256 updatedAt,) = feed.latestRoundData();
         uint80 oldId = v.lastRoundId;
         if ((roundId >> 64) <= (oldId >> 64)) revert NoPhaseChange();
@@ -318,6 +377,65 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
         v.lastUpdatedAt = uint64(updatedAt);
 
         emit VolRebased(u, oldId, roundId);
+    }
+
+    /// @notice Whether the vol estimate has folded in the feed's latest round (false before
+    /// initVol, after a phase change until rebaseVol, and while the feed can't be read).
+    function volCurrent(address u) external view returns (bool) {
+        VolState storage v = _vol[u];
+        return v.initialized && _current(v, params.underlying(u).feed);
+    }
+
+    /// @notice Whether markVol falls back to volCap because the estimate is stale: the oldest round
+    /// the feed has printed since the stored one (round 1 of the next phase once the stored phase
+    /// has no next round) printed more than volStaleness ago, or can't be found. Anyone lifts it
+    /// with syncVol (or pokeVol, then rebaseVol, after an aggregator migration). True before
+    /// initVol.
+    function volStale(address u) external view returns (bool) {
+        VolState storage v = _vol[u];
+        return !v.initialized || _stale(v, params.underlying(u));
+    }
+
+    /// @dev Age counts from the first unfolded round's own timestamp, not from the last fold: a
+    /// feed that was silent (a weekend) and then printed is fresh at its print. After an
+    /// aggregator migration the stored phase has no next round and the age counts from round 1 of
+    /// the next phase, so the migration itself doesn't read volCap before anyone can rebase. A
+    /// feed that can't be read, or skipped a phase, has no such round and reads stale; a round
+    /// stamped in the future reads fresh. Raw reads, like _current: a misbehaving feed can't make
+    /// the margin procedure revert here.
+    function _stale(VolState storage v, UnderlyingParams memory p) private view returns (bool) {
+        if (_current(v, p.feed)) return false;
+        uint80 last = v.lastRoundId;
+        uint256 at = _printedAt(p.feed, last + 1);
+        if (at == 0) at = _printedAt(p.feed, (((last >> 64) + 1) << 64) | 1);
+        return at == 0 || (block.timestamp > at && block.timestamp - at > p.volStaleness);
+    }
+
+    /// @dev getRoundData(id).updatedAt read raw: 0 if the round doesn't exist, the call fails or it
+    /// returns fewer than five words.
+    function _printedAt(address feed, uint80 id) private view returns (uint256 at) {
+        bytes4 sel = IAggregatorV3.getRoundData.selector;
+        assembly ("memory-safe") {
+            let ptr := mload(0x40)
+            mstore(ptr, sel)
+            mstore(add(ptr, 4), id)
+            let ok := staticcall(gas(), feed, ptr, 0x24, ptr, 0xa0)
+            if and(ok, iszero(lt(returndatasize(), 0xa0))) { at := mload(add(ptr, 0x60)) }
+        }
+    }
+
+    function _current(VolState storage v, address feed) private view returns (bool) {
+        bytes4 sel = IAggregatorV3.latestRoundData.selector;
+        bool ok;
+        uint256 id;
+        assembly ("memory-safe") {
+            let ptr := mload(0x40)
+            mstore(ptr, sel)
+            ok := staticcall(gas(), feed, ptr, 4, ptr, 0xa0)
+            if lt(returndatasize(), 0xa0) { ok := 0 }
+            id := mload(ptr)
+        }
+        return ok && id == v.lastRoundId;
     }
 
     /// @dev lastPrice is in WAD (feed answer scaled to 18 decimals)
@@ -335,7 +453,10 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
     /// @notice The feed's last print at or before the weekly expiry close. RH equity feeds publish
     /// no round at the Friday close, so the caller supplies a hint round and proves it is the last
     /// one at or before expiry, by any of:
-    ///  (i)   the next round in the same phase exists and printed after expiry;
+    ///  (i)   the next round in the same phase exists and printed after expiry, and if the feed has
+    ///        moved to a later phase, that phase's round 1 printed after expiry too (during an
+    ///        aggregator migration the old phase can keep printing while the new one already has
+    ///        the true last print before the close);
     ///  (ii)  the hint is still the latest round and now is strictly after expiry (any future
     ///        round must print at or after now, hence after expiry);
     ///  (iii) the feed changed phase after the close: round 1 of the next phase printed after expiry.
@@ -357,21 +478,54 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
     }
 
     function _requireLastRound(IAggregatorV3 feed, uint64 expiry, uint80 hint) private view {
+        (uint80 latestId,,,,) = feed.latestRoundData();
+        bool laterPhase = (latestId >> 64) > (hint >> 64);
+        // with a later phase live, the hint is the last print only if that phase began after expiry
+        if (laterPhase) {
+            (, uint256 firstAt) = _round(feed, (((hint >> 64) + 1) << 64) | 1);
+            if (firstAt <= expiry) revert NextRoundMissing();
+        }
         (, uint256 nextAt) = _round(feed, hint + 1);
         if (nextAt != 0) {
             if (nextAt <= expiry) revert NextRoundMissing();
             return;
         }
-        (uint80 latestId,,,,) = feed.latestRoundData();
         if (latestId == hint) {
             if (block.timestamp <= expiry) revert NextRoundMissing();
             return;
         }
-        if ((latestId >> 64) > (hint >> 64)) {
-            (, uint256 firstAt) = _round(feed, (((hint >> 64) + 1) << 64) | 1);
-            if (firstAt > expiry) return;
-        }
+        if (laterPhase) return;
         revert NextRoundMissing();
+    }
+
+    /// @notice Oracle-only last resort, 7 days after expiry: the feed's last print at or before the
+    /// close, proven last exactly as in settlementPrice but without the maxSettlementLag bound. A
+    /// feed that stopped printing well before the close (and may never print again), or whose
+    /// first print after a stale close is implausible, then still settles, at its last in-band
+    /// pre-close print, and can't leave the expiry (every claim on it, and the accounts holding it)
+    /// frozen for good. The price must lie in the plausibility band. Refused (FallbackApplies)
+    /// while the first print after the close is in the band: then settlementPrice or the 72-hour
+    /// fallback gives the price, and the last resort never offers a second one.
+    function settlementPriceLastResort(address u, uint64 expiry, uint80 hint) external view returns (uint256 price) {
+        if (!NyseCalendar.isWeeklyExpiry(expiry)) revert NotExpiry();
+        if (block.timestamp < uint256(expiry) + LAST_RESORT_DELAY) revert TooEarly();
+        UnderlyingParams memory p = params.underlying(u);
+        IAggregatorV3 feed = IAggregatorV3(p.feed);
+        (int256 answer, uint256 updatedAt) = _round(feed, hint);
+        if (answer <= 0 || updatedAt == 0 || updatedAt > expiry) revert BadHint();
+        _requireLastRound(feed, expiry, hint);
+        (int256 nextAnswer, uint256 nextAt) = _firstAfter(feed, hint);
+        if (nextAt != 0 && nextAnswer > 0 && _inBand(_scale(feed, nextAnswer), p)) revert FallbackApplies();
+        price = _bandedPrice(feed, answer, p);
+    }
+
+    /// @dev The round after `hint` (proven the last at or before the close): the next one in its
+    /// phase, or round 1 of the next phase once a later phase is live. Zeros if there is none yet.
+    function _firstAfter(IAggregatorV3 feed, uint80 hint) private view returns (int256 answer, uint256 updatedAt) {
+        (answer, updatedAt) = _round(feed, hint + 1);
+        if (updatedAt != 0) return (answer, updatedAt);
+        (uint80 latestId,,,,) = feed.latestRoundData();
+        if ((latestId >> 64) > (hint >> 64)) return _round(feed, (((hint >> 64) + 1) << 64) | 1);
     }
 
     /// @notice Oracle-only escape hatch, 72h after expiry. firstAfter must be the first round that

@@ -186,7 +186,7 @@ contract RobinhoodForkTest is Test, Deploy {
     /// Deposit real NVDA into the covered-call vault, sell calls to a taker paying in real USDG,
     /// cross the weekly close with a mocked pre-close print and a mocked first post-close print,
     /// settle the expiry in the registry, settle both accounts through the pool, claim, and pay a
-    /// queued redemption out in NVDA.
+    /// queued redemption out in kind: NVDA plus the USDG leg (the vault's premium cash).
     function test_coveredCallVaultCycle() public {
         address nvda = TOKENS[0];
         IAggregatorV3 feed = IAggregatorV3(FEEDS[0]);
@@ -197,15 +197,17 @@ contract RobinhoodForkTest is Test, Deploy {
         address alice = makeAddr("alice");
         address taker = makeAddr("taker");
         uint256 vid = vault.vaultId();
+        // the smallest sale that opens a series in the vault (10 contracts with the mainnet config)
+        uint256 qty = vault.config().minNewSeriesQty;
 
-        // alice deposits 10 NVDA
-        deal(nvda, alice, 10e18);
+        // alice deposits twice that in NVDA
+        deal(nvda, alice, 2 * qty);
         vm.startPrank(alice);
-        IERC20(nvda).approve(address(vault), 10e18);
-        uint256 shares = vault.deposit(10e18, alice);
+        IERC20(nvda).approve(address(vault), 2 * qty);
+        uint256 shares = vault.deposit(2 * qty, alice);
         vm.stopPrank();
-        assertEq(ch.collateralOf(vid, nvda), 10e18, "vault collateral");
-        assertEq(IERC20(nvda).balanceOf(address(ch)), 10e18, "NVDA held by the clearinghouse");
+        assertEq(ch.collateralOf(vid, nvda), 2 * qty, "vault collateral");
+        assertEq(IERC20(nvda).balanceOf(address(ch)), 2 * qty, "NVDA held by the clearinghouse");
 
         // the taker funds an account with 5,000 USDG
         deal(USDG_TOKEN, taker, 5_000e6);
@@ -223,12 +225,12 @@ contract RobinhoodForkTest is Test, Deploy {
         uint32 sid = registry.listSeries(nvda, expiry, strike, true);
 
         vm.prank(taker);
-        uint256 premium = vault.buy(sid, 5e18, type(uint256).max, takerId);
+        uint256 premium = vault.buy(sid, qty, type(uint256).max, takerId);
         assertGt(premium, 0, "premium");
-        _assertPos(takerId, sid, 5e18);
-        _assertPos(vid, sid, -5e18);
+        _assertPos(takerId, sid, int256(qty));
+        _assertPos(vid, sid, -int256(qty));
         assertEq(ch.cashOf(vid), premium, "vault earned the premium");
-        assertGe(vault.totalAssets(), 10e18, "NAV includes the premium");
+        assertGe(vault.totalAssets(), 2 * qty, "NAV includes the premium");
 
         // alice queues half her shares once her exit cooldown has passed
         vm.warp(block.timestamp + vault.EXIT_COOLDOWN());
@@ -245,28 +247,37 @@ contract RobinhoodForkTest is Test, Deploy {
 
         assertEq(registry.settleExpiry(nvda, expiry, last + 1), closePrice, "settlement price");
 
-        // the vault's roll settles its short (it pays 5 x 2 USDG into the pool from its premium
+        // the vault's roll settles its short (it pays qty x 2 USDG into the pool from its premium
         // cash) and pays the queued redemption; the taker settles and claims
+        uint256 payoff = 2 * qty;
         vault.roll(_one(expiry));
         (uint256 poolWad,, uint256 shortQty) = ch.pool(expiry);
         assertEq(shortQty, 0, "short left");
-        assertEq(poolWad, 10e18, "pool holds the payoff");
+        assertEq(poolWad, payoff, "pool holds the payoff");
         assertEq(ch.positionsOf(vid).length, 0, "vault position left");
         assertEq(vault.epoch(), 1, "epoch not rolled");
 
         ch.settleAccount(takerId, expiry);
         ch.claim(takerId, expiry);
-        assertEq(ch.cashOf(takerId), 5_000e18 - premium - _fee(premium, spot) + 10e18, "taker cash after claim");
+        assertEq(ch.cashOf(takerId), 5_000e18 - premium - _fee(premium, spot, qty) + payoff, "taker cash after claim");
         (poolWad,,) = ch.pool(expiry);
         assertEq(poolWad, 0, "pool not emptied");
 
         uint256 owed = vault.redeemable(alice);
+        uint256 owedCash = vault.redeemableCash(alice);
         console2.log("strike", strike / 1e18, "expiry", expiry);
-        console2.log("premium for 5 calls (USDG wei)", premium);
+        console2.log("calls sold", qty / 1e18, "premium (USDG wei)", premium);
         console2.log("NVDA redeemed for half the shares (wei)", owed);
-        assertGt(owed, 4.9e18, "redemption");
+        console2.log("USDG leg (raw units)", owedCash);
+        assertGt(owed, qty * 98 / 100, "redemption");
+        // half the shares take half the vault's cash (the premium less the payoff) in USDG
+        assertApproxEqAbs(owedCash * 1e12, (premium - payoff) / 2, 1e12, "cash leg");
+        // and both legs together are worth more than the NVDA alice put in for them
+        assertGt(owed + owedCash * 1e12 * 1e18 / closePrice, qty, "in-kind value");
         vault.claimRedeemed(alice);
+        vault.claimRedeemedCash(alice);
         assertEq(IERC20(nvda).balanceOf(alice), owed, "alice got NVDA back");
+        assertEq(IERC20(USDG_TOKEN).balanceOf(alice), owedCash, "alice got the USDG leg");
 
         // what the clearinghouse holds still covers every account
         assertGe(IERC20(USDG_TOKEN).balanceOf(address(ch)) * 1e12, ch.cashOf(takerId) + ch.cashOf(vid));
@@ -312,10 +323,9 @@ contract RobinhoodForkTest is Test, Deploy {
         );
     }
 
-    /// @dev The taker's fee: min(ceil(feeRate * qty * spot), ceil(feeCapOfPremium * premium)) for
-    /// 5 contracts.
-    function _fee(uint256 premium, uint256 spot) internal pure returns (uint256) {
-        uint256 byNotional = _mulWadUp(0.0003e18, 5 * spot);
+    /// @dev The taker's fee: min(ceil(feeRate * qty * spot), ceil(feeCapOfPremium * premium)).
+    function _fee(uint256 premium, uint256 spot, uint256 qty) internal pure returns (uint256) {
+        uint256 byNotional = _mulWadUp(0.0003e18, qty * spot / 1e18);
         uint256 byPremium = _mulWadUp(0.125e18, premium);
         return byNotional < byPremium ? byNotional : byPremium;
     }
