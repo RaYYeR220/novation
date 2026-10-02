@@ -67,6 +67,8 @@ export interface KeeperOptions {
   confirmations: number;
   /** Each event scan re-reads this many blocks before the last one; logs are deduplicated. */
   scanOverlap: number;
+  /** How long to wait for a receipt before leaving the transaction open (ms). */
+  receiptTimeoutMs: number;
   /** Simulate only: log what would be sent. */
   dryRun: boolean;
 }
@@ -88,6 +90,7 @@ export const DEFAULT_OPTIONS: KeeperOptions = {
   dustSweep: WAD / 100n,
   confirmations: 5,
   scanOverlap: 200,
+  receiptTimeoutMs: 180_000,
   dryRun: false,
 };
 
@@ -320,7 +323,7 @@ export async function execute(
     return null;
   }
   try {
-    const rc = await k.client.waitForTransactionReceipt({ hash: p.hash, timeout: 180_000 });
+    const rc = await k.client.waitForTransactionReceipt({ hash: p.hash, timeout: k.opts.receiptTimeoutMs });
     return record(k, p, rc);
   } catch (e) {
     k.log('warn', job, 'pending', { label, hash: p.hash, nonce: p.nonce, reason: why(e), ...fields });

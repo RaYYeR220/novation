@@ -1,5 +1,5 @@
 import { formatEther } from 'viem';
-import { refresh, type Keeper } from '../keeper';
+import { refresh, resolvePending, type Keeper } from '../keeper';
 import { why } from '../log';
 import { claim } from './claim';
 import { liquidations } from './liquidations';
@@ -25,6 +25,8 @@ export const LOW_BALANCE = 50_000_000_000_000n; // 0.00005 ETH
 export async function tick(k: Keeper, jobs: readonly JobName[] = JOB_NAMES) {
   const t0 = Date.now();
   const first = k.txs.length;
+  // a transaction left open by an earlier tick is logged as soon as it lands
+  if (k.state.pending.size) await resolvePending(k).catch((e) => k.log('warn', 'tick', 'pending check failed', { reason: why(e) }));
   const balance = await k.client.getBalance({ address: k.account.address });
   if (balance < LOW_BALANCE) k.log('warn', 'tick', 'low balance', { keeper: k.account.address, eth: formatEther(balance) });
   for (const name of JOB_NAMES) {
