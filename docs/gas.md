@@ -117,17 +117,17 @@ The book is the most expensive the caps allow: a 50% bid on an insolvent account
 
 | Part | Gas |
 |---|---|
-| `transferFraction` (positions, collateral, claims, cash) | 11,753,199 |
-| First margin procedure, cold, without the kernel (state and live-book status in one pass) | 3,295,307 |
-| Second and third margin procedures (account after, bidder), without the kernel | 3,315,321 |
-| Price checks and vol catch-up (4 underlyings, 8 rounds each), without the kernel | 576,028 |
-| Rest (bidder checks, InsuranceFund payout, discount clock) | 137,857 |
-| **Outside the kernel** | **19,077,712** |
+| `transferFraction` (positions, collateral, claims, cash) | 11,751,221 |
+| First margin procedure, cold, without the kernel (state and live-book status in one pass) | 3,274,756 |
+| Second and third margin procedures (account after, bidder), without the kernel | 3,274,241 |
+| Price checks and vol catch-up (4 underlyings, 8 rounds each), without the kernel | 577,144 |
+| Rest (bidder checks and its vol, InsuranceFund payout, discount clock) | 142,689 |
+| **Outside the kernel** | **19,020,051** |
 | Stylus kernel: 3 margin calls and 4 `ewmaUpdate` calls | 4,360,000 |
 | Intrinsic gas and calldata | 23,112 |
-| **Transaction** | **23,460,824** |
+| **Transaction** | **23,403,163** |
 
-On mainnet the price reads go through the Robinhood feed proxies and USDG is the real token, which adds about 0.2M (deltas measured against the mocks), so about 23.7M against Arbitrum's 32M limit. What keeps it there:
+On mainnet the price reads go through the Robinhood feed proxies and USDG is the real token, which adds about 0.2M (deltas measured against the mocks), so about 23.6M against Arbitrum's 32M limit. Variants measured the same way come out lower: a bidder already holding the 4 tokens (its vol syncs are no-ops, its slots aren't fresh) 23.17M; a quarter of the book expired and settled in the registry 19.11M outside the kernel, about 1.4k more per such position (a `settlementPriceOf` per pass) while each leaves the Stylus input, about 5k per margin call. What keeps it there:
 
 - at most 4 underlyings per account, kept as a list, so the bid doesn't search all 64 registered underlyings;
 - one margin pass gives the bid both the account's state and whether its book is live (`liquidationState`);
