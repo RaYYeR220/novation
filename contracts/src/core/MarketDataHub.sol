@@ -35,6 +35,7 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
     error PhaseNotExhausted();
 
     uint256 private constant FALLBACK_DELAY = 72 hours;
+    uint256 private constant LAST_RESORT_DELAY = 7 days;
     uint256 private constant SEQ_GRACE = 3600;
     uint64 private constant MAX_ROUND_SEARCH = 1 << 40;
 
@@ -411,6 +412,23 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
         }
         if (laterPhase) return;
         revert NextRoundMissing();
+    }
+
+    /// @notice Oracle-only last resort, 7 days after expiry: the feed's last print at or before the
+    /// close, proven last exactly as in settlementPrice but without the maxSettlementLag bound. A
+    /// feed that stopped printing well before the close (and may never print again), or whose
+    /// first print after a stale close is implausible, then still settles, at its last in-band
+    /// pre-close print, and can't leave the expiry (every claim on it, and the accounts holding it)
+    /// frozen for good. The price must lie in the plausibility band.
+    function settlementPriceLastResort(address u, uint64 expiry, uint80 hint) external view returns (uint256 price) {
+        if (!NyseCalendar.isWeeklyExpiry(expiry)) revert NotExpiry();
+        if (block.timestamp < uint256(expiry) + LAST_RESORT_DELAY) revert TooEarly();
+        UnderlyingParams memory p = params.underlying(u);
+        IAggregatorV3 feed = IAggregatorV3(p.feed);
+        (int256 answer, uint256 updatedAt) = _round(feed, hint);
+        if (answer <= 0 || updatedAt == 0 || updatedAt > expiry) revert BadHint();
+        _requireLastRound(feed, expiry, hint);
+        price = _bandedPrice(feed, answer, p);
     }
 
     /// @notice Oracle-only escape hatch, 72h after expiry. firstAfter must be the first round that

@@ -1260,6 +1260,49 @@ contract ClearinghouseSettlementTest is Fixture {
         }
     }
 
+    /// Review PoC: a feed that stopped printing more than maxSettlementLag before the close, and
+    /// never prints again, can't be settled by the normal proofs or the 72-hour fallback. One short
+    /// on it would freeze every claim of the expiry, on every underlying, for good. Seven days on,
+    /// the last resort settles it at its last pre-close print.
+    function test_deadFeedExpirySettlesByLastResort() public {
+        uint32 spyPut = _list(address(spy), e, 600e18, false);
+        uint256 x = _fund(alice, 5_000 * USDG, 0);
+        uint256 z = _fund(carol, 1_000 * USDG, 0);
+        _trade(z, x, call180, 1e18, 10e18); // carol long an NVDA call from alice
+        _trade(z, x, spyPut, 0.1e18, 1e18); // and a little of a SPY put
+        (uint80 spyLast,,,,) = feedOf[address(spy)].latestRoundData(); // SPY's last print, Wednesday
+
+        // NVDA settles normally; SPY never prints again
+        _settleAt(address(nvda), 200e18);
+        vm.warp(e + 30 days);
+        vm.expectRevert(MarketDataHub.BadHint.selector); // older than maxSettlementLag
+        registry.settleExpiry(address(spy), e, spyLast);
+        vm.expectRevert(MarketDataHub.BadHint.selector); // no print after the close
+        registry.settleExpiryFallback(address(spy), e, spyLast + 1);
+        vm.expectRevert(CHErrors.ExpiryNotSettled.selector);
+        ch.settleAccount(x, e); // and so carol's NVDA payoff can never be claimed
+        vm.expectRevert(CHErrors.ExpiryNotSettled.selector);
+        ch.settleAccount(z, e);
+
+        // not before seven days
+        uint256 snap = vm.snapshotState();
+        vm.warp(e + 7 days - 1);
+        vm.expectRevert(MarketDataHub.TooEarly.selector);
+        registry.settleExpiryLastResort(address(spy), e, spyLast);
+        vm.revertToState(snap);
+
+        assertEq(registry.settleExpiryLastResort(address(spy), e, spyLast), 600e18);
+        (uint256 px, bool settled) = registry.settlementPriceOf(address(spy), e);
+        assertEq(px, 600e18);
+        assertTrue(settled);
+        ch.settleAccount(x, e);
+        ch.settleAccount(z, e);
+        uint256 cash0 = ch.cashOf(z);
+        ch.claim(z, e);
+        assertEq(ch.cashOf(z), cash0 + 20e18); // the NVDA call at 200
+        _assertSolvent();
+    }
+
     /// alice's naked short settles at 300 with an empty fund: 108 pending; NVDA then prints 250.
     function _defaultAt300(uint256 v, uint256 b) internal {
         _settleAt(address(nvda), 300e18);

@@ -17,6 +17,11 @@ interface IMarketDataHub {
         external
         view
         returns (uint256 price);
+    /// @notice Oracle-only last resort 7 days after expiry: the last print at or before the close, proven as in settlementPrice, without the lag bound.
+    function settlementPriceLastResort(address u, uint64 expiry, uint80 roundIdHint)
+        external
+        view
+        returns (uint256 price);
     function initVol(address u) external;
     function pokeVol(address u, uint80[] calldata roundIds) external;
     function syncVol(address u) external; // permissionless: pokes every round up to the feed's latest (same phase, <= 64 per call)
