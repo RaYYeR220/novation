@@ -6,6 +6,7 @@ import {RfqVenue, Quote} from "../../src/venues/RfqVenue.sol";
 import {CHErrors} from "../../src/core/ClearinghouseStorage.sol";
 import {IClearinghouse, AgentPolicy, AccountState} from "../../src/interfaces/IClearinghouse.sol";
 import {Position} from "../../src/types/Types.sol";
+import {GlobalParams} from "../../src/interfaces/IRiskParams.sol";
 import {FixedPointMath} from "../../src/libraries/FixedPointMath.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
@@ -270,6 +271,32 @@ contract RfqVenueTest is Fixture {
             )
         );
         assertEq(rfq.hashQuote(q), keccak256(abi.encodePacked(hex"1901", domain, structHash)));
+    }
+
+    /// A fill can't leave the maker a dust position, and a maker position left below minTradeQty by
+    /// a later increase of it can still be closed out through a quote.
+    function test_makerNeverLeftWithUncloseableDust() public {
+        Quote memory q = _quote(true, 1e18, 8e18);
+        bytes memory sig = _sign(MAKER_PK, q);
+        _fill(q, sig, 1e18); // maker short 1
+
+        Quote memory back = _quote(false, 1e18, 8e18); // maker buys back
+        back.nonce = 2;
+        bytes memory sigBack = _sign(MAKER_PK, back);
+        // another taker selling 0.995 would leave the maker 0.005 short
+        uint256 otherId = _fund(other, 10_000 * USDG, 0);
+        vm.prank(other);
+        vm.expectRevert(abi.encodeWithSelector(CHErrors.DustPosition.selector, makerId, -int256(0.005e18)));
+        rfq.fill(back, sigBack, otherId, 0.995e18);
+        _fill(back, sigBack, 0.95e18); // maker short 0.05
+
+        GlobalParams memory g = params.globals();
+        g.minTradeQty = 0.1e18;
+        params.setGlobals(g);
+        assertEq(_pos(makerId), -0.05e18);
+        _fill(back, sigBack, 0.05e18); // below the new minimum, but it closes both out
+        assertEq(_pos(makerId), 0);
+        assertEq(_pos(takerId), 0);
     }
 
     function test_qtyZeroReverts() public {

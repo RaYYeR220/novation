@@ -4,6 +4,7 @@ pragma solidity 0.8.30;
 import {Script} from "forge-std/Script.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {RiskParams} from "../src/core/RiskParams.sol";
 import {MarketDataHub} from "../src/core/MarketDataHub.sol";
 import {SeriesRegistry} from "../src/core/SeriesRegistry.sol";
@@ -24,8 +25,10 @@ import {IRiskKernel} from "../src/interfaces/IRiskKernel.sol";
 /// venues, closes the setup phase and merges the addresses back into the json (then run
 /// tools/deploy/record_libraries.py for the library addresses and the deploy block).
 ///
-/// Env: DEPLOYER_PRIVATE_KEY; optional GUARDIAN, TREASURY (default: the deployer) and
-/// TIMELOCK_MIN_DELAY (default 60 s on RH testnet, 24 h elsewhere).
+/// Env: DEPLOYER_PRIVATE_KEY; optional GUARDIAN, TREASURY (default: the deployer),
+/// TIMELOCK_MIN_DELAY (default 60 s on RH testnet, 24 h elsewhere) and VAULT_MIN_NEW_SERIES_QTY
+/// (default 1 contract on RH testnet, 10 elsewhere: the smallest sale that opens a series slot in
+/// a vault, so filling all 24 of a vault's slots takes 240 in-band contracts on mainnet).
 /// Run: forge script script/Deploy.s.sol --rpc-url $RH_TESTNET_RPC --broadcast --slow
 contract Deploy is Script {
     uint256 internal constant RH_TESTNET = 46630;
@@ -155,7 +158,8 @@ contract Deploy is Script {
         });
     }
 
-    function _vaultConfig() internal pure returns (VaultConfig memory) {
+    function _vaultConfig() internal view returns (VaultConfig memory) {
+        uint256 minNew = vm.envOr("VAULT_MIN_NEW_SERIES_QTY", block.chainid == RH_TESTNET ? uint256(1e18) : 10e18);
         return VaultConfig({
             minOtm: 0.05e18,
             maxTenorDays: 35,
@@ -167,7 +171,7 @@ contract Deploy is Script {
             maxOpenSeries: 24,
             minDelta: 0.05e18,
             maxDelta: 0.5e18,
-            minNewSeriesQty: 1e18
+            minNewSeriesQty: SafeCast.toUint128(minNew)
         });
     }
 

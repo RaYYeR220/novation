@@ -19,6 +19,10 @@ contract SeriesRegistry is ISeriesRegistry, ReentrancyGuardTransient {
     error BadStrike();
     error StrikeTooFar();
     error AlreadySettled();
+    /// @dev The hub's own errors, which listSeries passes through while the underlying can't be
+    /// priced (declared here so they decode against this contract's ABI).
+    error NoPrice();
+    error ImplausiblePrice();
 
     IRiskParams public immutable params;
     IMarketDataHub public immutable hub;
@@ -34,6 +38,11 @@ contract SeriesRegistry is ISeriesRegistry, ReentrancyGuardTransient {
         hub = hub_;
     }
 
+    /// @notice Lists (u, expiry, strike, call/put) once and returns its id; an existing listing
+    /// returns its id without any check. A new listing needs: an enabled underlying with a price
+    /// (else the hub's NoPrice or ImplausiblePrice), not halted (UnderlyingHalted), a weekly NYSE
+    /// close in the future and at most maxWeeksOut weeks ahead, inclusive (BadExpiry), a strike on
+    /// the strike grid (BadStrike) within maxStrikeDeviation of spot (StrikeTooFar).
     function listSeries(address u, uint64 expiry, uint128 strike, bool isCall)
         external
         nonReentrant

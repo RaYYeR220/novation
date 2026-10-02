@@ -511,6 +511,34 @@ contract PutWriteVaultTest is VaultFixture {
         assertGt(expected, 1000 * USDG);
     }
 
+    /// The covered-call vault's in-kind exits have no mirror here: the asset is USDG, premiums
+    /// arrive as USDG and puts settle in USDG, so the account holds only the asset and every exit,
+    /// the last one included, is paid in it alone.
+    function test_lastHolderTakesEverything() public {
+        _skipWithoutSettlement();
+        uint256 aShares = _vaultDeposit(vault, alice, 2000 * USDG);
+        uint256 bShares = _vaultDeposit(vault, bob, 2000 * USDG);
+        _buy(vault, put170, 10e18);
+        uint256 total = ch.cashOf(vid); // deposits plus the premium
+        assertGt(total, 4000e18);
+        vm.warp(e + 1);
+        _settleExpiry(address(nvda), e, 180e18);
+        _pokeVol(address(nvda));
+        vault.roll(_one(e));
+        assertEq(ch.collateralTokensOf(vid).length, 0);
+
+        vm.prank(alice);
+        vault.redeem(aShares, alice, alice);
+        vm.prank(bob);
+        vault.redeem(bShares, bob, bob);
+        assertEq(vault.totalSupply(), 0);
+        assertApproxEqAbs(usdg.balanceOf(alice), total / 2e12, 1);
+        assertApproxEqAbs(usdg.balanceOf(bob), total / 2e12, 1);
+        assertLt(ch.cashOf(vid), 2e12);
+        assertEq(vault.redeemableCash(alice), 0);
+        assertEq(vault.reservedCash(), 0);
+    }
+
     /// @dev The put-write mirror of the covered-call deficit path: cash-secured puts pay an
     /// in-the-money expiry from cash, so no deficit arises and the roll proceeds at once.
     function test_itmExpiryDeficitPath() public {

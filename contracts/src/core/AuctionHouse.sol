@@ -8,6 +8,7 @@ import {IClearinghouse, AccountState} from "../interfaces/IClearinghouse.sol";
 import {IRiskParams, GlobalParams} from "../interfaces/IRiskParams.sol";
 import {IMarketDataHub} from "../interfaces/IMarketDataHub.sol";
 import {FixedPointMath as F} from "../libraries/FixedPointMath.sol";
+import {NyseCalendar} from "../libraries/NyseCalendar.sol";
 import {Session, WAD} from "../types/Types.sol";
 
 /// @notice Dutch auctions on the clearinghouse.
@@ -40,10 +41,17 @@ import {Session, WAD} from "../types/Types.sol";
 /// a book the registry hasn't priced yet: a liquidation needs a live (unexpired) position and
 /// waits while any expired series of the account awaits its settlement price.
 ///
-/// Known limit: the discount clock is wall time. It keeps running while bids are paused (a closed
-/// session, a halt), so an auction started shortly before a pause resumes at a higher discount
-/// (up to maxDiscount for a deficit sale; a liquidation that ran out must be restarted, from
-/// startDiscount).
+/// The discount clock counts market time only: the seconds inside the NYSE 24/5 window (REGULAR or
+/// EXTENDED by the calendar), not weekends or holidays. An auction that runs into a closed session
+/// resumes at the discount it had when the window reopens, and a deficit sale started over a
+/// weekend (expiry settlement often happens then) opens at startDiscount. A liquidation's
+/// auctionDuration is market time too, so it doesn't run out over a weekend; one whose account
+/// recovers without a bid is ended by anyone (endLiquidation), so a later fall starts afresh.
+///
+/// Known limit: halts inside the window (a stale or implausible feed, a paused token, a corporate
+/// action) still run the clock, because the auction house can't see them after the fact: an
+/// auction caught by one resumes at a higher discount, up to maxDiscount (a liquidation that ran
+/// out must be restarted, from startDiscount).
 contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
     using SafeCast for uint256;
 
@@ -64,6 +72,7 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
     error ExceedsCollateral();
     error ExceedsDeficit();
     error BidRaisesRisk(uint256 imAfter, uint256 imBefore);
+    error StillLiquidatable();
 
     /// @dev Settlement differences this small are rounding of the marks (a few wei per position),
     /// not lots: they are dropped so that an account without cash can still be taken over.
@@ -92,8 +101,8 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
     /// @notice Starts (or, once the previous one has run its course, restarts) the liquidation of
     /// an account that is below maintenance margin and has live positions.
     function startLiquidation(uint256 id) external nonReentrant {
-        uint256 t0 = liquidationStartedAt[id];
-        if (t0 != 0 && block.timestamp <= t0 + params.globals().auctionDuration) revert AuctionActive();
+        (, bool active) = _liquidationDiscount(id, params.globals());
+        if (active) revert AuctionActive();
         _requireAccountTradable(id);
         _requireLiveBook(id);
         if (!ch.accountState(id).liquidatable) revert NotLiquidatable();
@@ -164,6 +173,18 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
             delete liquidationStartedAt[id];
             emit LiquidationEnded(id);
         }
+    }
+
+    /// @notice Permissionless: ends the liquidation of an account that is no longer liquidatable
+    /// (it recovered without a bid, say on a price move). Its clock counts market time only, so an
+    /// auction left open on Friday evening would otherwise still run on Sunday; if the account fell
+    /// again it would inherit the old discount and nobody could start a fresh ramp. Works in any
+    /// session: it only reads margin.
+    function endLiquidation(uint256 id) external nonReentrant {
+        if (liquidationStartedAt[id] == 0) revert AuctionNotActive();
+        if (ch.accountState(id).liquidatable) revert StillLiquidatable();
+        delete liquidationStartedAt[id];
+        emit LiquidationEnded(id);
     }
 
     /// @return discountWad the current discount (0 if never started, maxDiscount once over)
@@ -290,7 +311,7 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
     {
         uint256 t0 = liquidationStartedAt[id];
         if (t0 == 0) return (0, false);
-        uint256 elapsed = block.timestamp - t0;
+        uint256 elapsed = NyseCalendar.tradableSeconds(t0, block.timestamp, uint256(g.auctionDuration) + 1);
         return (_ramp(g, elapsed), elapsed <= g.auctionDuration);
     }
 
@@ -301,10 +322,11 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
     {
         uint256 t0 = saleStartedAt[id][expiry];
         if (t0 == 0) return (0, false);
-        return (_ramp(g, block.timestamp - t0), true);
+        return (_ramp(g, NyseCalendar.tradableSeconds(t0, block.timestamp, g.auctionDuration)), true);
     }
 
-    /// @dev startDiscount + (maxDiscount - startDiscount) * min(elapsed, duration) / duration
+    /// @dev startDiscount + (maxDiscount - startDiscount) * min(elapsed, duration) / duration, with
+    /// `elapsed` in market time (see the contract notes)
     function _ramp(GlobalParams memory g, uint256 elapsed) private pure returns (uint256) {
         uint256 duration = g.auctionDuration;
         if (elapsed > duration) elapsed = duration;

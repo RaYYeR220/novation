@@ -861,6 +861,90 @@ contract ClearinghouseTradeTest is Fixture {
         assertEq(ch.positionsOf(a).length, 0);
     }
 
+    /// An account in deficit can always buy back its last covered call at or below mark, although
+    /// its stock alone counts more downside (IM) than the covered book did. Paying above mark while
+    /// underwater, or selling a last protective long, stays refused.
+    function test_deficitAccountClosesLastCoveredCall() public {
+        uint256 a = _fund(alice, 1000 * USDG, 10e18);
+        uint256 b = _fund(bob, 10_000 * USDG, 0);
+        _trade(a, b, call180, -10e18, 80e18); // covered: 10 NVDA, short 10 calls
+        _cheatDeficitTotal(a, 2400e18);
+
+        AccountState memory pre = ch.accountState(a);
+        uint256 mark = 1800e18 - uint256(pre.mtm); // the 10 calls at the kernel mark (stock 10 x 180)
+        uint256 fee = _fee(address(nvda), 10e18, mark);
+        AccountState memory post = ch.marginAfter(a, call180, 10e18, -int256(mark + fee));
+        assertGt(post.im, pre.im); // the stock's downside without the calls' cushion
+        assertLt(post.equity, int256(post.im)); // underwater
+        assertEq(post.equity + int256(fee), pre.equity); // at mark equity doesn't move
+
+        // a buyback above mark would pay value away
+        uint256 fee1 = _fee(address(nvda), 10e18, mark + 1);
+        AccountState memory over = ch.marginAfter(a, call180, 10e18, -int256(mark + 1 + fee1));
+        _expectTradeRevert(
+            _tp(a, alice, b, bob, call180, 10e18, mark + 1),
+            abi.encodeWithSelector(CHErrors.InsufficientMargin.selector, a, over.equity, over.im)
+        );
+        // at mark it goes through
+        _trade(a, b, call180, 10e18, mark);
+        assertEq(ch.positionsOf(a).length, 0);
+        assertEq(ch.accountState(a).equity, post.equity);
+
+        // a last long that hedges the stock is still a hedge: selling it raises the risk
+        uint256 c = _fund(carol, 1000 * USDG, 10e18);
+        _trade(c, b, put170, 10e18, 40e18);
+        _cheatDeficitTotal(c, 1);
+        AccountState memory cPre = ch.accountState(c);
+        uint256 feeC = _fee(address(nvda), -10e18, 20e18);
+        AccountState memory cPost = ch.marginAfter(c, put170, -10e18, int256(20e18 - feeC));
+        assertGt(cPost.im, cPre.im);
+        _expectTradeRevert(
+            _tp(c, carol, b, bob, put170, -10e18, 20e18),
+            abi.encodeWithSelector(CHErrors.RiskIncreaseNotAllowed.selector, c, cPost.im, cPre.im)
+        );
+    }
+
+    /// When governance raises minTradeQty, a position left below it can still be closed out, with
+    /// a trade below the new minimum; nothing else may trade below it or leave a position below it.
+    function test_positionBelowRaisedMinimumCanBeClosed() public {
+        uint256 a = _fund(alice, 1000 * USDG, 0);
+        uint256 b = _fund(bob, 1000 * USDG, 0);
+        uint256 c = _fund(carol, 1000 * USDG, 0);
+        uint256 d = _fund(_user("dave"), 1000 * USDG, 0);
+        _trade(a, b, call180, 0.05e18, 0.4e18); // alice long 0.05, bob short 0.05
+        _trade(c, d, call180, 1e18, 8e18); // carol long 1, dave short 1
+
+        GlobalParams memory g = params.globals();
+        g.minTradeQty = 0.1e18;
+        params.setGlobals(g);
+
+        address dave = ch.ownerOf(d);
+        // adding below the minimum, on both sides: refused
+        _expectTradeRevert(
+            _tp(c, carol, d, dave, call180, 0.05e18, 0.4e18), abi.encodeWithSelector(CHErrors.QtyTooSmall.selector)
+        );
+        // alice can close out, but not into a fresh account that would be left below the minimum
+        uint256 x = _fund(_user("erin"), 1000 * USDG, 0);
+        _expectTradeRevert(
+            _tp(a, alice, x, _user("erin"), call180, -0.05e18, 0.3e18),
+            abi.encodeWithSelector(CHErrors.DustPosition.selector, x, int256(0.05e18))
+        );
+        // closing out against a counterparty that stays above the minimum works for taker and maker
+        _trade(a, c, call180, -0.05e18, 0.3e18); // alice sells her 0.05 to carol
+        assertEq(ch.positionsOf(a).length, 0);
+        _assertPos(c, call180, 1.05e18);
+        _trade(b, d, call180, 0.05e18, 0.4e18); // bob buys back his 0.05 from dave
+        assertEq(ch.positionsOf(b).length, 0);
+        _assertPos(d, call180, -1.05e18);
+        // a sub-minimum trade that closes nothing out stays refused
+        _expectTradeRevert(
+            _tp(c, carol, d, dave, call180, -0.05e18, 0.3e18), abi.encodeWithSelector(CHErrors.QtyTooSmall.selector)
+        );
+        _trade(c, d, call180, -1.05e18, 8e18); // carol and dave close the rest
+        assertEq(ch.positionsOf(c).length, 0);
+        assertEq(ch.openInterest(call180), 0);
+    }
+
     function test_openingOnDisabledUnderlyingReverts() public {
         (uint256 a, uint256 b) = _collar();
         uint256 c = _fund(carol, 1000 * USDG, 0);

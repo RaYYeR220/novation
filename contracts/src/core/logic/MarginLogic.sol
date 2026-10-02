@@ -2,7 +2,8 @@
 pragma solidity 0.8.30;
 
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
-import {CHS, CHStorage, CHErrors, Deps} from "../ClearinghouseStorage.sol";
+import {CHS, CHStorage, CHErrors, Deps, PriceOutage} from "../ClearinghouseStorage.sol";
+import {IAggregatorV3} from "../../interfaces/IAggregatorV3.sol";
 import {MarketDataHub} from "../MarketDataHub.sol";
 import {Payoff} from "./Payoff.sol";
 import {AccountState} from "../../interfaces/IClearinghouse.sol";
@@ -48,6 +49,10 @@ library MarginLogic {
     using SafeCast for uint256;
 
     uint256 private constant MAX_SHOCK_RANGE = 0.9e18;
+    /// @notice How long a collateral token must have been seen without a price, its feed printing
+    /// no new round meanwhile, before the socialization dust test counts it as 0 (the same 72
+    /// hours as the settlement price fallback).
+    uint256 internal constant OUTAGE_WRITE_OFF = 72 hours;
 
     /// @dev A book is the account's positions (plus the what-if change) as parallel arrays.
     struct Book {
@@ -79,10 +84,31 @@ library MarginLogic {
         return _state(d, id, seriesId, qtyDelta, cashDelta);
     }
 
-    /// @notice The account's collateral at spot, valued as on the fast path: a token the hub can't
-    /// price (NoPrice / ImplausiblePrice) counts as 0; any other failure reverts.
-    function collateralValue(Deps memory d, uint256 id) external view returns (int256) {
-        return _collateralValue(d, id);
+    /// @notice The account's collateral at spot, for the socialization dust test. Unlike the margin
+    /// procedure, a token the hub can't price doesn't count as 0 here: the call reverts with the
+    /// hub's NoPrice / ImplausiblePrice. A socialization can't be undone (the cash index never
+    /// rises), so it waits for the price rather than write off a loss that collateral the account
+    /// still holds might cover. It waits a bounded time, though: once the token has been marked
+    /// without a price (markUnpriced) for OUTAGE_WRITE_OFF and its feed has printed no round since,
+    /// a feed that may never come back, it counts as 0.
+    function collateralValue(Deps memory d, uint256 id) external view returns (int256 mtm) {
+        CHStorage storage $ = CHS.s();
+        address[] storage toks = $.collateralTokens[id];
+        for (uint256 i = 0; i < toks.length; ++i) {
+            address t = toks[i];
+            PriceOutage memory o = $.outages[t];
+            bool writtenOff =
+                o.since != 0 && block.timestamp >= o.since + OUTAGE_WRITE_OFF && o.round == _feedRound(d, t);
+            (bool priced, uint256 spot,) = _spot(d, t, writtenOff);
+            if (priced) mtm += F.mulWad($.collateral[id][t].toInt256(), spot.toInt256());
+        }
+    }
+
+    /// @notice Whether the hub prices `token` now (only its NoPrice / ImplausiblePrice count as no
+    /// price; any other failure reverts), and its feed's latest round id (0 if unreadable).
+    function priceStatus(Deps memory d, address token) external view returns (bool priced, uint80 round) {
+        (priced,,) = _spot(d, token, true);
+        round = _feedRound(d, token);
     }
 
     /// @notice Correlated portfolio PnL per scenario (39 values) of the account's live risk.
@@ -279,6 +305,13 @@ library MarginLogic {
             (bool priced, uint256 spot,) = _spot(d, toks[i], true);
             if (priced) mtm += F.mulWad($.collateral[id][toks[i]].toInt256(), spot.toInt256());
         }
+    }
+
+    /// @dev The feed's latest round id, read raw: 0 if the call fails or the word isn't a uint80.
+    function _feedRound(Deps memory d, address token) private view returns (uint80 id) {
+        (bool ok, bytes memory r) =
+            d.params.underlying(token).feed.staticcall(abi.encodeWithSelector(IAggregatorV3.latestRoundData.selector));
+        if (ok && r.length >= 160 && uint256(bytes32(r)) <= type(uint80).max) id = uint80(uint256(bytes32(r)));
     }
 
     /// @dev hub.spot. With `mayDrop`, the hub's NoPrice / ImplausiblePrice come back as

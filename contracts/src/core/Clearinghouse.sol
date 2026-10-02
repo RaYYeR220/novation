@@ -11,7 +11,7 @@ import {IMarketDataHub} from "../interfaces/IMarketDataHub.sol";
 import {ISeriesRegistry} from "../interfaces/ISeriesRegistry.sol";
 import {IRiskKernel} from "../interfaces/IRiskKernel.sol";
 import {IInsuranceFund} from "../interfaces/IInsuranceFund.sol";
-import {CHS, CHStorage, CHErrors, Account, Deps} from "./ClearinghouseStorage.sol";
+import {CHS, CHStorage, CHErrors, Account, Deps, PriceOutage} from "./ClearinghouseStorage.sol";
 import {MarginLogic} from "./logic/MarginLogic.sol";
 import {TradeLogic} from "./logic/TradeLogic.sol";
 import {AuctionHookLogic} from "./logic/AuctionHookLogic.sol";
@@ -29,6 +29,8 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
     event SetupFinalized();
     /// @dev Emitted by SettlementLogic (same signature), declared here so it is in this ABI.
     event ClaimHaircut(uint256 indexed id, uint64 indexed expiry, uint256 claimWad, uint256 paidWad);
+    /// @dev Emitted by SettlementLogic (same signature), declared here so it is in this ABI.
+    event PriceOutageMarked(address indexed token, uint256 since, uint80 round);
 
     IRiskParams public immutable params;
     IMarketDataHub public immutable hub;
@@ -133,9 +135,11 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
 
     /// @notice USDG: anyone may fund any existing account (it becomes cash). Stock: the owner only
     /// (nobody else can park collateral in an account, e.g. dust that holds up a socialization or
-    /// a liquidation); an enabled underlying becomes collateral, but only while the hub can price
-    /// it (hub.spot reverts NoPrice / ImplausiblePrice otherwise; a HALTED session is fine). The
-    /// amount credited is what actually arrived (balance delta).
+    /// a liquidation), and not while the account owes a deficit (the owner can't keep adding
+    /// stock that holds up the socialization of its own default; cash repays the debt directly);
+    /// an enabled underlying becomes collateral, but only while the hub can price it (hub.spot
+    /// reverts NoPrice / ImplausiblePrice otherwise; a HALTED session is fine). The amount
+    /// credited is what actually arrived (balance delta).
     function deposit(uint256 id, address token, uint256 amount) external nonReentrant {
         CHStorage storage $ = CHS.s();
         address owner = $.accounts[id].owner;
@@ -143,7 +147,7 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
         if (amount == 0) revert CHErrors.ZeroAmount();
         bool isCash = token == usdg;
         if (!isCash) {
-            if (msg.sender != owner) revert CHErrors.DepositNotAllowed();
+            if (msg.sender != owner || $.accounts[id].deficitTotal != 0) revert CHErrors.DepositNotAllowed();
             if (!params.underlying(token).enabled) revert CHErrors.TokenNotAllowed(token);
             hub.spot(token);
         }
@@ -243,6 +247,13 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
     /// cash index; the account keeps owing it as residual debt (see SettlementLogic).
     function socializeRemainder(uint256 id, uint64 expiry) external nonReentrant {
         SettlementLogic.socializeRemainder(_deps(), id, expiry);
+    }
+
+    /// @notice Permissionless: records that a collateral token has no price, or clears the record
+    /// once it has one. After 72 hours without a price or a new feed round, the socialization dust
+    /// test counts the token as 0 (see SettlementLogic.markUnpriced).
+    function markUnpriced(address token) external nonReentrant {
+        SettlementLogic.markUnpriced(_deps(), token);
     }
 
     /// @notice Permissionless and equity-neutral: spends the account's own cash on what it owes,
@@ -366,6 +377,12 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
     /// @notice What the account still owes after a socialization (part of deficitOf's total).
     function socializedDebtOf(uint256 id) external view returns (uint256) {
         return CHS.s().socializedDebt[id];
+    }
+
+    /// @notice When `token` was marked without a price (0: not marked) and its feed's round then.
+    function priceOutageOf(address token) external view returns (uint256 since, uint80 round) {
+        PriceOutage storage o = CHS.s().outages[token];
+        return (o.since, o.round);
     }
 
     /// @notice The expiries on which the account still owes its pool or the InsuranceFund.

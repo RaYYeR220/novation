@@ -53,10 +53,11 @@ contract InsuranceFund is IInsuranceFund, ReentrancyGuardTransient {
         if (msg.sender != clearinghouse) revert NotClearinghouse();
         uint256 bal = balanceWad();
         uint256 tokenAmt = (amountWad < bal ? amountWad : bal) / _scale;
+        if (tokenAmt == 0) return 0; // nothing to pay: no event, nothing outstanding
         coveredWad = tokenAmt * _scale;
         _outstanding += coveredWad;
         emit Covered(amountWad, coveredWad);
-        if (tokenAmt != 0) IERC20(address(usdg)).safeTransfer(msg.sender, tokenAmt);
+        IERC20(address(usdg)).safeTransfer(msg.sender, tokenAmt);
     }
 
     function notifyRecovered(uint256 amountWad) external nonReentrant {

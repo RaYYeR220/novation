@@ -87,6 +87,42 @@ contract RevertingOracleToken {
     }
 }
 
+/// @notice A feed whose latestRoundData() returns two words instead of five.
+contract ShortRoundFeed {
+    function decimals() external pure returns (uint8) {
+        return 8;
+    }
+
+    fallback() external {
+        assembly {
+            mstore(0, 1)
+            mstore(0x20, 15000000000)
+            return(0, 0x40)
+        }
+    }
+}
+
+/// @notice A feed with configurable raw return words: decimals() as a full word (a value above
+/// 255 can't decode as uint8) and any answer and round ids.
+contract RawFeed {
+    uint256 public dec = 8;
+    int256 public answer = 150e8;
+    uint256 public roundWord = 1;
+    uint256 public startedAt;
+
+    function set(uint256 dec_, int256 answer_, uint256 roundWord_, uint256 startedAt_) external {
+        (dec, answer, roundWord, startedAt) = (dec_, answer_, roundWord_, startedAt_);
+    }
+
+    function decimals() external view returns (uint256) {
+        return dec;
+    }
+
+    function latestRoundData() external view returns (uint256, int256, uint256, uint256, uint256) {
+        return (roundWord, answer, startedAt, block.timestamp, roundWord);
+    }
+}
+
 contract MarketDataHubTest is Test {
     MarketDataHub hub;
     RiskParams rp;
@@ -687,6 +723,78 @@ contract MarketDataHubTest is Test {
         assertEq(uint8(hub.session(address(t))), uint8(Session.HALTED));
         vm.expectRevert(MarketDataHub.NoPrice.selector);
         hub.spot(address(t));
+    }
+
+    /// A configured feed that can't be decoded (no code, short return data, a word out of its
+    /// type's range, an absurd answer) halts its underlying: session() reads HALTED and spot()
+    /// reverts NoPrice, instead of every caller reverting on the decode.
+    function test_undecodableFeedHalts() public {
+        vm.warp(REGULAR_TS);
+        MockStockToken t1 = new MockStockToken("A", "A");
+        MockStockToken t2 = new MockStockToken("B", "B");
+        MockStockToken t3 = new MockStockToken("C", "C");
+        RawFeed raw = new RawFeed();
+        _addUnderlying(address(t1), address(0xFEED)); // no code at all
+        _addUnderlying(address(t2), address(new ShortRoundFeed()));
+        _addUnderlying(address(t3), address(raw));
+
+        // the raw feed starts out readable
+        (uint256 price,, bool ok) = hub.spot(address(t3));
+        assertEq(price, 150e18);
+        assertTrue(ok);
+
+        address[2] memory broken = [address(t1), address(t2)];
+        for (uint256 i = 0; i < broken.length; ++i) {
+            assertEq(uint8(hub.session(broken[i])), uint8(Session.HALTED));
+            vm.expectRevert(MarketDataHub.NoPrice.selector);
+            hub.spot(broken[i]);
+        }
+
+        raw.set(256, 150e8, 1, 0); // decimals() doesn't fit a uint8
+        _assertNoPrice(address(t3));
+        raw.set(8, 150e8, 1 << 80, 0); // a round id word beyond uint80 is ignored
+        (price,, ok) = hub.spot(address(t3));
+        assertEq(price, 150e18);
+        assertTrue(ok);
+        raw.set(0, int256(uint256(type(uint128).max) + 1), 1, 0); // would overflow the WAD price
+        _assertNoPrice(address(t3));
+        raw.set(18, type(int256).min, 1, 0);
+        _assertNoPrice(address(t3));
+    }
+
+    function _assertNoPrice(address t) internal {
+        assertEq(uint8(hub.session(t)), uint8(Session.HALTED));
+        vm.expectRevert(MarketDataHub.NoPrice.selector);
+        hub.spot(t);
+    }
+
+    /// An unreadable or undecodable sequencer feed reads as down, and a startedAt far in the
+    /// future can't overflow the grace-period check.
+    function test_undecodableSequencerFeedHalts() public {
+        RawFeed seq = new RawFeed();
+        RiskParams rp2 =
+            new RiskParams(address(usdg), TREASURY, address(seq), TIMELOCK, GUARDIAN, SETUP_ADMIN, _validGlobals());
+        UnderlyingParams memory p = _validUnderlying();
+        p.feed = address(feed);
+        vm.prank(SETUP_ADMIN);
+        rp2.addUnderlying(address(token), p);
+        MarketDataHub hub2 = new MarketDataHub(rp2, kernel);
+
+        vm.warp(REGULAR_TS);
+        feed.pushRound(150e8, REGULAR_TS);
+        seq.set(0, 0, 1, REGULAR_TS - 10000); // up for long enough
+        assertEq(uint8(hub2.session(address(token))), uint8(Session.REGULAR));
+        seq.set(0, 0, 1, type(uint256).max); // startedAt in the future
+        assertEq(uint8(hub2.session(address(token))), uint8(Session.HALTED));
+        (,, bool ok) = hub2.spot(address(token));
+        assertFalse(ok);
+
+        RiskParams rp3 =
+            new RiskParams(address(usdg), TREASURY, address(0xBEEF), TIMELOCK, GUARDIAN, SETUP_ADMIN, _validGlobals());
+        vm.prank(SETUP_ADMIN);
+        rp3.addUnderlying(address(token), p);
+        MarketDataHub hub3 = new MarketDataHub(rp3, kernel);
+        assertEq(uint8(hub3.session(address(token))), uint8(Session.HALTED)); // no code
     }
 
     function test_futureUpdatedAtHalts() public {

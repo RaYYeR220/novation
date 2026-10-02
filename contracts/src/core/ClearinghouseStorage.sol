@@ -11,6 +11,13 @@ import {IInsuranceFund} from "../interfaces/IInsuranceFund.sol";
 import {FixedPointMath as F} from "../libraries/FixedPointMath.sol";
 import {Position, Series, WAD, MAX_POSITIONS, MAX_UNDERLYINGS} from "../types/Types.sol";
 
+/// @notice A collateral token seen without a price (markUnpriced): since when, and the feed's
+/// latest round id then (0 if unreadable). Cleared once anyone sees it priced again.
+struct PriceOutage {
+    uint64 since;
+    uint80 round;
+}
+
 struct Account {
     address owner;
     uint256 cashNorm; // cash = cashNorm * cashIndex / 1e18 (floor)
@@ -51,6 +58,7 @@ struct CHStorage {
     // deficitTotal.
     mapping(uint256 => uint256) socializedDebt;
     mapping(uint256 => uint64[]) deficitExpiries; // expiries where defPending or defBridged > 0
+    mapping(address => PriceOutage) outages; // collateral tokens without a price, see markUnpriced
 }
 
 /// @notice Dependencies handed to the logic libraries, built by the Clearinghouse from its

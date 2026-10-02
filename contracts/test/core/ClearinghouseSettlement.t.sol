@@ -988,26 +988,16 @@ contract ClearinghouseSettlementTest is Fixture {
     }
 
     /// Review PoC: stock parked in an emptied defaulter can't hold socialization (and so every
-    /// claim of the expiry) hostage. Third parties can't deposit stock into an account in deficit,
-    /// collateral worth at most dustEquity (5 USD) is ignored, and so is collateral the hub can't
-    /// price.
+    /// claim of the expiry) hostage. Nobody can deposit stock into an account in deficit and
+    /// collateral worth at most dustEquity (5 USD) is ignored. Collateral the hub can't price
+    /// holds the socialization until it can.
     function test_dustCollateralCannotBlockSocialize() public {
         (uint256 v, uint256 b) = _nakedShortSold();
-        _settleAt(address(nvda), 300e18);
-        ch.settleAccount(v, e);
-        ch.settleAccount(b, e);
-        _setPrice(address(nvda), 250e18);
 
-        nvda.mint(bidder, 1);
-        vm.startPrank(bidder);
-        nvda.approve(address(ch), 1);
-        vm.expectRevert(CHErrors.DepositNotAllowed.selector);
-        ch.deposit(v, address(nvda), 1);
-        vm.stopPrank();
-
-        // the owner can deposit, but 0.02 NVDA at 250 is worth exactly 5: dust, ignored
+        // stock the owner held before the default: 0.02 NVDA at 250 is worth exactly 5, dust
         uint256 snap = vm.snapshotState();
         _deposit(alice, v, address(nvda), 0.02e18);
+        _defaultAt300(v, b);
         ch.socializeRemainder(v, e);
         assertEq(_pending(e), 0);
         assertEq(ch.collateralOf(v, address(nvda)), 0.02e18); // the dust stays with the account
@@ -1017,20 +1007,139 @@ contract ClearinghouseSettlementTest is Fixture {
 
         // one wei more is not dust
         _deposit(alice, v, address(nvda), 0.02e18 + 1);
+        _defaultAt300(v, b);
         vm.expectRevert(abi.encodeWithSelector(CHErrors.AccountNotEmpty.selector, v));
         ch.socializeRemainder(v, e);
 
-        // collateral the hub can't price counts as 0
+        // and nobody, the owner included, can add stock to the account while it owes the deficit
+        nvda.mint(bidder, 1);
+        vm.startPrank(bidder);
+        nvda.approve(address(ch), 1);
+        vm.expectRevert(CHErrors.DepositNotAllowed.selector);
+        ch.deposit(v, address(nvda), 1);
+        vm.stopPrank();
+        nvda.mint(alice, 1e18);
+        vm.startPrank(alice);
+        nvda.approve(address(ch), 1e18);
+        vm.expectRevert(CHErrors.DepositNotAllowed.selector);
+        ch.deposit(v, address(nvda), 1e18);
+        vm.stopPrank();
+
+        // collateral the hub can't price doesn't count as 0: the socialization, which can't be
+        // undone, waits for a price, here even for a dust amount
         _setPrice(address(nvda), 5000e18); // outside the plausibility band
         vm.expectRevert(MarketDataHub.ImplausiblePrice.selector);
-        hub.spot(address(nvda));
+        ch.socializeRemainder(v, e);
+        vm.revertToState(snap);
+        _deposit(alice, v, address(nvda), 0.02e18);
+        _defaultAt300(v, b);
+        _setPrice(address(nvda), 0);
+        vm.expectRevert(MarketDataHub.NoPrice.selector);
+        ch.socializeRemainder(v, e);
+        assertEq(_pending(e), 108e18);
+        // once the feed prices it again, the dust test applies
+        _setPrice(address(nvda), 250e18);
         ch.socializeRemainder(v, e);
         assertEq(_pending(e), 0);
         ch.claim(b, e);
         _assertSolvent();
     }
 
-    /// Stock comes from the account's owner only, in deficit or not; USDG from anyone.
+    /// A socialized remainder with a sub-unit part becomes a debt in whole USDG units, so the
+    /// account's later cash (or a deficit sale) can repay it all and the account isn't held in
+    /// deficit for good by a rest below one unit.
+    function test_socializedDebtHasNoSubUnitRest() public {
+        (uint256 v, uint256 b) = _nakedShortSold();
+        _settleAt(address(nvda), 300.12345678e18); // owes 5 x 120.12345678 = 600.6172839
+        ch.settleAccount(v, e);
+        ch.settleAccount(b, e);
+        uint256 rem = 600.6172839e18 - 492e18; // its cash was 450 + 42
+        assertEq(_pending(e), rem);
+        assertGt(rem % 1e12, 0);
+
+        int256 eq0 = ch.accountState(v).equity;
+        ch.socializeRemainder(v, e);
+        uint256 owed = rem - rem % 1e12 + 1e12; // rounded up to a whole unit
+        _assertBuckets(v, e, 0, 0, owed);
+        assertEq(ch.accountState(v).equity, eq0 - int256(owed - rem)); // the rounding is the defaulter's
+        _assertSolvent();
+
+        _deposit(bidder, v, address(usdg), 200 * USDG); // later cash
+        uint256 fund0 = insurance.balanceWad();
+        ch.repayDeficit(v);
+        _assertBuckets(v, e, 0, 0, 0);
+        assertEq(insurance.balanceWad(), fund0 + owed);
+        assertApproxEqAbs(ch.cashOf(v), 200e18 - owed, 2); // index-scaled cash, below 1e18 now
+        vm.prank(alice);
+        ch.withdraw(v, address(usdg), 91 * USDG, alice);
+        _assertSolvent();
+    }
+
+    /// Collateral whose feed dies holds a socialization only for a while: marked without a price
+    /// for 72 hours, its feed printing nothing new, it counts as 0, so the expiry's claims can't
+    /// stay frozen for good. A new round restarts the clock and a price clears the mark.
+    function test_deadFeedCollateralWrittenOffAfter72Hours() public {
+        (uint256 v, uint256 b) = _nakedShortSold();
+        _deposit(alice, v, address(spy), 0.001e18); // 0.60 USD of SPY, held before the default
+        _defaultAt300(v, b);
+        _setPrice(address(spy), 0); // the SPY feed dies
+        vm.expectRevert(MarketDataHub.NoPrice.selector);
+        ch.socializeRemainder(v, e);
+
+        uint256 t0 = vm.getBlockTimestamp();
+        (uint80 round,,,,) = feedOf[address(spy)].latestRoundData();
+        vm.expectEmit(true, true, true, true, address(ch));
+        emit SettlementLogic.PriceOutageMarked(address(spy), t0, round);
+        ch.markUnpriced(address(spy));
+        (uint256 since, uint80 r) = ch.priceOutageOf(address(spy));
+        assertEq(since, t0);
+        assertEq(r, round);
+        vm.recordLogs();
+        ch.markUnpriced(address(spy)); // already running: nothing changes
+        assertEq(vm.getRecordedLogs().length, 0);
+
+        // a new round (still without a price) restarts the clock
+        vm.warp(t0 + 70 hours);
+        _setPrice(address(spy), 0);
+        vm.warp(t0 + 72 hours);
+        vm.expectRevert(MarketDataHub.NoPrice.selector);
+        ch.socializeRemainder(v, e);
+        ch.markUnpriced(address(spy));
+        (since,) = ch.priceOutageOf(address(spy));
+        assertEq(since, t0 + 72 hours);
+
+        vm.warp(since + 72 hours - 1);
+        vm.expectRevert(MarketDataHub.NoPrice.selector);
+        ch.socializeRemainder(v, e);
+        uint256 snap = vm.snapshotState();
+
+        // 72 hours on, the dead collateral counts as 0 and the socialization goes through
+        vm.warp(since + 72 hours);
+        ch.socializeRemainder(v, e);
+        assertEq(_pending(e), 0);
+        assertEq(ch.collateralOf(v, address(spy)), 0.001e18); // it stays on the account
+        ch.claim(b, e);
+        _assertSolvent();
+
+        // had the price come back, the mark would have been cleared
+        vm.revertToState(snap);
+        _setPrice(address(spy), 600e18);
+        ch.markUnpriced(address(spy));
+        (since,) = ch.priceOutageOf(address(spy));
+        assertEq(since, 0);
+    }
+
+    /// alice's naked short settles at 300 with an empty fund: 108 pending; NVDA then prints 250.
+    function _defaultAt300(uint256 v, uint256 b) internal {
+        _settleAt(address(nvda), 300e18);
+        ch.settleAccount(v, e);
+        ch.settleAccount(b, e);
+        _setPrice(address(nvda), 250e18);
+        assertEq(_pending(e), 108e18);
+    }
+
+    /// Stock comes from the account's owner only, and not while it owes a deficit; USDG from
+    /// anyone, always.
     function test_stockDepositOwnerOnly() public {
         (uint256 v,) = _coveredCallSold(30e18); // carol owns v
         nvda.mint(bidder, 1e18);
@@ -1051,9 +1160,15 @@ contract ClearinghouseSettlementTest is Fixture {
         ch.deposit(v, address(nvda), 1e18);
         vm.stopPrank();
 
+        nvda.mint(carol, 1e18);
+        vm.startPrank(carol);
+        nvda.approve(address(ch), 1e18);
+        vm.expectRevert(CHErrors.DepositNotAllowed.selector); // nor the owner, in deficit
+        ch.deposit(v, address(nvda), 1e18);
+        vm.stopPrank();
+
         _deposit(bidder, v, address(usdg), 10 * USDG); // cash from anyone can only help repay
-        _deposit(carol, v, address(nvda), 1e18); // the owner may still add stock
-        assertEq(ch.collateralOf(v, address(nvda)), 12e18);
+        assertEq(ch.collateralOf(v, address(nvda)), 11e18);
         assertEq(ch.cashOf(v), 10e18);
     }
 

@@ -76,7 +76,7 @@ The same book therefore needs visibly more margin on Friday at 20:00 ET than at 
 
 HALTED overrides the calendar when any of these holds. Each one fails closed: a call that reverts or returns malformed data counts as the bad case.
 
-- The feed can't be read, its answer is zero or negative, or it reports more than 18 decimals.
+- The feed can't be read, returns data that doesn't decode, its answer is zero or negative, or it reports more than 18 decimals.
 - The latest round is timestamped in the future, or is older than the session's staleness limit (26 hours in regular and extended hours, 96 hours when the market is closed). The 26-hour limit lets a quiet feed such as SPY, which can go a full 24-hour heartbeat without a round, stay live.
 - The token's `paused()` or `oraclePaused()` is true. `oraclePaused()` is the issuer's corporate-action freeze, during which the feed holds its last value.
 - The price is outside the underlying's plausibility band `[minPrice, maxPrice]`. The Robinhood Chain feeds launched with answers 1e10 too high for about a day and a half, so a band is not hypothetical.
@@ -134,7 +134,8 @@ An example: the worst NVDA-only loss is 1,000, the worst SPY-only loss is 800, a
 - After the trade an opening side must be healthy (`equity ≥ IM`).
 - A reducing side must be healthy too, unless the trade is a pure reduction: `lossIM` didn't rise and equity, before the protocol fee, didn't fall. An underwater account can cut risk at or below the mark, but it can't sell its hedge or pay value away through an off-market price.
 - While opening is blocked for its account, a reducing side must not raise `lossIM` at all.
-- A position is either flat or at least `minTradeQty` (0.01 contracts), so nobody can leave dust behind.
+- One exception to both `lossIM` comparisons: a side that buys back a short and so leaves the account with no position at all. It removes the last option liability and sells no hedge, and what is left is collateral the account already held. It still needs equity ≥ IM or a price at or below the mark. Without it, an account in deficit couldn't buy back its last covered call: in deficit the margin procedure counts the remaining stock's downside as IM, more than the covered book's.
+- A position is either flat or at least `minTradeQty` (0.01 contracts), so nobody can leave dust behind. A trade below `minTradeQty` is accepted only when it closes one side's position out, which happens only to a position left below the minimum when governance raised it; the other side must end flat or at least at the minimum.
 - Long open interest per series is capped at `maxOpenInterest`; a trade that doesn't grow open interest always fits.
 - The fee is 0.03% of notional (`|qty| × spot`), capped at 12.5% of the premium, and split between the InsuranceFund (50%) and the treasury.
 
@@ -201,10 +202,10 @@ Each expiry `E` is a weekly close shared by every underlying, and it has its own
    1. the account's cash, as far as it goes, into `pool[E]`;
    2. the InsuranceFund bridges the rest, rounded up to a whole USDG unit, into `pool[E]`;
    3. what the fund can't cover is recorded as pending for `E`;
-   4. the account records a deficit (bridged plus pending), can't withdraw or open positions until it is repaid, and its stock collateral goes to a deficit sale run by the AuctionHouse (in development);
+   4. the account records a deficit (bridged plus pending), can't withdraw, open positions or add stock collateral until it is repaid, and its stock collateral goes to a deficit sale run by the AuctionHouse;
    5. sale proceeds repay the pending amount first and the InsuranceFund second, and anything left stays with the owner.
 5. **Claims.** `claim(id, E)` moves a claim into cash once no short of `E` is unsettled and nothing is pending. Claims never exceed what payers put in; rounding dust stays in the pool.
-6. **Socialized loss.** If a defaulter's collateral is exhausted and pending remains, anyone can call `socializeRemainder(id, E)` on the emptied account. The remainder is spread over all cash through the cash index, `cashIndex × (totalCash - remainder) / totalCash`, so every account loses the same fraction, and `LossSocialized` is emitted. The fund's bridge to that account is written off. If all cash in the system can't cover the remainder, the index stops at its minimum, the pool is marked impaired and its claims are paid pro rata, never more than each claim; the shortfall is realized when the claim is paid (`ClaimHaircut`).
+6. **Socialized loss.** If a defaulter's collateral is exhausted (no position left, collateral worth at most `dustEquity` at spot) and pending remains, anyone can call `socializeRemainder(id, E)` on the emptied account. Collateral the hub can't price doesn't count as exhausted: a socialization can't be undone, so it waits for the price, for at most 72 hours after anyone marks the token without a price (`markUnpriced`) while its feed prints no new round; after that the token counts as 0. The remainder is spread over all cash through the cash index, `cashIndex × (totalCash - remainder) / totalCash`, so every account loses the same fraction, and `LossSocialized` is emitted. The fund's bridge to that account is written off. The defaulter keeps owing the remainder and the bridge as residual debt, rounded up to a whole USDG unit so that it can always be repaid; its later cash (`repayDeficit`) or the continuing deficit sale repays it to the InsuranceFund. If all cash in the system can't cover the remainder, the index stops at its minimum, the pool is marked impaired and its claims are paid pro rata, never more than each claim; the shortfall is realized when the claim is paid (`ClaimHaircut`).
 
 The clearinghouse keeps these properties at all times: its USDG balance covers all cash plus all pools, its balance of each stock token covers all collateral in that token, and the cash index only ever falls, and only through `LossSocialized`. The one outside force that can break the token-balance property is the stock-token issuer's `adminBurn`, which can burn from any holder.
 
@@ -212,7 +213,9 @@ The clearinghouse keeps these properties at all times: its USDG balance covers a
 
 Liquidations run in the `AuctionHouse`; its parameters live in `RiskParams`. An account becomes liquidatable when `equity < MM`. Anyone can start a Dutch auction, in which bidders take over a fraction of the account's positions, collateral and cash at a discount that grows linearly from `startDiscount` (2%) to `maxDiscount` (12%) over `auctionDuration` (30 minutes). A bid takes at most `maxFractionPerBid` (50%) unless the account is insolvent or below `dustEquity` (5 USDG). The bidder must pass its own IM check after the takeover, and `liquidationPenalty` (1%) goes to the InsuranceFund.
 
-Auctions pause while the underlying is in a WEEKEND session or HALTED. The weekend shock range is wider precisely so that accounts reach Monday without a fire sale into a market with no price.
+Auctions take no bids unless every underlying of the account, collateral-only ones included, is in a REGULAR or EXTENDED session with a usable price: they pause over weekends and holidays, while an underlying is HALTED and while a feed can't be priced, so an honest account whose collateral loses its price for a while (valued at 0 in the margin) isn't sold off. The weekend shock range is wider precisely so that accounts reach Monday without a fire sale into a market with no price.
+
+The discount clock counts market time: the seconds inside the NYSE 24/5 window (Sunday 20:00 ET to Friday 20:00 ET, less holidays), not wall time. An auction caught by the Friday close resumes on Sunday evening at the discount it had, and a deficit sale started over the weekend, where expiry settlement usually lands, opens at `startDiscount`. A halt inside the window still runs the clock. If the account recovers without a bid, anyone can end its auction (`endLiquidation`), so a later fall starts a fresh one.
 
 ## Parameter defaults and bounds
 

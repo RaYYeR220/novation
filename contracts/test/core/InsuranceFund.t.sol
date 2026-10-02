@@ -45,6 +45,22 @@ contract InsuranceFundTest is Test {
         assertEq(fund.outstandingWad(), 1e18);
     }
 
+    /// Nothing covered (an empty fund, or a request below one USDG unit) emits no Covered event.
+    function test_coverNothingEmitsNothing() public {
+        vm.recordLogs();
+        vm.prank(CH);
+        assertEq(fund.cover(0.5e12), 0); // half a unit
+        assertEq(vm.getRecordedLogs().length, 0);
+
+        vm.prank(CH);
+        fund.cover(1000e18); // empties the fund
+        vm.recordLogs();
+        vm.prank(CH);
+        assertEq(fund.cover(5e18), 0);
+        assertEq(vm.getRecordedLogs().length, 0);
+        assertEq(fund.outstandingWad(), 1000e18);
+    }
+
     function test_onlyClearinghouse() public {
         vm.expectRevert(InsuranceFund.NotClearinghouse.selector);
         fund.cover(1e18);

@@ -13,7 +13,7 @@ import {ISeriesRegistry} from "../interfaces/ISeriesRegistry.sol";
 import {IMarketDataHub} from "../interfaces/IMarketDataHub.sol";
 import {IRiskParams, GlobalParams, UnderlyingParams} from "../interfaces/IRiskParams.sol";
 import {IAggregatorV3} from "../interfaces/IAggregatorV3.sol";
-import {BlackScholes} from "../libraries/BlackScholes.sol";
+import {VaultPricing} from "./VaultPricing.sol";
 import {FixedPointMath as F} from "../libraries/FixedPointMath.sol";
 import {Position, Series, Session, WAD} from "../types/Types.sol";
 
@@ -68,6 +68,7 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
     error ExceedsFreeAssets(uint256 assets, uint256 free);
     error PremiumAboveMax(uint256 premium, uint256 maxPremium);
     error PremiumBelowMin(uint256 premium, uint256 minPremium);
+    error BelowMinOut(uint256 tokens, uint256 cash);
     error NothingToClaim();
 
     event Bought(address indexed taker, uint256 indexed takerId, uint32 indexed seriesId, uint256 qty, uint256 premium);
@@ -79,6 +80,8 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
     );
     event Rolled(uint256 indexed epoch, uint256 assets);
     event RedeemClaimed(address indexed receiver, uint256 assets);
+    /// @notice The USDG part of an in-kind exit (CoveredCallVault), in raw USDG units.
+    event CashLegPaid(address indexed receiver, uint256 amount);
 
     /// @dev A receiver's queued shares; paid out at the rate of `epoch` once that epoch is rolled.
     struct PendingRedeem {
@@ -86,10 +89,12 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         uint256 shares;
     }
 
-    /// @dev What an epoch's roll paid: `assets` for `shares`, split pro rata among its receivers.
+    /// @dev What an epoch's roll paid: `assets` (and `cash`, raw USDG units, for an in-kind exit)
+    /// for `shares`, split pro rata among its receivers.
     struct EpochResult {
         uint256 shares;
         uint256 assets;
+        uint256 cash;
     }
 
     /// @dev The vault's book as one trade sees it.
@@ -122,6 +127,9 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
     uint256 public immutable vaultId;
     /// @dev 10 ** (18 - asset decimals): WAD amounts in the clearinghouse per raw asset unit
     uint256 internal immutable _assetScale;
+    address internal immutable _usdg;
+    /// @dev 10 ** (18 - USDG decimals)
+    uint256 internal immutable _usdgScale;
 
     VaultConfig internal _cfg;
 
@@ -132,12 +140,15 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
     /// @notice assets withdrawn for rolled epochs and not yet claimed; held by this contract, not
     /// part of the clearinghouse account and so never part of totalAssets
     uint256 public reservedAssets;
+    /// @notice the USDG side of reservedAssets (raw units), for in-kind exits
+    uint256 public reservedCash;
     uint256 public nextRequestId;
     /// @notice when each holder's shares count as received (see _update)
     mapping(address holder => uint256) public lastReceive;
 
     mapping(address receiver => PendingRedeem) private _pending;
     mapping(address receiver => uint256) private _redeemable;
+    mapping(address receiver => uint256) private _redeemableCash;
     mapping(uint256 epoch => EpochResult) private _epochs;
 
     constructor(
@@ -171,6 +182,9 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         params = params_;
         underlying = underlying_;
         _assetScale = 10 ** (18 - dec);
+        address usdg_ = params_.usdg();
+        _usdg = usdg_;
+        _usdgScale = 10 ** (18 - IERC20Metadata(usdg_).decimals());
         _cfg = cfg;
 
         vaultId = ch_.createSubaccount();
@@ -191,6 +205,18 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
     /// @dev Positive WAD USD equity converted into raw asset units, rounded down; 0 if it can't be
     /// priced.
     function _equityToAssets(uint256 equityWad) internal view virtual returns (uint256);
+
+    /// @dev How an exit worth `assets` (asset units, at NAV) is paid: `tokens` of the asset and
+    /// `cash` raw USDG units. By default all in the asset.
+    function _split(uint256 assets) internal view virtual returns (uint256 tokens, uint256 cash) {
+        return (assets, 0);
+    }
+
+    /// @dev The exit value (asset units, at NAV) whose asset part is at least `tokens` (inverse of
+    /// _split, rounded up). By default `tokens` itself.
+    function _grossUp(uint256 tokens) internal view virtual returns (uint256) {
+        return tokens;
+    }
 
     // ================================================================ views
 
@@ -237,6 +263,17 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         if (p.shares != 0 && p.epoch < epoch) {
             EpochResult storage r = _epochs[p.epoch];
             assets += Math.mulDiv(p.shares, r.assets, r.shares);
+        }
+    }
+
+    /// @notice The USDG (raw units) `receiver` can claim now alongside redeemable(), for in-kind
+    /// exits.
+    function redeemableCash(address receiver) external view returns (uint256 cash) {
+        cash = _redeemableCash[receiver];
+        PendingRedeem storage p = _pending[receiver];
+        if (p.shares != 0 && p.epoch < epoch) {
+            EpochResult storage r = _epochs[p.epoch];
+            cash += Math.mulDiv(p.shares, r.cash, r.shares);
         }
     }
 
@@ -287,21 +324,45 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         return _canEnter() ? type(uint256).max : 0;
     }
 
-    /// @notice The owner's shares at NAV, capped by the free assets. Zero while halted, while the
-    /// account owes a deficit (the clearinghouse blocks withdrawals then) and during the owner's
-    /// exit cooldown.
+    /// @notice The asset the owner's shares redeem for, capped by the free assets. Zero while
+    /// halted, while the account owes a deficit (the clearinghouse blocks withdrawals then), while
+    /// it holds an expired position not yet settled (roll settles it) and during the owner's exit
+    /// cooldown.
     function maxWithdraw(address owner) public view override returns (uint256) {
         if (!_canExit(owner)) return 0;
-        uint256 free = freeAssets();
         uint256 own = previewRedeem(balanceOf(owner));
+        uint256 free = freeAssets();
         return own < free ? own : free;
     }
 
     function maxRedeem(address owner) public view override returns (uint256) {
         if (!_canExit(owner)) return 0;
-        uint256 cap = _convertToShares(freeAssets(), Math.Rounding.Floor);
         uint256 own = balanceOf(owner);
-        return own < cap ? own : cap;
+        uint256 free = freeAssets();
+        if (previewRedeem(own) <= free) return own;
+        uint256 cap = _convertToShares(_grossUp(free), Math.Rounding.Floor);
+        return cap < own ? cap : own;
+    }
+
+    // ================================================================ ERC-4626 previews
+
+    /// @notice The asset `shares` redeem for now: their value at NAV less the USDG part of an
+    /// in-kind exit (see previewRedeemInKind). redeem returns, and the Withdraw event logs, exactly
+    /// the asset that moves; any USDG part comes on top (CashLegPaid).
+    function previewRedeem(uint256 shares) public view override returns (uint256 tokens) {
+        (tokens,) = _split(_convertToAssets(shares, Math.Rounding.Floor));
+    }
+
+    /// @notice The shares withdraw(assets) burns: enough that the asset part of their value is
+    /// `assets`. The receiver gets exactly `assets` plus any USDG part on top.
+    function previewWithdraw(uint256 assets) public view override returns (uint256) {
+        return _convertToShares(_grossUp(assets), Math.Rounding.Ceil);
+    }
+
+    /// @notice Both parts of redeeming `shares` now: `tokens` of the asset and `cash` raw USDG
+    /// units (cash is 0 for a vault whose asset is USDG).
+    function previewRedeemInKind(uint256 shares) external view returns (uint256 tokens, uint256 cash) {
+        return _split(_convertToAssets(shares, Math.Rounding.Floor));
     }
 
     // ================================================================ ERC-4626 entry points
@@ -325,11 +386,30 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         return super.withdraw(assets, receiver, owner);
     }
 
+    /// @notice ERC-4626 redeem. Returns the asset sent (previewRedeem); an in-kind exit also sends
+    /// USDG, which redeemInKind returns and bounds explicitly.
     function redeem(uint256 shares, address receiver, address owner) public override nonReentrant returns (uint256) {
         _syncVol();
         _requireLive();
         _requireCooledDown(owner);
         return super.redeem(shares, receiver, owner);
+    }
+
+    /// @notice Redeems `shares` and returns both parts of the exit, `tokens` of the asset and
+    /// `cash` raw USDG units, reverting unless each meets its minimum (slippage on both legs).
+    function redeemInKind(uint256 shares, address receiver, address owner, uint256 minTokens, uint256 minCash)
+        external
+        nonReentrant
+        returns (uint256 tokens, uint256 cash)
+    {
+        _syncVol();
+        _requireLive();
+        _requireCooledDown(owner);
+        uint256 maxShares = maxRedeem(owner);
+        if (shares > maxShares) revert ERC4626ExceededMaxRedeem(owner, shares, maxShares);
+        (tokens, cash) = _split(_convertToAssets(shares, Math.Rounding.Floor));
+        if (tokens < minTokens || cash < minCash) revert BelowMinOut(tokens, cash);
+        _withdraw(_msgSender(), receiver, owner, tokens, shares);
     }
 
     // ================================================================ trading
@@ -394,14 +474,15 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
     // ================================================================ async redemption
 
     /// @notice Moves `shares` into escrow for the current epoch; `receiver` claims their assets
-    /// after the roll that pays the epoch. Works while halted: nothing is priced here. From then on
-    /// the queue's claim is reserved: instant withdrawals and new sales can't use it.
+    /// after the roll that pays the epoch. Nothing is priced here, so it reads no price and doesn't
+    /// sync the vol: it works while halted and while the feed has rounds the vol can't fold in (a
+    /// bad round, a phase change), so a holder can always queue an exit. From then on the queue's
+    /// claim is reserved: instant withdrawals and new sales can't use it.
     function requestRedeem(uint256 shares, address receiver) external nonReentrant returns (uint256 requestId) {
         if (shares == 0) revert ZeroShares();
         if (receiver == address(0)) revert ZeroAddress();
         if (receiver == address(this)) revert BadReceiver();
         _requireCooledDown(msg.sender);
-        _syncVol();
         uint256 ep = epoch;
         PendingRedeem storage p = _pending[receiver];
         _fold(receiver, p);
@@ -413,22 +494,38 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         emit RedeemRequested(requestId, ep, msg.sender, receiver, shares);
     }
 
-    /// @notice Pushes everything `receiver` can claim to `receiver`. Callable by anyone.
+    /// @notice Pushes the asset `receiver` can claim to `receiver`. Callable by anyone. The USDG
+    /// part of an in-kind exit is claimed on its own (claimRedeemedCash), so a token that can't
+    /// reach the receiver (paused, blocklisted) never holds up the other.
     function claimRedeemed(address receiver) external nonReentrant returns (uint256 assets) {
         _fold(receiver, _pending[receiver]);
         assets = _redeemable[receiver];
         if (assets == 0) revert NothingToClaim();
         _redeemable[receiver] = 0;
         reservedAssets -= assets;
-        IERC20(asset()).safeTransfer(receiver, assets);
         emit RedeemClaimed(receiver, assets);
+        IERC20(asset()).safeTransfer(receiver, assets);
+    }
+
+    /// @notice Pushes the USDG part `receiver` can claim (raw units) to `receiver`. Callable by
+    /// anyone.
+    function claimRedeemedCash(address receiver) external nonReentrant returns (uint256 cash) {
+        _fold(receiver, _pending[receiver]);
+        cash = _redeemableCash[receiver];
+        if (cash == 0) revert NothingToClaim();
+        _redeemableCash[receiver] = 0;
+        reservedCash -= cash;
+        emit CashLegPaid(receiver, cash);
+        IERC20(_usdg).safeTransfer(receiver, cash);
     }
 
     /// @notice Permissionless. For each expiry in `expiries`: settles the vault's positions once
-    /// the registry has the settlement price, and collects any claim. Then, if the vault owes
-    /// nothing, has no claim outstanding on those expiries, is live and its unlocked assets cover
-    /// the payout, pays the current epoch at the current NAV: the escrowed shares burn and their
-    /// assets move from the account into this contract for the receivers to claim.
+    /// the registry has the settlement price, and collects any claim. If the account owes a
+    /// deficit, its cash (premiums, or USDG anyone paid in) repays it (ch.repayDeficit; a failure
+    /// there doesn't stop the roll). Then, if the vault owes nothing, has no claim outstanding on
+    /// those expiries, is live and its unlocked assets cover the payout, pays the current epoch at
+    /// the current NAV: the escrowed shares burn and their assets move from the account into this
+    /// contract for the receivers to claim.
     /// Positions still open on other expiries don't hold the epoch back: the payout is priced and
     /// capped exactly like an instant withdrawal (live MTM NAV, unlocked assets only). Waiting for
     /// a flat book would let one dust-sized sale at the longest tenor block every queued
@@ -454,6 +551,9 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
                     _tolerate(err);
                 }
             }
+        }
+        if (_inDeficit()) {
+            try ch.repayDeficit(id) {} catch {}
         }
         _processEpoch(expiries);
     }
@@ -483,14 +583,21 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         if (assets != 0) ch.deposit(vaultId, asset(), assets);
     }
 
-    /// @dev Only free assets leave instantly; the rest waits for a roll.
+    /// @dev `assets` is the asset part (previewRedeem of `shares`, or what withdraw asked for, at
+    /// most that); the USDG part of the burned shares' value goes along (_split). Only free assets
+    /// leave instantly, the rest waits for a roll.
     function _withdraw(address caller, address receiver, address owner, uint256 assets, uint256 shares)
         internal
         override
     {
+        (, uint256 cash) = _split(_convertToAssets(shares, Math.Rounding.Floor));
         uint256 free = freeAssets();
         if (assets > free) revert ExceedsFreeAssets(assets, free);
         super._withdraw(caller, receiver, owner, assets, shares);
+        if (cash != 0) {
+            emit CashLegPaid(receiver, cash);
+            ch.withdraw(vaultId, _usdg, cash, receiver);
+        }
     }
 
     /// @dev Straight from the clearinghouse account to the receiver.
@@ -520,7 +627,7 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
     }
 
     function _canExit(address owner) private view returns (bool) {
-        if (!isLive() || _inDeficit()) return false;
+        if (!isLive() || _inDeficit() || _holdsExpired()) return false;
         if (block.timestamp < lastReceive[owner] + EXIT_COOLDOWN) return false;
         return totalAssets() != 0;
     }
@@ -546,19 +653,19 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         if (_latestRound(params.underlying(underlying).feed) != lastId) revert VolNotCurrent();
     }
 
+    /// @dev The feed's latest round id, read raw like the hub reads it: a failed call or return data
+    /// that wouldn't decode gives 0 (not current) instead of reverting the view.
     function _latestRound(address feed) private view returns (uint80 id) {
-        try IAggregatorV3(feed).latestRoundData() returns (uint80 r, int256, uint256, uint256, uint80) {
-            id = r;
-        } catch {}
+        (bool ok, bytes memory r) = feed.staticcall(abi.encodeWithSelector(IAggregatorV3.latestRoundData.selector));
+        if (ok && r.length >= 160 && uint256(bytes32(r)) <= type(uint80).max) id = uint80(uint256(bytes32(r)));
     }
 
     /// @dev The vault only sells options whose |delta| at the mark vol lies in the offer band: no
     /// near-worthless lottery tickets that cost a taker nothing and pin a series slot, and no
     /// near-the-money risk beyond the strategy's intent.
     function _checkOfferBand(Series memory s, uint256 spot, int256 rate) private view {
-        (int256 delta,,,) =
-            BlackScholes.greeks(spot, s.strike, s.expiry - block.timestamp, hub.markVol(underlying), rate, s.isCall);
-        uint256 a = delta < 0 ? uint256(-delta) : uint256(delta);
+        uint256 a =
+            VaultPricing.absDelta(spot, s.strike, s.expiry - block.timestamp, hub.markVol(underlying), rate, s.isCall);
         VaultConfig storage c = _cfg;
         if (a < c.minDelta || a > c.maxDelta) revert OutsideOfferBand(a);
     }
@@ -580,10 +687,8 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         if (after_ != 0 && after_ < minQty) revert DustPosition(vaultId, -int256(after_));
     }
 
-    /// @dev Single-option pricing runs in Solidity (BlackScholes.price, bit-identical to the risk
-    /// kernel's bsQuote price and to the mark it gives each position): on Robinhood Chain one
-    /// evaluation measured 26.9k gas here against 46.5k through an uncached call into the Stylus
-    /// kernel. The kernel pays off on portfolio margin, not on one price.
+    /// @dev Single-option pricing runs in Solidity, in the linked VaultPricing library (see there);
+    /// the kernel pays off on portfolio margin, not on one price.
     function _premium(
         Series memory s,
         uint256 spot,
@@ -595,22 +700,26 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         int256 rate
     ) private view returns (uint256) {
         VaultConfig storage c = _cfg;
-        uint256 vol = hub.markVol(underlying);
-        uint256 volQ;
+        uint256 utilTerm;
         {
-            int256 lnm = F.lnWad(F.divWad(int256(uint256(s.strike)), int256(spot)));
-            uint256 m = lnm < 0 ? uint256(-lnm) : uint256(lnm);
             uint256 locked = Math.ceilDiv(lockedAfterWad, _assetScale);
             uint256 total = locked + _sub(_free(lockedAfterWad, b.backingWad), b.queued);
             uint256 util = total == 0 ? 0 : locked * WAD / total;
-            volQ =
-                _mulWad(vol, WAD + _mulWad(c.skewSlope, m) + _mulWad(c.utilSlope, util)) + c.sessionVolAdd[uint8(sess)];
+            utilTerm = _mulWad(c.utilSlope, util);
         }
-        uint256 tau = s.expiry - block.timestamp;
-        uint256 px = BlackScholes.price(spot, s.strike, tau, volQ, rate, s.isCall);
+        uint256 px = VaultPricing.unitPrice(
+            spot,
+            s.strike,
+            s.expiry - block.timestamp,
+            hub.markVol(underlying),
+            c.skewSlope,
+            utilTerm,
+            c.sessionVolAdd[uint8(sess)],
+            rate,
+            s.isCall,
+            takerBuys
+        );
         if (takerBuys) return F.mulWadUp(F.mulWadUp(qty, px), WAD + c.spread);
-        uint256 mark = BlackScholes.price(spot, s.strike, tau, vol, rate, s.isCall);
-        if (mark < px) px = mark;
         return _mulWad(_mulWad(qty, px), WAD - c.spread);
     }
 
@@ -649,6 +758,14 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         return backingWad > lockedWad ? (backingWad - lockedWad) / _assetScale : 0;
     }
 
+    /// @dev The account still carries a position whose series has expired: its payoff isn't in
+    /// the expiry pool yet. Exits wait for settleAccount (roll does it), so an exit can't take
+    /// cash that an in-the-money short owes its buyers and leave the stayers a bigger deficit.
+    function _holdsExpired() private view returns (bool) {
+        (uint256 live,) = ch.positionStatus(vaultId);
+        return live != ch.positionsOf(vaultId).length;
+    }
+
     function _holdsExpiry(uint64 e) private view returns (bool) {
         Position[] memory ps = ch.positionsOf(vaultId);
         for (uint256 i = 0; i < ps.length; ++i) {
@@ -664,24 +781,27 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         uint256 shares = escrowedShares;
         if (shares == 0) return;
         uint256 id = vaultId;
-        if (_inDeficit()) return;
+        if (_inDeficit() || _holdsExpired()) return;
         for (uint256 i = 0; i < expiries.length; ++i) {
             if (ch.claimable(id, expiries[i]) != 0) return;
         }
         if (!isLive()) return;
         uint256 assets = _convertToAssets(shares, Math.Rounding.Floor);
         if (assets == 0) return;
+        (uint256 tokens, uint256 cash) = _split(assets);
         Book memory b = _book(0);
-        if (assets > _free(b.lockedWad, b.backingWad)) return;
+        if (tokens > _free(b.lockedWad, b.backingWad)) return;
 
         uint256 ep = epoch;
-        _epochs[ep] = EpochResult({shares: shares, assets: assets});
+        _epochs[ep] = EpochResult({shares: shares, assets: tokens, cash: cash});
         escrowedShares = 0;
         epoch = ep + 1;
-        reservedAssets += assets;
+        reservedAssets += tokens;
+        reservedCash += cash;
         _burn(address(this), shares);
-        ch.withdraw(id, asset(), assets, address(this));
-        emit Rolled(ep, assets);
+        emit Rolled(ep, tokens);
+        if (tokens != 0) ch.withdraw(id, asset(), tokens, address(this));
+        if (cash != 0) ch.withdraw(id, _usdg, cash, address(this));
     }
 
     /// @dev Folds a rolled epoch's payout into the receiver's claimable balance.
@@ -690,6 +810,7 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
         if (sh == 0 || p.epoch >= epoch) return;
         EpochResult storage r = _epochs[p.epoch];
         _redeemable[receiver] += Math.mulDiv(sh, r.assets, r.shares);
+        _redeemableCash[receiver] += Math.mulDiv(sh, r.cash, r.shares);
         p.shares = 0;
     }
 

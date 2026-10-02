@@ -118,7 +118,7 @@ The full trust model, invariants, threat table and review history are in [SECURI
 
 - Mark volatility is realized volatility from Chainlink rounds, not implied volatility. Vault premiums add model parameters (skew, spread) on top of it.
 - Options are weekly, European and cash-settled. Settlement uses the last feed print at or before the close, which can be hours old.
-- Liquidation and deficit auctions pause over weekends and while an underlying is halted, by design. A gap larger than the weekend shock can still create bad debt; it goes through the waterfall and, as a last resort, the cash index.
+- Liquidation and deficit auctions pause over weekends and while an underlying is halted, by design, and their discount clock stops over weekends and holidays. A gap larger than the weekend shock can still create bad debt; it goes through the waterfall and, as a last resort, the cash index.
 - While a feed returns no usable price (unreadable, zero or outside the plausibility band), stock tokens held only as collateral are valued at 0. An account with options on that underlying can't withdraw, trade or be liquidated until the feed recovers.
 - An agent's value-drain cap applies per trade. Many trades can add up to more than one cap; owners should size budgets and expiries with that in mind. Revoking an agent takes effect immediately.
 - The Stylus program expires 365 days after activation. It must be kept alive (anyone can pay for that through ArbWasm), or every margin check fails.
