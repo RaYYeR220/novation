@@ -301,19 +301,25 @@ export function PortfolioView() {
             title="Collateral and equity"
             meta={
               !demo &&
-              (act.canAct ? (
+              // funds move only for the owner: an agent grant needs no consent from the agent, so it
+              // must never unlock depositing this wallet's tokens into someone else's account
+              (owned.includes(id) ? (
                 <span className="flex gap-s2">
-                  {owned.includes(id) && (
-                    <Button size="sm" variant="secondary" onClick={() => setFunds('withdraw')}>
-                      Withdraw
-                    </Button>
-                  )}
+                  <Button size="sm" variant="secondary" onClick={() => setFunds('withdraw')}>
+                    Withdraw
+                  </Button>
                   <Button size="sm" variant="primary" lamp onClick={() => setFunds('deposit')}>
                     Deposit
                   </Button>
                 </span>
               ) : (
-                <span className="text-t12 text-navy-200">{act.connected ? 'View only: not your account' : 'View only: connect the owner wallet'}</span>
+                <span className="text-t12 text-navy-200">
+                  {!act.connected
+                    ? 'View only: connect the owner wallet'
+                    : act.canAct
+                      ? 'Agent of this account: only its owner can deposit or withdraw'
+                      : 'View only: not your account'}
+                </span>
               ))
             }
           >
