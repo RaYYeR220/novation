@@ -1,0 +1,33 @@
+{
+  "name": "@novation/keeper",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Keeper for Novation: syncs vol, lists the weekly grid, settles expiries and accounts, claims, rolls vaults and runs liquidations.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": ["src"],
+  "scripts": {
+    "start": "tsx src/cli.ts",
+    "once": "tsx src/cli.ts --once",
+    "loop": "tsx src/cli.ts --loop 120",
+    "hint": "tsx src/cli.ts hint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:unit": "vitest run --project unit",
+    "test:anvil": "vitest run --project anvil"
+  },
+  "dependencies": {
+    "@novation/sdk": "workspace:*",
+    "tsx": "4.23.15",
+    "viem": "2.57.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "5.9.3",
+    "vitest": "5.0.2"
+  }
+}

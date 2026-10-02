@@ -208,6 +208,8 @@ pnpm --filter @novation/app dev
 
 The RFQ market maker in `mm-bot/` prices, margin-checks and signs quotes over HTTP: `pnpm --filter @novation/mm-bot start` (setup and endpoints in [mm-bot/README.md](mm-bot/README.md)). The web app also serves it at `/api/rfq` once the maker's server-only variables are set; without them that route answers 503.
 
+The keeper syncs vol, lists the weekly grid, settles expiries and accounts, pays claims, rolls the vaults and runs liquidations: `pnpm --filter @novation/keeper loop` (see [keeper/README.md](keeper/README.md)).
+
 ## License
 
 [MIT](LICENSE)
