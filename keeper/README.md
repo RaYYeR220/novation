@@ -10,6 +10,8 @@ Every transaction goes through the same path:
 - It is signed locally with the keeper key, and its hash is known before it is broadcast.
 - Its gas limit is the estimate plus 25%, never more than 31.5M; when +25% would cross that, it is the estimate plus 5%, capped at 31.5M.
 - If its receipt doesn't arrive in time, it stays open and nothing new is sent until it lands or the node drops it. So a slow inclusion can't lead to the same work being sent twice.
+- After 10 minutes, an open transaction is given up on, with an error. If its nonce is still unused, the next send reuses that nonce with doubled fees, so it replaces the stuck transaction rather than queueing behind it.
+- The gas is estimated against the latest block, like the simulation, so a stuck transaction doing the same work can't make the new one look like a no-op.
 
 ## Run it
 
@@ -57,7 +59,7 @@ Don't run `fund`, `setup` or `demo` while the loop is running. They sign with th
 | `--list-per-tick <n>` | 16 | The most series the grid job lists in one tick. The rest wait for the next tick. |
 | `--min-list-tenor <s>` | 172800 | The grid job skips an expiry that closes sooner than this. Few trades open on a series listed less than two days before its close, and each listing costs gas. |
 | `--sync-vol-every <s>` | 3600 | Leaves an underlying alone if anyone poked its vol more recently than this. This keeps gas down. Vaults sync vol themselves before they price. |
-| `--roll-every <s>` | 86400 | A payable queue is rolled at once. This is the wait before the roll job tries the same vault again. |
+| `--roll-every <s>` | 3600 | After the roll job sends a roll to a vault, it waits this long before rolling the same vault again. It only ever sends rolls that would pay the queue. |
 | `--bid` / `--no-bid` | on for the testnet and a local chain, off elsewhere | Whether to bid in liquidations and deficit sales at all. |
 | `--bid-cap <usdg>` | 5000 | The most the keeper commits to bids over the life of the process. A single bid is capped at 2000 USDG. |
 | `--confirmations <n>` | 5 | Event scans stop this many blocks below the head. |
@@ -100,15 +102,16 @@ Every job can run again safely: it reads the chain and sends only what is still 
    - live after the roll's own vol sync;
    - enough unlocked assets (`freeAssets`, which is net of the queue, above zero).
 
-   A roll that would do nothing is never sent. A payable queue is rolled at once, and a retry of the same vault waits `--roll-every`. A vault whose cash already covers a deficit has it applied first with `repayDeficit`.
+   A roll that would do nothing is never sent. After a roll it sent, the job waits `--roll-every` before rolling the same vault again. A vault whose cash already covers a deficit has it applied first with `repayDeficit`.
 5. **liquidation.**
-   - Any account below maintenance margin with a live book gets its Dutch auction started. An auction the keeper can't bid in is restarted at most once every 6 hours per account.
+   - Any account below maintenance margin with a live book gets its Dutch auction started. A restart waits 6 hours per account unless a keeper bid went through since the last start. So an account nobody takes over doesn't cost a start every 30 minutes. That includes the case where the keeper can't bid, and the case where its bids keep failing in simulation.
    - Bidding is opt-in. It comes from the keeper's own subaccount (`setup`), and it is capped at 2000 USDG per bid and `--bid-cap` in total.
    - A bid goes in as soon as an auction starts, so at the start discount. It takes `maxFractionPerBid` of the book, or all of it once equity is dust. The fraction is halved while the bidder would end up below initial margin.
    - The keeper never unwinds or hedges what it takes over. On mainnet, size `--bid-cap` with that in mind.
    - Deficit sales started by settlement get bids for the defaulter's stock collateral, sized to what the deficit still needs.
    - The discount ramps every second, so a bid can land a block later at a slightly lower price and leave a sliver of the deficit unpaid. The job pays a sliver of up to 0.01 USDG into the account and applies it with `repayDeficit`.
    - Cash that already covers a deficit, from a deposit or a claim, only counts once it is applied. The job calls `repayDeficit` before it drops the sale.
+   - A repay is skipped when all that is left is a sub-unit of socialized debt, which whole-unit repays can never take. It also waits 6 hours after a repay that left the debt unchanged, and a repeat repay waits while the balance is below the gas reserve.
    - Anyone may make all of these calls.
 6. **syncVol.**
    - For each underlying where the feed has a round the hub hasn't folded in, the job calls `MarketDataHub.syncVol`, which folds up to 64 rounds per call.
@@ -128,12 +131,13 @@ The keeper writes one JSON object per line to stdout: `t`, `level`, `job`, `msg`
 - A transaction still waiting for its receipt is logged as `pending`. One the node dropped is logged as `dropped`.
 - `settleExpiry` also logs the `hint` it used and the `proof` that makes it valid.
 - `settleAccount` logs each account's `net` and its `role` (payer or receiver).
-- Every tick ends with a `tick`/`done` line that gives the transactions and gas the tick used and the keeper's ETH balance. The keeper warns when that balance falls below 0.00005 ETH.
+- Every tick ends with a `tick`/`done` line that gives the transactions and gas the tick used and the keeper's ETH balance.
+- The keeper warns (`low balance`) as soon as that balance is below the gas reserve, the same threshold that pauses the optional work.
 
 ## Tests
 
 ```bash
-pnpm test:unit     # the hint finder against fake feeds, the grid, payoffs, keys, gas padding, guards
+pnpm test:unit     # the hint finder against fake feeds, the grid, payoffs, keys, gas padding, guards, repay and restart gates
 pnpm test:anvil    # the full keeper against a local chain
 ```
 
@@ -142,21 +146,22 @@ The anvil suite uses the SDK's fixture: anvil, the Solidity `KernelReference` as
 1. Funding the derived key.
 2. Vol sync on new rounds only, with the tx signed by the derived key and its gas padded.
 3. A transaction whose receipt doesn't arrive stays open. Nothing more is sent until it lands, and it is then logged as late.
-4. No listing below the gas reserve, and the per-tick listing cap.
-5. Grid listing.
-6. Event scans behind the head, with the overlap re-read and each log applied once.
-7. A full weekly cycle:
+4. A transaction pending too long is given up on and replaced at the same nonce. The replacement does the work, and the stuck one never lands.
+5. Below the gas reserve, a warning and no listing; and the per-tick listing cap.
+6. Grid listing.
+7. Event scans behind the head, with the overlap re-read and each log applied once.
+8. A full weekly cycle:
    - setup: the keeper's demo book, an outside taker, and a vault depositor queueing a redemption;
    - pre-close prints, then the clock past the close;
    - the hint is accepted by `settleExpiry` under proofs (i), (ii) and (iii);
    - one tick settles all four underlyings, settles the accounts payers first, claims, and buys the vault's deficit-sale collateral;
    - a second tick, in which the vault's roll pays the queue;
    - a third tick with nothing to do.
-8. A vault queue that is fully locked gets no roll, and the same queue gets one roll once assets are free.
-9. A liquidation:
+9. A vault queue that is fully locked gets no roll, and the same queue gets one roll once assets are free.
+10. A liquidation:
    - with bidding off, it is only started;
    - with the exposure cap used up, there is no bid;
    - otherwise, the bid goes in at the start discount from the keeper's subaccount.
-10. Cash deposited to cover a deficit is applied with `repayDeficit` before the sale is dropped.
+11. Cash deposited to cover a deficit is applied with `repayDeficit` before the sale is dropped.
 
 `tsx scripts/fork-rehearsal.ts` rehearses the next settlement against a local anvil fork of the live chain, with the deployed contracts and the real open positions. It re-prints each feed just before the close, moves the fork's clock past it, and runs the settlement jobs on the fork. Nothing reaches the real network.
