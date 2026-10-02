@@ -11,6 +11,7 @@ import {
   volStatus,
   volSyncText,
   volSyncedText,
+  volPartlySyncedText,
 } from '@/lib/market-state';
 import type { Session } from '@/lib/client/types';
 import { baseSession, fmtEt } from '@/lib/nyse';
@@ -95,5 +96,6 @@ describe('a vault waiting for its vol', () => {
     expect(vaultVolText('NVDA', null)).toBe('The NVDA feed moved to a new aggregator, and its vol waits for syncAndRebaseVol.');
     expect(VOL_SYNC_TXS).toBe('up to 4 transactions');
     expect(volSyncedText('TSLA')).toBe('Vol of TSLA synced: check the updated quote and sign again.');
+    expect(volPartlySyncedText('TSLA')).toBe('Vol of TSLA partly synced, still behind its feed: retry in a moment.');
   });
 });
