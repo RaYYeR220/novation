@@ -172,6 +172,9 @@ describe('refusals', () => {
 
   it('refuses a stale or missing mark vol', () => {
     expect(refusal({ side: 'buy', m: market({ volStale: true }) })).toBe('StaleVol');
+    // more than one sync behind (or a migration awaiting a rebase): a fill would revert VolNotCurrent
+    expect(refusal({ side: 'buy', m: market({ volBehind: true }) })).toBe('VolBehind');
+    expect(refusal({ side: 'sell', m: market({ volBehind: true }) })).toBe('VolBehind');
     expect(refusal({ side: 'buy', m: market({ markVol: 0n }) })).toBe('StaleVol');
   });
 

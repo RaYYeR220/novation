@@ -26,6 +26,7 @@ import {
   getSpot,
   getUnderlyingParams,
   getVolStale,
+  getVolState,
   isAuthorized,
   kernelMargin,
   quoteHash,
@@ -461,7 +462,7 @@ export class Maker implements QuoteSource {
     if (hit && Date.now() - hit.at < this.cacheMs) return { ...hit.view, now: Math.max(hit.view.now, this.clock()) };
 
     const p = await this.underlyingParams(token);
-    const [block, g, spot, markVol, volStale, round, openingPaused] = await Promise.all([
+    const [block, g, spot, markVol, volStale, vol, round, openingPaused] = await Promise.all([
       this.ctx.client.getBlock(),
       this.globalParams(),
       getSpot(this.ctx, token).catch(() => undefined),
@@ -469,6 +470,7 @@ export class Maker implements QuoteSource {
       // the hub's own test: markVol is at volCap because a printed round has sat unfolded for
       // volStaleness (a silent weekend feed is not stale, a print not yet synced isn't either)
       getVolStale(this.ctx, token),
+      getVolState(this.ctx, token),
       this.ctx.client.readContract({ address: p.feed, abi: aggregatorAbi, functionName: 'latestRoundData' }),
       getOpeningPaused(this.ctx),
     ]);
@@ -483,6 +485,9 @@ export class Maker implements QuoteSource {
       maxStale: base === 'REGULAR' ? p.maxStaleRegular : base === 'EXTENDED' ? p.maxStaleExtended : p.maxStaleClosed,
       markVol,
       volStale,
+      // a trade syncs the vol itself, up to 64 rounds in the stored phase; beyond that, or after a
+      // feed migration, the clearinghouse refuses it (VolNotCurrent) until someone catches it up
+      volBehind: round[0] >> 64n > vol.lastRoundId >> 64n || round[0] - vol.lastRoundId > 64n,
       rate: g.rate,
       minTradeQty: g.minTradeQty,
     };

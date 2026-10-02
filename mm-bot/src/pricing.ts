@@ -123,6 +123,11 @@ export interface MarketView {
   markVol: bigint;
   /** hub.volStale: markVol has fallen back to volCap (a printed round sat unfolded for volStaleness). */
   volStale: boolean;
+  /**
+   * The vol is further behind its feed than a trade's own sync can fold (more than 64 rounds, or
+   * a feed migration awaiting syncAndRebaseVol): a fill would revert VolNotCurrent.
+   */
+  volBehind?: boolean;
   /** Annual rate (WAD, signed). */
   rate: bigint;
   /** The clearinghouse's minimum trade size (WAD contracts). */
@@ -135,6 +140,7 @@ export type RefusalCode =
   | 'Halted'
   | 'StalePrice'
   | 'StaleVol'
+  | 'VolBehind'
   | 'Expired'
   | 'NearExpiry'
   | 'QtyTooSmall'
@@ -175,6 +181,7 @@ export function checkMarket(m: MarketView, cfg: Pick<PricingConfig, 'maxPriceAge
   const limit = cfg.maxPriceAge === undefined ? m.maxStale : Math.min(m.maxStale, cfg.maxPriceAge);
   if (m.feedUpdatedAt > m.now || age > limit) return refuse('StalePrice', `The price is ${age}s old; the limit is ${limit}s.`);
   if (m.volStale) return refuse('StaleVol', 'The mark vol is stale.');
+  if (m.volBehind) return refuse('VolBehind', 'The vol is more than one sync behind its feed: a fill would revert until someone syncs it.');
   if (m.markVol <= 0n) return refuse('StaleVol', 'The hub has no mark vol.');
   return null;
 }

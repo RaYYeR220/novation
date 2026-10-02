@@ -223,7 +223,9 @@ export async function liquidations(k: Keeper): Promise<void> {
     // a bid moves the account's unpaid claims to the bidder: neither may end up holding claims on
     // more than MAX_CLAIM_EXPIRIES expiries, so the ready ones are claimed first
     if (!(await trimClaims(k, id)) || !(await trimClaims(k, can.id))) continue;
+    // a bid needs the account's and the bidder's own underlyings current (it folds up to 8 rounds each)
     await catchUpVol(k, id);
+    await catchUpVol(k, can.id);
     let fraction = st.equity <= g.dustEquity ? WAD : g.maxFractionPerBid;
     for (let attempt = 0; attempt < 4; attempt++) {
       let sim: Awaited<ReturnType<typeof simulateBidLiquidation>>;
