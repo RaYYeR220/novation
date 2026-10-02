@@ -1173,6 +1173,46 @@ contract ClearinghouseSettlementTest is Fixture {
         assertEq(since, 0);
     }
 
+    /// A feed that can't be read at all has no round: its outage counts as one only while it is
+    /// observed (markUnpriced) at least daily. So a mark left over from an earlier outage can't
+    /// write the token off the moment the feed fails again.
+    function test_unreadableFeedOutageMustBeObservedDaily() public {
+        (uint256 v, uint256 b) = _nakedShortSold();
+        _deposit(alice, v, address(spy), 0.001e18);
+        _defaultAt300(v, b);
+        address feed = address(feedOf[address(spy)]);
+        bytes4 sel = feedOf[address(spy)].latestRoundData.selector;
+        uint256 t0 = vm.getBlockTimestamp();
+        uint256 snap = vm.snapshotState();
+
+        // observed every day for 72 hours: written off
+        vm.mockCallRevert(feed, abi.encodeWithSelector(sel), "dead");
+        ch.markUnpriced(address(spy));
+        (uint256 since, uint80 round) = ch.priceOutageOf(address(spy));
+        assertEq(since, t0);
+        assertEq(round, 0);
+        for (uint256 i = 1; i <= 3; ++i) {
+            vm.warp(t0 + i * 23 hours);
+            ch.markUnpriced(address(spy));
+        }
+        vm.warp(t0 + 72 hours);
+        ch.socializeRemainder(v, e);
+        assertEq(_pending(e), 0);
+
+        // a stale mark: the feed failed, recovered (nobody cleared the mark) and fails again later
+        vm.revertToState(snap);
+        vm.mockCallRevert(feed, abi.encodeWithSelector(sel), "dead");
+        ch.markUnpriced(address(spy));
+        vm.clearMockedCalls();
+        vm.warp(t0 + 10 days);
+        vm.mockCallRevert(feed, abi.encodeWithSelector(sel), "dead");
+        vm.expectRevert(MarketDataHub.NoPrice.selector);
+        ch.socializeRemainder(v, e); // not written off: the old mark wasn't seen for days
+        ch.markUnpriced(address(spy)); // a new outage, a new clock
+        (since,) = ch.priceOutageOf(address(spy));
+        assertEq(since, t0 + 10 days);
+    }
+
     /// alice's naked short settles at 300 with an empty fund: 108 pending; NVDA then prints 250.
     function _defaultAt300(uint256 v, uint256 b) internal {
         _settleAt(address(nvda), 300e18);

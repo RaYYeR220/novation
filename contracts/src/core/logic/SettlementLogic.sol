@@ -275,7 +275,9 @@ library SettlementLogic {
     /// MarginLogic.OUTAGE_WRITE_OFF (72 hours) old and the feed still shows the same round and no
     /// usable price, the socialization dust test counts the token as 0, so a feed that never comes
     /// back can't freeze an expiry's claims for good. A new round restarts the clock; a usable
-    /// price clears the record. A call that changes nothing is a no-op.
+    /// price clears the record. A feed that can't be read has no round (0): its outage stays one
+    /// outage only while this is called at least every MarginLogic.OUTAGE_OBSERVE (a day), a
+    /// longer gap restarts the clock. A call that changes nothing is a no-op.
     function markUnpriced(Deps memory d, address token) external {
         (bool usable, uint80 round) = MarginLogic.priceStatus(d, token);
         PriceOutage storage o = CHS.s().outages[token];
@@ -285,9 +287,16 @@ library SettlementLogic {
             emit PriceOutageMarked(token, 0, round);
             return;
         }
-        if (o.since != 0 && o.round == round) return;
+        if (
+            o.since != 0 && o.round == round
+                && (round != 0 || block.timestamp <= uint256(o.seen) + MarginLogic.OUTAGE_OBSERVE)
+        ) {
+            if (round == 0) o.seen = uint64(block.timestamp);
+            return;
+        }
         o.since = uint64(block.timestamp);
         o.round = round;
+        o.seen = uint64(block.timestamp);
         emit PriceOutageMarked(token, block.timestamp, round);
     }
 

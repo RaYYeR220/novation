@@ -11,11 +11,13 @@ import {IInsuranceFund} from "../interfaces/IInsuranceFund.sol";
 import {FixedPointMath as F} from "../libraries/FixedPointMath.sol";
 import {Position, Series, WAD, MAX_POSITIONS, MAX_UNDERLYINGS} from "../types/Types.sol";
 
-/// @notice A collateral token seen without a usable price (markUnpriced): since when, and the
-/// feed's latest round id then (0 if unreadable). Cleared once anyone sees a usable price again.
+/// @notice A collateral token seen without a usable price (markUnpriced): since when, the feed's
+/// latest round id then (0 if unreadable) and when it was last seen so (kept for an unreadable
+/// feed only). Cleared once anyone sees a usable price again.
 struct PriceOutage {
     uint64 since;
     uint80 round;
+    uint64 seen;
 }
 
 struct Account {

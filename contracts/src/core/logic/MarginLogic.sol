@@ -53,6 +53,9 @@ library MarginLogic {
     /// no new round meanwhile, before the socialization dust test counts it as 0 (the same 72
     /// hours as the settlement price fallback).
     uint256 internal constant OUTAGE_WRITE_OFF = 72 hours;
+    /// @notice A feed that can't be read at all has no round to tell one outage from the next, so
+    /// its outage counts as continuous only while markUnpriced sees it at least this often.
+    uint256 internal constant OUTAGE_OBSERVE = 1 days;
 
     /// @dev A book is the account's positions (plus the what-if change) as parallel arrays.
     struct Book {
@@ -91,15 +94,17 @@ library MarginLogic {
     /// still holds might cover. It waits a bounded time, though: once the token has been marked
     /// without a usable price (markUnpriced: no price, or HALTED, e.g. a feed that stopped
     /// printing) for OUTAGE_WRITE_OFF and its feed has printed no round since, a feed that may
-    /// never come back, it counts as 0 while it still has no usable price.
+    /// never come back, it counts as 0 while it still has no usable price. An unreadable feed has
+    /// no round to compare, so its mark must also have been seen within OUTAGE_OBSERVE.
     function collateralValue(Deps memory d, uint256 id) external view returns (int256 mtm) {
         CHStorage storage $ = CHS.s();
         address[] storage toks = $.collateralTokens[id];
         for (uint256 i = 0; i < toks.length; ++i) {
             address t = toks[i];
             PriceOutage memory o = $.outages[t];
-            bool writtenOff =
-                o.since != 0 && block.timestamp >= o.since + OUTAGE_WRITE_OFF && o.round == _feedRound(d, t);
+            uint80 round = _feedRound(d, t);
+            bool writtenOff = o.since != 0 && block.timestamp >= o.since + OUTAGE_WRITE_OFF && o.round == round
+                && (round != 0 || block.timestamp <= o.seen + OUTAGE_OBSERVE);
             (bool priced, uint256 spot, Session s) = _spot(d, t, writtenOff);
             if (priced && !(writtenOff && s == Session.HALTED)) {
                 mtm += F.mulWad($.collateral[id][t].toInt256(), spot.toInt256());
