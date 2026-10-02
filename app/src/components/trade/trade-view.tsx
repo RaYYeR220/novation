@@ -137,13 +137,16 @@ export function TradeView() {
   const vault = series
     ? vaults.data?.find((v) => v.live && v.underlying === series.underlying && v.kind === (series.isCall ? 'coveredCall' : 'putWrite'))
     : undefined;
-  const venue: Venue = venuePick === 'vault' && !vault ? 'rfq' : venuePick;
-  const price = series ? (venue === 'vault' ? (side === 'buy' ? series.ask : series.bid) : (series.bid + series.ask) / 2) : undefined;
+  // a side nobody quotes (live: the vault doesn't sell or buy back this series) falls back to RFQ
+  const sideQuote = series ? (side === 'buy' ? series.ask : series.bid) : undefined;
+  const venue: Venue = venuePick === 'vault' && (!vault || (sideQuote !== undefined && !Number.isFinite(sideQuote))) ? 'rfq' : venuePick;
+  const mid = series ? (series.bid + series.ask) / 2 : undefined;
+  const price = series ? (venue === 'vault' ? sideQuote : mid !== undefined && Number.isFinite(mid) ? mid : series.mark) : undefined;
 
   const parsed = parseQty(qty);
   const settledQty = useDebounced(parsed.value, 180);
   const args: WhatIfArgs | null =
-    series && price !== undefined && !parsed.error && settledQty > 0
+    series && accountId > 0 && price !== undefined && Number.isFinite(price) && !parsed.error && settledQty > 0
       ? {
           id: accountId,
           seriesId: series.id,
@@ -359,8 +362,12 @@ export function TradeView() {
                     rows={heldHere}
                     rowKey={(p) => String(p.seriesId)}
                     maxHeight={heldHere.length > 8 ? 360 : undefined}
-                    loading={account.isPending}
-                    empty={`No ${t.symbol} options on account ${accountId}. A ticket here opens the first.`}
+                    loading={account.isPending && accountId > 0}
+                    empty={
+                      accountId > 0
+                        ? `No ${t.symbol} options on account ${accountId}. A ticket here opens the first.`
+                        : 'No subaccount selected. Create one or open one by number from the account menu in the top bar.'
+                    }
                   />
                 </Panel>
               </TabPanel>

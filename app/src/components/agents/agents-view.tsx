@@ -1,7 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import { accountLabel, useAccountId } from '@/components/app/account-context';
+import { useAccountId } from '@/components/app/account-context';
+import { LiveEmpty } from '@/components/app/live-empty';
+import { LIVE_RPC } from '@/lib/client/chain';
 import { RefusalNotice } from '@/components/app/refusal-card';
 import { Page, SectionHead } from '@/components/app/section-head';
 import { BudgetMeter } from '@/components/charts/budget-meter';
@@ -17,19 +19,20 @@ import { fmtEt } from '@/lib/nyse';
 import { explorerTx } from '@/lib/wallet/chains';
 import { GrantDialog } from './grant-dialog';
 
-const MCP_CONFIG = `{
+const mcpConfig = (rpc: string, account: number) => `{
   "mcpServers": {
     "novation": {
       "command": "npx",
       "args": ["-y", "@novation/mcp"],
       "env": {
-        "NOVATION_RPC_URL": "https://rpc.mainnet.chain.robinhood.com",
-        "NOVATION_ACCOUNT_ID": "7",
+        "NOVATION_RPC_URL": "${rpc}",
+        "NOVATION_ACCOUNT_ID": "${account}",
         "NOVATION_AGENT_KEY": "<the agent's private key, never the owner's>"
       }
     }
   }
 }`;
+const MCP_CONFIG = mcpConfig('https://rpc.mainnet.chain.robinhood.com', 7);
 
 const MCP_TOOLS = [
   ['list_underlyings, get_chain, quote', 'read markets and vault quotes'],
@@ -91,7 +94,7 @@ function GrantRow({ g, asOf, onRevoke }: { g: AgentGrant; asOf: number; onRevoke
   );
 }
 
-function McpSnippet() {
+function McpSnippet({ config = MCP_CONFIG }: { config?: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <div className="grid gap-s5 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
@@ -102,14 +105,14 @@ function McpSnippet() {
             size="sm"
             variant="ghost"
             onClick={() => {
-              void navigator.clipboard?.writeText(MCP_CONFIG).then(() => setCopied(true));
+              void navigator.clipboard?.writeText(config).then(() => setCopied(true));
             }}
           >
             {copied ? 'Copied' : 'Copy'}
           </Button>
         </div>
         <pre className="overflow-x-auto rounded-control border border-navy-700 bg-navy-950 p-s4 font-mono text-[13px] leading-relaxed text-navy-50" tabIndex={0} aria-label="MCP client config">
-          <code>{MCP_CONFIG}</code>
+          <code>{config}</code>
         </pre>
       </div>
       <div className="grid content-start gap-s3">
@@ -132,7 +135,7 @@ function McpSnippet() {
 }
 
 export function AgentsView() {
-  const { id } = useAccountId();
+  const { id, label } = useAccountId();
   const agents = useAgents(id);
   const account = useSubaccount(id);
   const underlyings = useUnderlyings();
@@ -144,6 +147,13 @@ export function AgentsView() {
   const [revoking, setRevoking] = useState<AgentGrant | null>(null);
 
   const grants = agents.data ?? [];
+  if (!demo && (id === 0 || account.isError)) {
+    return (
+      <Page>
+        <LiveEmpty id={id} error={account.isError ? (account.error as Error).message : undefined} />
+      </Page>
+    );
+  }
   const last = grants
     .filter((g) => g.lastRefusal)
     .map((g) => ({ g, r: g.lastRefusal! }))
@@ -166,7 +176,7 @@ export function AgentsView() {
           <Skeleton className="h-40 w-full" />
         ) : grants.length === 0 ? (
           <p className="text-t15 text-navy-200">
-            No agent can trade for account {id} ({accountLabel(id)}). Grant one to let a bot trade inside a budget the chain enforces.
+            No agent can trade for account {id} ({label(id)}). Grant one to let a bot trade inside a budget the chain enforces.
           </p>
         ) : (
           <ul aria-label="Grants">
@@ -199,7 +209,7 @@ export function AgentsView() {
 
       <section aria-labelledby="mcp" className="grid gap-s5">
         <SectionHead id="mcp" title="Connect an agent over MCP" dek="Give an AI agent the Novation tools with the key you granted above." />
-        <McpSnippet />
+        <McpSnippet config={demo ? MCP_CONFIG : mcpConfig(LIVE_RPC, id)} />
       </section>
 
       {account.data && asOf !== undefined && (

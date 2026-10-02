@@ -7,10 +7,10 @@ import { fmtEt } from '@/lib/nyse';
 import { explorerTx } from '@/lib/wallet/chains';
 
 /** A link to the refused transaction. Demo hashes are a repeated byte and say so. */
-export function TxLink({ hash, demo }: { hash: string; demo: boolean }) {
+export function TxLink({ hash, demo, chainId }: { hash: string; demo: boolean; chainId?: number }) {
   return (
     <a
-      href={explorerTx(hash)}
+      href={explorerTx(hash, chainId)}
       target="_blank"
       rel="noreferrer"
       className="rounded-[2px] text-t13 text-navy-50 underline decoration-navy-400 underline-offset-4 transition-colors duration-(--duration-fast) ui-hover:decoration-cyan"
@@ -36,11 +36,11 @@ function haltLine(r: FeedRefusal & { haltReason?: string; effectiveAt?: number }
 }
 
 /** Refusals across the protocol, newest first: what was tried, which rule refused it, and the numbers. */
-export function RefusalFeed({ items, agents, asOf, demo }: { items: FeedRefusal[]; agents: AgentGrant[]; asOf: number; demo: boolean }) {
+export function RefusalFeed({ items, agents, asOf, demo, chainId }: { items: FeedRefusal[]; agents: AgentGrant[]; asOf: number; demo: boolean; chainId?: number }) {
   return (
     <ol className="grid" aria-label="Refusals, newest first">
       {items.map((r) => {
-        const agent = r.agent ? agents.find((a) => a.agent.toLowerCase() === r.agent!.toLowerCase())?.label : undefined;
+        const agent = r.agent ? (agents.find((a) => a.agent.toLowerCase() === r.agent!.toLowerCase())?.label ?? `Agent ${r.agent.slice(2, 6)}`) : undefined;
         const c = refusalCopy(r, who(r, agents), agent);
         const halt = haltLine(r as FeedRefusal & { haltReason?: string; effectiveAt?: number });
         return (
@@ -77,7 +77,7 @@ export function RefusalFeed({ items, agents, asOf, demo }: { items: FeedRefusal[
                   ))}
                 </dl>
               )}
-              {r.txHash && <TxLink hash={r.txHash} demo={demo} />}
+              {r.txHash && <TxLink hash={r.txHash} demo={demo} chainId={chainId} />}
             </div>
           </li>
         );

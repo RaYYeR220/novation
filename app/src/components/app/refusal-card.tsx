@@ -126,6 +126,19 @@ export function refusalCopy(r: Refusal, who: string, agentLabel = 'the agent'): 
       const premium = n(r, 'premium');
       const fee = n(r, 'fee');
       if (cash === undefined || premium === undefined || fee === undefined) return { reason: r.message, context: who };
+      if (n(r, 'sell') === 1) {
+        // a sale is credited its premium first; the fee is what the cash can't cover
+        return {
+          reason: 'Cash, with the premium credited, doesn’t cover the fee. There is no cash borrowing.',
+          context: `${who}.`,
+          breach: {
+            attempted: { label: 'Fee', value: fee },
+            limit: { label: 'Cash with the premium', value: cash + fee },
+            gapLabel: 'Short by',
+          },
+          hint: `Deposit ${u(-cash)}, or sell fewer contracts.`,
+        };
+      }
       const before = cash + premium + fee;
       return {
         reason: 'Cash doesn’t cover the premium and the fee. There is no cash borrowing.',

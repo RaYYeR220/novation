@@ -2,7 +2,10 @@
 
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
-import { accountLabel, useAccountId } from '@/components/app/account-context';
+import { useAccountId } from '@/components/app/account-context';
+import { LiveEmpty } from '@/components/app/live-empty';
+import { useCanAct } from '@/components/app/live-tx';
+import { Button } from '@/components/ui/button';
 import { Page, SectionHead } from '@/components/app/section-head';
 import { discountAt } from '@/components/charts/discount-ramp';
 import { Crown, crownScale } from '@/components/crown';
@@ -11,7 +14,7 @@ import { Lamp } from '@/components/ui/lamp';
 import { Meter } from '@/components/ui/meter';
 import { Panel } from '@/components/ui/panel';
 import { Skeleton } from '@/components/ui/skeleton';
-import { useAsOf, useAuctions, useExpiries, usePools, useScenarioGrid, useSubaccount, useUnderlyings } from '@/lib/client/hooks';
+import { useAsOf, useAuctions, useExpiries, useIsDemo, usePools, useScenarioGrid, useSubaccount, useUnderlyings } from '@/lib/client/hooks';
 import type { AccountState, Position, ScenarioGrid, Series, Session } from '@/lib/client/types';
 import { cn } from '@/lib/cn';
 import { SESSION_LABEL, fmtDays, fmtExpiry, fmtNumber, fmtPct, fmtQty, fmtSeries, fmtSigned } from '@/lib/format';
@@ -21,6 +24,7 @@ import { SESSION_MULT } from '@/lib/kernel';
 import { fmtEt } from '@/lib/nyse';
 import { ScenarioStrip } from '@/components/charts/scenario-strip';
 import { ExpiryTimeline } from './expiry-timeline';
+import { FundsDialog } from './funds-dialog';
 
 type Held = Position & Series;
 const SESSIONS: readonly Session[] = ['REGULAR', 'WEEKEND'];
@@ -105,7 +109,10 @@ const positionColumns = (asOf?: number): Column<Held>[] => [
 ];
 
 export function PortfolioView() {
-  const { id } = useAccountId();
+  const { id, label, owned } = useAccountId();
+  const demo = useIsDemo();
+  const act = useCanAct(id);
+  const [funds, setFunds] = useState<'deposit' | 'withdraw' | null>(null);
   const account = useSubaccount(id);
   const { data: asOf } = useAsOf();
   const underlyings = useUnderlyings();
@@ -136,6 +143,14 @@ export function PortfolioView() {
   const imNow = regular.data?.im ?? s?.im;
   const worst = grid ? worstCell(grid.cells) : undefined;
 
+  if (!demo && (id === 0 || account.isError)) {
+    return (
+      <Page>
+        <LiveEmpty id={id} error={account.isError ? (account.error as Error).message : undefined} />
+      </Page>
+    );
+  }
+
   return (
     <Page>
       {/* hero: the account and its scenario crown */}
@@ -143,7 +158,7 @@ export function PortfolioView() {
         <div className="flex flex-wrap items-end justify-between gap-x-s6 gap-y-s3">
           <div className="grid gap-s1">
             <p className="text-t13 text-navy-200">
-              Account #{id}, {accountLabel(id)}
+              Account #{id}, {label(id)}
             </p>
             <h2 id="portfolio-hero" className="flex items-baseline gap-s3 text-[48px] leading-none font-normal text-navy-50 max-sm:text-[36px]">
               {s ? <span className="tabular-nums">{fmtNumber(s.equity)}</span> : <Skeleton className="h-11 w-64" />}
@@ -185,7 +200,7 @@ export function PortfolioView() {
                   sessions={SESSIONS}
                   onSessionChange={setSession}
                   scale={scale}
-                  poster={id === 7}
+                  poster={demo && id === 7}
                   labels={{ im: `Initial margin, ${SESSION_LABEL[session].toLowerCase()}` }}
                 />
               ) : (
@@ -282,7 +297,26 @@ export function PortfolioView() {
               empty={`No open options on account ${id}.`}
             />
           </Panel>
-          <Panel title="Collateral and equity">
+          <Panel
+            title="Collateral and equity"
+            meta={
+              !demo &&
+              (act.canAct ? (
+                <span className="flex gap-s2">
+                  {owned.includes(id) && (
+                    <Button size="sm" variant="secondary" onClick={() => setFunds('withdraw')}>
+                      Withdraw
+                    </Button>
+                  )}
+                  <Button size="sm" variant="primary" lamp onClick={() => setFunds('deposit')}>
+                    Deposit
+                  </Button>
+                </span>
+              ) : (
+                <span className="text-t12 text-navy-200">{act.connected ? 'View only: not your account' : 'View only: connect the owner wallet'}</span>
+              ))
+            }
+          >
             {s ? (
               <dl className="grid text-t13 tabular-nums">
                 {collateral.map(([sym, q]) => (
@@ -327,6 +361,15 @@ export function PortfolioView() {
         />
         <ExpiryTimeline items={expiries.data} pools={pools.data} loading={expiries.isPending} />
       </section>
+      {!demo && account.data && (
+        <FundsDialog
+          mode={funds ?? 'deposit'}
+          open={funds !== null}
+          onOpenChange={(o) => !o && setFunds(null)}
+          accountId={id}
+          held={{ ...account.data.collateral, USDG: account.data.state.cash }}
+        />
+      )}
     </Page>
   );
 }

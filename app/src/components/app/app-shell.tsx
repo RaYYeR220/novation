@@ -1,17 +1,20 @@
 'use client';
 
 import Link from 'next/link';
-import type { ReactNode } from 'react';
+import { usePathname } from 'next/navigation';
+import { useEffect, type ReactNode } from 'react';
 import { Lamp } from '@/components/ui/lamp';
 import { meterState } from '@/components/ui/meter';
 import { useAsOf, useIsDemo, useSubaccount } from '@/lib/client/hooks';
 import { cn } from '@/lib/cn';
+import { readSource, syncUrl, useDataSource } from '@/lib/client/source';
 import { fmtExpiryLong, fmtNumber, fmtPct } from '@/lib/format';
-import { accountLabel, useAccountId } from './account-context';
+import { useAccountId } from './account-context';
 import { AccountSwitcher } from './account-switcher';
 import { Nav, useSection } from './nav';
 import { NetworkGuard } from './network-guard';
 import { SessionChips } from './session-chips';
+import { SourceSwitch } from './source-switch';
 import { WalletButton } from './wallet-button';
 
 function Wordmark({ className }: { className?: string }) {
@@ -29,10 +32,7 @@ function Wordmark({ className }: { className?: string }) {
 function DemoBanner() {
   const { data: asOf } = useAsOf();
   return (
-    <div
-      role="note"
-      className="flex min-h-8 flex-wrap items-center gap-x-s4 gap-y-0.5 border-b border-navy-700 bg-navy-950 px-s4 py-1.5 text-t12 text-navy-200 sm:px-s5"
-    >
+    <div role="note" className="flex flex-wrap items-center gap-x-s4 gap-y-0.5">
       <span className="flex items-center gap-s2 text-navy-50">
         <Lamp tone="navy-200" state="ring" size={6} />
         Demo data: computed with the Novation kernel reference.
@@ -42,9 +42,36 @@ function DemoBanner() {
   );
 }
 
+function LiveBanner() {
+  const { data: asOf, isError } = useAsOf();
+  return (
+    <div role="note" className="flex flex-wrap items-center gap-x-s4 gap-y-0.5">
+      <span className="flex items-center gap-s2 text-navy-50">
+        <Lamp tone="cyan" size={6} />
+        Live data: read from the Novation contracts on Robinhood Chain testnet.
+      </span>
+      {isError ? (
+        <span className="text-loss-1">The testnet RPC is not answering. Retrying.</span>
+      ) : (
+        asOf !== undefined && <span className="tabular-nums">Latest block {fmtExpiryLong(asOf)}. Stock tokens and feeds are testnet mocks.</span>
+      )}
+    </div>
+  );
+}
+
+/** Which data the app shows, and the switch between the demo snapshot and the live testnet. */
+function SourceBar({ demo }: { demo: boolean }) {
+  return (
+    <div className="flex min-h-8 flex-wrap items-center justify-between gap-x-s4 gap-y-1 border-b border-navy-700 bg-navy-950 px-s4 py-1.5 text-t12 text-navy-200 sm:px-s5">
+      {demo ? <DemoBanner /> : <LiveBanner />}
+      <SourceSwitch />
+    </div>
+  );
+}
+
 /** The selected account's margin in one line, kept in view on every page. */
 function RailAccount() {
-  const { id } = useAccountId();
+  const { id, label } = useAccountId();
   const { data } = useSubaccount(id);
   if (!data) return null;
   const s = data.state;
@@ -54,7 +81,7 @@ function RailAccount() {
     <div className="grid gap-s2 rounded-control border border-navy-700 p-s3">
       <p className="flex items-baseline justify-between text-t12 text-navy-200">
         <span>
-          #{id} {accountLabel(id)}
+          #{id} {label(id)}
         </span>
         <span className="tabular-nums">{fmtPct(used)} used</span>
       </p>
@@ -81,6 +108,11 @@ function RailAccount() {
 export function AppShell({ children }: { children: ReactNode }) {
   const demo = useIsDemo();
   const section = useSection();
+  const pathname = usePathname();
+  const [source] = useDataSource();
+  // keep ?data=live in the address bar across navigations, so the URL says what is shown. Read the
+  // source afresh: the hydration render still carries the server's default.
+  useEffect(() => syncUrl(readSource()), [pathname, source]);
   return (
     <div className="min-h-dvh bg-navy-900 [--topbar:106px] xl:[--topbar:57px]">
       <a
@@ -89,7 +121,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       >
         Skip to content
       </a>
-      {demo && <DemoBanner />}
+      <SourceBar demo={demo} />
       <div className="xl:grid xl:grid-cols-[208px_minmax(0,1fr)]">
         <aside className="sticky top-0 hidden h-dvh flex-col gap-s6 border-r border-navy-700 px-s4 py-s5 xl:flex">
           <Wordmark className="px-s2" />

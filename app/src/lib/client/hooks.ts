@@ -34,7 +34,7 @@ export function useSubaccount(id: number | undefined) {
   return useQuery({
     queryKey: ['account', id],
     queryFn: () => c.account(id as number),
-    enabled: id !== undefined,
+    enabled: id !== undefined && id > 0,
   });
 }
 
@@ -43,7 +43,7 @@ export function useScenarioGrid(id: number | undefined, session?: Session) {
   return useQuery({
     queryKey: ['grid', id, session],
     queryFn: () => c.scenarioGrid(id as number, session),
-    enabled: id !== undefined,
+    enabled: id !== undefined && id > 0,
   });
 }
 
@@ -57,7 +57,7 @@ export function useAgents(id: number | undefined) {
   return useQuery({
     queryKey: ['agents', id],
     queryFn: () => c.agents(id as number),
-    enabled: id !== undefined,
+    enabled: id !== undefined && id > 0,
   });
 }
 
@@ -96,7 +96,7 @@ export function useWallet(owner: string | undefined) {
 
 export function useExpiries(id: number | undefined) {
   const c = useClient();
-  return useQuery({ queryKey: ['expiries', id], queryFn: () => c.expiries(id as number), enabled: id !== undefined });
+  return useQuery({ queryKey: ['expiries', id], queryFn: () => c.expiries(id as number), enabled: id !== undefined && id > 0 });
 }
 
 export function usePools() {

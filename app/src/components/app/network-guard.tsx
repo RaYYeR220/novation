@@ -4,12 +4,19 @@ import { useAccount, useSwitchChain } from 'wagmi';
 import { Button } from '@/components/ui/button';
 import { Chip } from '@/components/ui/chip';
 import { Tooltip } from '@/components/ui/tooltip';
-import { targetChain } from '@/lib/wallet/chains';
+import { useChainClient } from '@/lib/client/context';
+import { robinhoodChainTestnet, targetChain as appChain } from '@/lib/wallet/chains';
+
+/** Live mode trades on the testnet deployment; the demo keeps the app's configured chain. */
+export function useTargetChain() {
+  return useChainClient() ? robinhoodChainTestnet : appChain;
+}
 
 export type NetworkStatus = 'disconnected' | 'ok' | 'wrong';
 
 /** Where the wallet stands against the chain the app trades on. */
 export function useNetworkStatus() {
+  const targetChain = useTargetChain();
   const { isConnected, chainId } = useAccount();
   const { switchChain, isPending } = useSwitchChain();
   const status: NetworkStatus = !isConnected ? 'disconnected' : chainId === targetChain.id ? 'ok' : 'wrong';
@@ -18,6 +25,7 @@ export function useNetworkStatus() {
     chainId,
     switching: isPending,
     switchToTarget: () => switchChain({ chainId: targetChain.id }),
+    target: targetChain,
   };
 }
 
@@ -26,7 +34,7 @@ export function useNetworkStatus() {
  * offered on the target chain; everything readable stays readable.
  */
 export function NetworkGuard({ compact = false }: { compact?: boolean }) {
-  const { status, switching, switchToTarget } = useNetworkStatus();
+  const { status, switching, switchToTarget, target: targetChain } = useNetworkStatus();
   const name = targetChain.testnet ? 'RH Chain testnet' : 'Robinhood Chain';
 
   if (status === 'wrong') {

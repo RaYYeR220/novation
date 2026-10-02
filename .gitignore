@@ -28,3 +28,7 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# local anvil runs of the forge scripts (sdk integration tests)
+contracts/deployments/31337.json
+contracts/broadcast/*/31337/
