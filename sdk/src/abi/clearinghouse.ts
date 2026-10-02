@@ -109,6 +109,82 @@ export const clearinghouseAbi = [
   },
   {
     "type": "function",
+    "name": "accountStateChecked",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "st",
+        "type": "tuple",
+        "internalType": "struct AccountState",
+        "components": [
+          {
+            "name": "cash",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "mtm",
+            "type": "int256",
+            "internalType": "int256"
+          },
+          {
+            "name": "settledValue",
+            "type": "int256",
+            "internalType": "int256"
+          },
+          {
+            "name": "deficit",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "equity",
+            "type": "int256",
+            "internalType": "int256"
+          },
+          {
+            "name": "im",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "mm",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "worstScenario",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "healthy",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "liquidatable",
+            "type": "bool",
+            "internalType": "bool"
+          }
+        ]
+      },
+      {
+        "name": "volBehind",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "addVenue",
     "inputs": [
       {
@@ -1926,6 +2002,17 @@ export const clearinghouseAbi = [
         "name": "id",
         "type": "uint256",
         "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "VolNotCurrent",
+    "inputs": [
+      {
+        "name": "underlying",
+        "type": "address",
+        "internalType": "address"
       }
     ]
   },

@@ -9,6 +9,8 @@ import {
   auctionHouseAbi,
   clearinghouseAbi,
   marketDataHubAbi,
+  riskParamsAbi,
+  aggregatorAbi,
   mockAggregatorAbi,
   mockUsdgAbi,
   optionVaultAbi,
@@ -171,6 +173,22 @@ export function simulateSyncVolUpTo(ctx: NovationContext, account: Who, token: A
  */
 export function simulateSyncAndRebaseVol(ctx: NovationContext, account: Who, token: Address) {
   return guard(ctx.client.simulateContract({ address: ctx.deployment.hub, abi: marketDataHubAbi, functionName: 'syncAndRebaseVol', args: [token], account }));
+}
+
+/**
+ * One step of bringing `token`'s vol up to its feed: syncAndRebaseVol after an aggregator
+ * migration (the feed's latest round is in a later phase), else syncVol (up to 64 rounds). Call
+ * again while the hub's volCurrent stays false. What clears a VolNotCurrent refusal of a
+ * withdrawal, a trade or a liquidation; permissionless.
+ */
+export async function simulateCatchUpVol(ctx: NovationContext, account: Who, token: Address) {
+  const [vol, p] = await Promise.all([
+    ctx.client.readContract({ address: ctx.deployment.hub, abi: marketDataHubAbi, functionName: 'volState', args: [token] }),
+    ctx.client.readContract({ address: ctx.deployment.riskParams, abi: riskParamsAbi, functionName: 'underlying', args: [token] }),
+  ]);
+  const [latest] = await ctx.client.readContract({ address: p.feed, abi: aggregatorAbi, functionName: 'latestRoundData' });
+  const migrated = BigInt(latest) >> 64n > BigInt(vol[2]) >> 64n;
+  return migrated ? simulateSyncAndRebaseVol(ctx, account, token) : simulateSyncVol(ctx, account, token);
 }
 
 /** Testnet MockAggregator only: pushes the next round. */

@@ -59,7 +59,7 @@ const MESSAGES: Partial<Record<RefusalCode, string>> = {
   InvalidExpiry: 'The grant must expire in the future.',
   InvalidRecipient: 'The recipient is not valid.',
   VaultNotLive: 'The vault is not live: its underlying is halted or its mark vol is stale.',
-  VolNotCurrent: "The mark vol is behind the feed's latest round: run syncVol first (a liquidation folds up to 8 rounds itself).",
+  VolNotCurrent: "A vol estimate is behind its feed's latest round (a backlog longer than one sync, or an aggregator migration awaiting syncAndRebaseVol): sync it, then retry.",
   BadQty: 'The quantity is zero or above the vault’s per-trade maximum.',
   TenorTooLong: 'The vault does not sell expiries that far out.',
   StrikeNotOtm: 'The vault only sells strikes out of the money by its minimum distance.',

@@ -67,6 +67,9 @@ import {
   type RfqQuote,
   type SeriesInfo,
   getClaimExpiries,
+  getPositionStatus,
+  getAccountStateChecked,
+  simulateCatchUpVol,
   getLiquidationState,
   getMarket,
   getVolCurrent,
@@ -139,9 +142,13 @@ d('Novation on a local chain (KernelReference kernel, repo deploy scripts)', () 
     await send(L, taker!.wallet, (await simulateDeposit(L.ctx, me, takerId, USDG, 5_000n * 10n ** 6n)).request);
     expect((await getAccountState(L.ctx, takerId)).cash).toBe(5_000n * WAD);
 
-    // the first NVDA call the covered-call vault sells
+    // the first NVDA call the covered-call vault sells, on an expiry at least two days out: later
+    // tests move the clock, and the position must stay live whatever the hour the suite runs at
     const spot = (await getSpot(L.ctx, NVDA)).price;
-    const calls = series.filter((s) => s.underlying === NVDA && s.isCall && s.strike > spot).sort((a, b) => a.expiry - b.expiry || Number(a.strike - b.strike));
+    const t0 = Number((await L.client.getBlock()).timestamp);
+    const calls = series
+      .filter((s) => s.underlying === NVDA && s.isCall && s.strike > spot && s.expiry > t0 + 2 * 86400)
+      .sort((a, b) => a.expiry - b.expiry || Number(a.strike - b.strike));
     for (const s of calls) {
       try {
         await simulateVaultBuy(L.ctx, me, cc, s.id, WAD, maxUint256, takerId);
@@ -440,16 +447,38 @@ d('Novation on a local chain (KernelReference kernel, repo deploy scripts)', () 
     const m = await getMarket(L.ctx, NVDA);
     expect(m).toMatchObject({ volCurrent: true, volStale: false });
 
-    const [ls, st] = await Promise.all([getLiquidationState(L.ctx, takerId), getAccountState(L.ctx, takerId)]);
+    const [ls, st, ps] = await Promise.all([getLiquidationState(L.ctx, takerId), getAccountState(L.ctx, takerId), getPositionStatus(L.ctx, takerId)]);
     expect(ls.state).toEqual(st);
     expect(ls.live).toBeGreaterThan(0n);
-    expect(ls.awaiting).toBe(0n);
+    expect({ live: ls.live, awaiting: ls.awaiting }).toEqual(ps);
     expect(await getClaimExpiries(L.ctx, takerId)).toEqual([]);
 
     // refused before anything is signed
     expect((await refusal(simulateSyncAndRebaseVol(L.ctx, me, NVDA))).refusal.code).toBe('NoPhaseChange');
     expect((await refusal(simulateEndDeficitSale(L.ctx, me, takerId, callSeries.expiry))).refusal.code).toBe('SaleNotActive');
     expect((await refusal(simulateSettleExpiryLastResort(L.ctx, me, NVDA, callSeries.expiry, 1n))).refusal.code).toBe('TooEarly');
+  });
+
+  it('names a vol behind its feed, refuses a withdrawal priced on it, and catches it up', async () => {
+    const me = taker!.account.address;
+    const feed = L.ctx.deployment.feeds.NVDA as Address;
+    const now = Number((await L.client.getBlock()).timestamp);
+    // more rounds than one sync folds (64): the withdrawal's own sync leaves the vol behind
+    for (let i = 0; i < 66; i++) {
+      await send(L, maker!.wallet, (await simulatePushRound(L.ctx, maker!.account.address, feed, 195n * 10n ** 8n, BigInt(now))).request);
+    }
+    expect((await getAccountStateChecked(L.ctx, takerId)).volBehind?.toLowerCase()).toBe(NVDA.toLowerCase());
+    const w = await refusal(simulateWithdraw(L.ctx, me, takerId, USDG, 1n, me));
+    expect(w.refusal.code).toBe('VolNotCurrent');
+    expect(String(w.refusal.args.underlying).toLowerCase()).toBe(NVDA.toLowerCase());
+    // one step folds 64 rounds, the next the rest
+    await send(L, taker!.wallet, (await simulateCatchUpVol(L.ctx, me, NVDA)).request);
+    expect((await getAccountStateChecked(L.ctx, takerId)).volBehind).not.toBeNull();
+    await send(L, taker!.wallet, (await simulateCatchUpVol(L.ctx, me, NVDA)).request);
+    const checked = await getAccountStateChecked(L.ctx, takerId);
+    expect(checked.volBehind).toBeNull();
+    expect(checked.state).toEqual(await getAccountState(L.ctx, takerId));
+    await send(L, taker!.wallet, (await simulateWithdraw(L.ctx, me, takerId, USDG, 1n, me)).request);
   });
 
   it('scans events in chunks from the deployment block', async () => {
