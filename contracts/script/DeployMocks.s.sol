@@ -16,7 +16,7 @@ contract DeployMocks is Script {
     string[4] internal names = ["Mock NVIDIA", "Mock Tesla", "Mock Apple", "Mock SPDR S&P 500 ETF"];
 
     function run() external {
-        require(block.chainid != 1 && block.chainid != 42161, "testnet only");
+        require(block.chainid != 1 && block.chainid != 42161 && block.chainid != 4663, "testnet only");
         vm.startBroadcast();
         MockUSDG usdg = new MockUSDG();
         string memory tokens = "tokens";
