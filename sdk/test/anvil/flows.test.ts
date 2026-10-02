@@ -66,6 +66,15 @@ import {
   WAD,
   type RfqQuote,
   type SeriesInfo,
+  getClaimExpiries,
+  getLiquidationState,
+  getMarket,
+  getVolCurrent,
+  getVolStale,
+  simulateEndDeficitSale,
+  simulateSettleExpiryLastResort,
+  simulateSyncAndRebaseVol,
+  simulateSyncVolUpTo,
 } from '../../src/index';
 import { local, send, type Local } from './helpers';
 
@@ -409,6 +418,38 @@ d('Novation on a local chain (KernelReference kernel, repo deploy scripts)', () 
     const five = await getVaultQuotesSynced(L.ctx, cc, [callSeries.id], 5n * WAD);
     expect(five.quotes[0]!.bidRefusal?.code).toBe('ExceedsShort');
     expect(five.quotes[0]!.bid).toBeUndefined();
+  });
+
+  it('reads vol staleness, the liquidation state and claim expiries, and syncs vol in bounded steps', async () => {
+    const me = taker!.account.address;
+    const feed = L.ctx.deployment.feeds.NVDA as Address;
+    const now = Number((await L.client.getBlock()).timestamp);
+    for (const px of [192n, 193n, 194n]) {
+      await send(L, maker!.wallet, (await simulatePushRound(L.ctx, maker!.account.address, feed, px * 10n ** 8n, BigInt(now))).request);
+    }
+    expect(await getVolCurrent(L.ctx, NVDA)).toBe(false);
+    // printed just now: not volStaleness old, so markVol keeps the estimate
+    expect(await getVolStale(L.ctx, NVDA)).toBe(false);
+    const one = await simulateSyncVolUpTo(L.ctx, me, NVDA, 1);
+    expect(one.result).toBe(false);
+    await send(L, taker!.wallet, one.request);
+    const rest = await simulateSyncVolUpTo(L.ctx, me, NVDA, 64);
+    expect(rest.result).toBe(true);
+    await send(L, taker!.wallet, rest.request);
+    expect(await getVolCurrent(L.ctx, NVDA)).toBe(true);
+    const m = await getMarket(L.ctx, NVDA);
+    expect(m).toMatchObject({ volCurrent: true, volStale: false });
+
+    const [ls, st] = await Promise.all([getLiquidationState(L.ctx, takerId), getAccountState(L.ctx, takerId)]);
+    expect(ls.state).toEqual(st);
+    expect(ls.live).toBeGreaterThan(0n);
+    expect(ls.awaiting).toBe(0n);
+    expect(await getClaimExpiries(L.ctx, takerId)).toEqual([]);
+
+    // refused before anything is signed
+    expect((await refusal(simulateSyncAndRebaseVol(L.ctx, me, NVDA))).refusal.code).toBe('NoPhaseChange');
+    expect((await refusal(simulateEndDeficitSale(L.ctx, me, takerId, callSeries.expiry))).refusal.code).toBe('SaleNotActive');
+    expect((await refusal(simulateSettleExpiryLastResort(L.ctx, me, NVDA, callSeries.expiry, 1n))).refusal.code).toBe('TooEarly');
   });
 
   it('scans events in chunks from the deployment block', async () => {

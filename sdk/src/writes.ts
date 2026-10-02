@@ -104,6 +104,40 @@ export function simulateSettleExpiry(ctx: NovationContext, account: Who, underly
   );
 }
 
+/**
+ * 72 hours after the close, when the last pre-close print is stale or outside the band: settles at
+ * the first round printed after the close (`firstAfterHint`), which must be in the band.
+ */
+export function simulateSettleExpiryFallback(ctx: NovationContext, account: Who, underlying: Address, expiry: number, firstAfterHint: bigint) {
+  return guard(
+    ctx.client.simulateContract({
+      address: ctx.deployment.registry,
+      abi: seriesRegistryAbi,
+      functionName: 'settleExpiryFallback',
+      args: [underlying, BigInt(expiry), firstAfterHint],
+      account,
+    }),
+  );
+}
+
+/**
+ * The last resort, 7 days after the close: the last print at or before it (proven last as for
+ * settleExpiry) without the lag bound, for a feed that died or whose first post-close print is
+ * implausible. Reverts FallbackApplies while that first print is in the band (the 72-hour fallback
+ * gives the price then).
+ */
+export function simulateSettleExpiryLastResort(ctx: NovationContext, account: Who, underlying: Address, expiry: number, roundIdHint: bigint) {
+  return guard(
+    ctx.client.simulateContract({
+      address: ctx.deployment.registry,
+      abi: seriesRegistryAbi,
+      functionName: 'settleExpiryLastResort',
+      args: [underlying, BigInt(expiry), roundIdHint],
+      account,
+    }),
+  );
+}
+
 export function simulateListSeries(ctx: NovationContext, account: Who, underlying: Address, expiry: number, strike: bigint, isCall: boolean) {
   return guard(
     ctx.client.simulateContract({
@@ -121,6 +155,22 @@ export function simulateListSeries(ctx: NovationContext, account: Who, underlyin
 /** Permissionless: folds every pending feed round into the hub's mark vol. */
 export function simulateSyncVol(ctx: NovationContext, account: Who, token: Address) {
   return guard(ctx.client.simulateContract({ address: ctx.deployment.hub, abi: marketDataHubAbi, functionName: 'syncVol', args: [token], account }));
+}
+
+/** syncVol folding at most `maxRounds` (1 to 64) rounds; the result says whether the vol is then current. */
+export function simulateSyncVolUpTo(ctx: NovationContext, account: Who, token: Address, maxRounds: number) {
+  return guard(
+    ctx.client.simulateContract({ address: ctx.deployment.hub, abi: marketDataHubAbi, functionName: 'syncVolUpTo', args: [token, BigInt(maxRounds)], account }),
+  );
+}
+
+/**
+ * Permissionless, after an aggregator migration: folds what is left of the old phase (up to 64
+ * rounds) and rebases onto the new one in one transaction. The result is false when more than 64
+ * old rounds were left (call again). Reverts NoPhaseChange when the feed hasn't moved phase.
+ */
+export function simulateSyncAndRebaseVol(ctx: NovationContext, account: Who, token: Address) {
+  return guard(ctx.client.simulateContract({ address: ctx.deployment.hub, abi: marketDataHubAbi, functionName: 'syncAndRebaseVol', args: [token], account }));
 }
 
 /** Testnet MockAggregator only: pushes the next round. */
@@ -241,6 +291,48 @@ export function simulateBidLiquidation(ctx: NovationContext, account: Who, id: b
 export function simulateEndLiquidation(ctx: NovationContext, account: Who, id: bigint | number) {
   return guard(
     ctx.client.simulateContract({ address: ctx.deployment.auctionHouse, abi: auctionHouseAbi, functionName: 'endLiquidation', args: [BigInt(id)], account }),
+  );
+}
+
+/**
+ * The caller (owner of `bidderId`) buys `tokenWad` of the account's `token` collateral in its
+ * `expiry` deficit sale at spot less the discount, paying at most `maxPayWad`.
+ */
+export function simulateBidDeficit(
+  ctx: NovationContext,
+  account: Who,
+  id: bigint | number,
+  expiry: number,
+  token: Address,
+  tokenWad: bigint,
+  bidderId: bigint | number,
+  maxPayWad: bigint,
+) {
+  return guard(
+    ctx.client.simulateContract({
+      address: ctx.deployment.auctionHouse,
+      abi: auctionHouseAbi,
+      functionName: 'bidDeficit',
+      args: [BigInt(id), BigInt(expiry), token, tokenWad, BigInt(bidderId), maxPayWad],
+      account,
+    }),
+  );
+}
+
+/**
+ * Permissionless: ends the deficit sale of (`id`, `expiry`) once the account owes nothing for it
+ * (repaid by its own cash rather than a bid), so a later deficit starts a fresh ramp. Reverts
+ * SaleNotActive or ExceedsDeficit.
+ */
+export function simulateEndDeficitSale(ctx: NovationContext, account: Who, id: bigint | number, expiry: number) {
+  return guard(
+    ctx.client.simulateContract({
+      address: ctx.deployment.auctionHouse,
+      abi: auctionHouseAbi,
+      functionName: 'endDeficitSale',
+      args: [BigInt(id), BigInt(expiry)],
+      account,
+    }),
   );
 }
 
