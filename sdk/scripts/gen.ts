@@ -122,6 +122,8 @@ for (const f of readdirSync(DEPLOYMENTS).sort()) {
   const id = basename(f, '.json');
   if (!f.endsWith('.json') || LOCAL_CHAINS.has(id)) continue;
   const d = JSON.parse(readFileSync(join(DEPLOYMENTS, f), 'utf8')) as Record<string, unknown>;
+  // a chain whose core isn't deployed yet (mainnet: tokens, feeds and the kernel only) has nothing to bind to
+  if (!d.clearinghouse) continue;
   delete d.superseded;
   delete d.kernelPrevious;
   deployments[id] = d;

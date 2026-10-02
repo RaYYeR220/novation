@@ -23,40 +23,40 @@ export const deploymentsJson = {
       "SPY": "0x78d6096c09253cc7B30D324D06f8BA25C8A4265C",
       "TSLA": "0x3c57717cb77CD28e27bc57e67FB4b0DE73937d80"
     },
-    "timelock": "0xf60F96DF709B2dD958519329b4ab488C27e178b5",
+    "timelock": "0xe3a0D2Dd94607f86d9641571B5fe328a274C4030",
     "guardian": "0x4108064852c95135844be338fc8bcBdF91C41ACF",
-    "riskParams": "0x113AbDCd234d00FfEA37D29A31BD1Fb2B035dcf1",
-    "hub": "0xEcD2baaE3C13b526ffdBB8a8388609442C84d993",
-    "registry": "0x9C99381dE80518350fEaA09db17a064eD2180b7b",
-    "insurance": "0x531394f5a5D0c3D9e54d258c8825Fa70Fd645429",
-    "clearinghouse": "0x0b0F4e67DcA3B846859Af452576e8E09316D1949",
-    "auctionHouse": "0x4a132D6f83d9db88092A3D1F8B5985B30fd99Ad9",
-    "rfq": "0x1aFD874fdd3914fB6958F282769dAC546993ED82",
+    "riskParams": "0x569768651DbB577Dcda4547e9B177f702b6F1D00",
+    "hub": "0x42894B89a9fC7aFe3bD12555CAc20b6695a5ed9C",
+    "registry": "0x079f744c046F7C1fCc43b1Fe5124513637d19dA8",
+    "insurance": "0x295FB7eB9dcE936190567032C72697FaCEAdb96C",
+    "clearinghouse": "0x397dc6b74003172C27297520E98472C5fd168238",
+    "auctionHouse": "0x2775a3feECA95a29141A9d3903b1C8fABa2B4658",
+    "rfq": "0xcD5d78984A2ebe76D7B09C8304E79a078B93D328",
     "vaults": [
       {
-        "address": "0xCCF205358eF9bfd97335f0D7bD5240487bB64865",
+        "address": "0xAC989aF37744FeB96Cad8d553e7321a8b5b1D5d9",
         "type": "coveredCall",
         "underlying": "NVDA"
       },
       {
-        "address": "0xF95EAbF20EE1D9034ABa1b240D0242B75e645BD5",
+        "address": "0x55E624783C129721Bd8735D1E4Ef1E5c06BE708A",
         "type": "coveredCall",
         "underlying": "TSLA"
       },
       {
-        "address": "0x0FEee896be42E954c2881668da9035efc5dB0947",
+        "address": "0xa47A07846902bDB8cE5306C1F851278447f3e237",
         "type": "putWrite",
         "underlying": "NVDA"
       }
     ],
     "libraries": {
-      "AuctionHookLogic": "0x5c3A1bAF3e0554bB703C00723ddb342ce2C82C06",
-      "MarginLogic": "0x36EC877374e7F48b34BB190EB18f629F0067a536",
-      "SettlementLogic": "0x095B3F6BB7B34E14835fa3BC375725B2C74669e7",
-      "TradeLogic": "0xC899560e64267952dc88122651dDF3e40029eA4B",
-      "VaultPricing": "0xe110F03A4C2835A3BAAf69D5A2d1EeB602f31C58"
+      "AuctionHookLogic": "0x27D6Be2eC8980721235916b7d6Ed73aaaD79C6be",
+      "MarginLogic": "0x3e991293bfff1953e9C30ef7B5D2dd28083B234D",
+      "SettlementLogic": "0x943D999897d3833Ea76826AFf894814F82d38fA7",
+      "TradeLogic": "0x53F0e60fa0Ccdd8B4A76a6961fE228498B4F9471",
+      "VaultPricing": "0x47417e1Ac7Ac31F015E06C3Af843A92C6f217D51"
     },
-    "block": 127521684
+    "block": 127762103
   }
 } as const;
 
@@ -66,20 +66,20 @@ export const proofTxsJson = {
     "refusals": [
       {
         "label": "4 agent buys 3 more calls (over budget)",
-        "tx": "0xb0cbe3415a6439ecee889ac1c7d6e4438093f0b71b6863842f9128c72f63f4db",
-        "block": 127565509,
+        "tx": "0x7b91ebf435f1c2e3f57d65dc06d0e01e88ed48d2b9fcfe1a862ed5c677826afb",
+        "block": 127766068,
         "expectedError": "AgentRiskBudgetExceeded"
       },
       {
         "label": "5 withdraw past initial margin",
-        "tx": "0xa7e650bedb2c60418117f762f2c775d019f491d49d5d34e5e66e7783e25f9958",
-        "block": 127565540,
+        "tx": "0x96b225d4cef0e2c30fb00da1b406e30799b16be5342edb2f6bb363459175edb5",
+        "block": 127766095,
         "expectedError": "InsufficientMargin"
       },
       {
         "label": "7 RFQ fill on AAPL inside the multiplier window",
-        "tx": "0xeed1994e57e6b1d0f7da167b4a44b093ad9e6dcbd42167679f165200e45360e7",
-        "block": 127566326,
+        "tx": "0xae5f3ea5f320c91d36334a53d56e90cb2e203f8933b454bba396bbc8f6fc32cf",
+        "block": 127766643,
         "expectedError": "OpeningNotAllowed"
       }
     ]

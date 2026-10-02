@@ -111,8 +111,13 @@ export default async function setup(project: TestProject) {
       SEED_AAPL_UPDATED_AT: String(now - 60),
       SEED_SPY_UPDATED_AT: String(now - 60),
       DEPLOYER_PRIVATE_KEY: key,
-      // a vault's first sale in a series may be one contract, as on RH testnet (Deploy.s.sol's default elsewhere is 10)
+      // the RH testnet configuration (Deploy.s.sol's defaults off testnet are the mainnet ones): a vault's
+      // first sale in a series may be one contract, and all three vaults are deployed
       VAULT_MIN_NEW_SERIES_QTY: String(10n ** 18n),
+      DEPLOY_ALL_VAULTS: 'true',
+      // off testnet the guardian (and the timelock's proposer) must not be the deployer: anvil's
+      // public account #9, which no test signs with
+      GUARDIAN: '0xa0Ee7A142d267C1f36714E4a8F75612F20a79720',
     };
     const script = (name: string) => run(['script', `script/${name}`, '--rpc-url', rpcUrl, '--broadcast', '--slow', '--private-key', key], seed);
     script('DeployMocks.s.sol');
