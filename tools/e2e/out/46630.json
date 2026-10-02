@@ -1,8 +1,8 @@
 {
   "chainId": 46630,
-  "date": "2026-10-01T12:31:20+00:00",
+  "date": "2026-10-02T11:08:31+00:00",
   "kernel": "0xAeE1D4F45AF43a9C4d52ADa65d423b1c0e67f0fd",
-  "clearinghouse": "0xe799DF9b96a4809c411D3F90f67C5261a245ABB2",
+  "clearinghouse": "0x0b0F4e67DcA3B846859Af452576e8E09316D1949",
   "actors": {
     "user": "0x4108064852c95135844be338fc8bcBdF91C41ACF",
     "maker": "0xB45a00D9ffF5348E6aB4Eb0D6B82B43610AE951E",
@@ -11,218 +11,218 @@
   "txs": [
     {
       "label": "1 createSubaccount (user)",
-      "tx": "0xf8f0ba61c86a59a2cf2e23a46b36dbeb94281137cebb460ac50c978763ece66c",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xf8f0ba61c86a59a2cf2e23a46b36dbeb94281137cebb460ac50c978763ece66c",
+      "tx": "0x0d501e07bf14eecbc94bb55e3aeedd54ecc581a4f42a3a12f367539c2f814c4a",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x0d501e07bf14eecbc94bb55e3aeedd54ecc581a4f42a3a12f367539c2f814c4a",
       "status": "success",
-      "gasUsed": 98758,
-      "block": 127137789
+      "gasUsed": 101044,
+      "block": 127564363
     },
     {
       "label": "1 mint USDG",
-      "tx": "0x97743bc3becc0c36b51e38e30a7004931c5d25aa424308b508561b944365e17f",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x97743bc3becc0c36b51e38e30a7004931c5d25aa424308b508561b944365e17f",
+      "tx": "0x0509b03074358097cbe6f3e42d6a05d461f50fb23af5e3dc8787b216c6a64f6f",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x0509b03074358097cbe6f3e42d6a05d461f50fb23af5e3dc8787b216c6a64f6f",
       "status": "success",
-      "gasUsed": 38580,
-      "block": 127137813
+      "gasUsed": 42058,
+      "block": 127564392
     },
     {
       "label": "1 mint NVDA",
-      "tx": "0xbf72db4613f46172e902379ab9646f7cff1dfaa2600e0ca791c68fcb9f922da0",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xbf72db4613f46172e902379ab9646f7cff1dfaa2600e0ca791c68fcb9f922da0",
+      "tx": "0x070352253d64b7cf9749b357e284efc6cc1f744f3562b4297388f10d475b90c2",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x070352253d64b7cf9749b357e284efc6cc1f744f3562b4297388f10d475b90c2",
       "status": "success",
-      "gasUsed": 55756,
-      "block": 127137835
+      "gasUsed": 59260,
+      "block": 127564414
     },
     {
       "label": "1 approve USDG",
-      "tx": "0x94adb16e99c04b39811741245d78e31280c2ad2ae764671fa89fa0084d841233",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x94adb16e99c04b39811741245d78e31280c2ad2ae764671fa89fa0084d841233",
+      "tx": "0x59ad8d2ab72bf83ed183543a961ade91f9cc1e4226cc8e8511ee9e8456795573",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x59ad8d2ab72bf83ed183543a961ade91f9cc1e4226cc8e8511ee9e8456795573",
       "status": "success",
-      "gasUsed": 50988,
-      "block": 127137854
+      "gasUsed": 54466,
+      "block": 127564430
     },
     {
       "label": "1 approve NVDA",
-      "tx": "0x75bca7e3638b66ec51ab57e820a5d5e0b007ebed57054a386ace4f7545384405",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x75bca7e3638b66ec51ab57e820a5d5e0b007ebed57054a386ace4f7545384405",
+      "tx": "0x6daeeb86b512af43e472863d5d82fe961260e8878e45b38a77ded91443fb791f",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x6daeeb86b512af43e472863d5d82fe961260e8878e45b38a77ded91443fb791f",
       "status": "success",
-      "gasUsed": 50988,
-      "block": 127137874
+      "gasUsed": 54466,
+      "block": 127564458
     },
     {
       "label": "1 deposit 2000 USDG",
-      "tx": "0xafb81db8842b924bf037203a3edfa41b4bd2710968f406853648eddcd262d3cd",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xafb81db8842b924bf037203a3edfa41b4bd2710968f406853648eddcd262d3cd",
+      "tx": "0xab0c410cb644ebb7cbc3ecf2b4f6128a957fb5214c00b1b7c05f53eddca4f8c8",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xab0c410cb644ebb7cbc3ecf2b4f6128a957fb5214c00b1b7c05f53eddca4f8c8",
       "status": "success",
-      "gasUsed": 81953,
-      "block": 127137892
+      "gasUsed": 86082,
+      "block": 127564481
     },
     {
       "label": "1 deposit 1 NVDA",
-      "tx": "0xfffc8b6549a1c096e4c2a98e33fba44136882d3fc49edd081698f4fae2ea1510",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xfffc8b6549a1c096e4c2a98e33fba44136882d3fc49edd081698f4fae2ea1510",
+      "tx": "0x75ff034cc9076ca4ce0365d592c0cd76d7122d820d535492ad9eff28d7c5a4d7",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x75ff034cc9076ca4ce0365d592c0cd76d7122d820d535492ad9eff28d7c5a4d7",
       "status": "success",
-      "gasUsed": 208294,
-      "block": 127137912
+      "gasUsed": 214215,
+      "block": 127564505
     },
     {
       "label": "2 syncVol NVDA",
-      "tx": "0x897565f536736e368df4a66c88ac33a4901dd85ff3f3574f7ea04f1f19260297",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x897565f536736e368df4a66c88ac33a4901dd85ff3f3574f7ea04f1f19260297",
+      "tx": "0x75828566c73180cf1354590e61016e263bd4d4848fad37cc88af709af15c85a4",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x75828566c73180cf1354590e61016e263bd4d4848fad37cc88af709af15c85a4",
       "status": "success",
-      "gasUsed": 63478,
-      "block": 127137930
+      "gasUsed": 66328,
+      "block": 127564527
     },
     {
       "label": "2 buy 1 NVDA call from the covered-call vault",
-      "tx": "0xb980c90eae6bf5f45a19858ea7f1042c5ee893f5caac47bc3e4cd6a2efff486c",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xb980c90eae6bf5f45a19858ea7f1042c5ee893f5caac47bc3e4cd6a2efff486c",
+      "tx": "0x8a930cccecd40cd0052246ad0fd94fc64f093fc1611b723e3d333ddfdc174361",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x8a930cccecd40cd0052246ad0fd94fc64f093fc1611b723e3d333ddfdc174361",
       "status": "success",
-      "gasUsed": 906704,
-      "block": 127138456
+      "gasUsed": 912000,
+      "block": 127565240
     },
     {
       "label": "3 createSubaccount (maker)",
-      "tx": "0x88f1d4f4271597f77b3e5794fd4687f3a3ea86648bfced5544c203ab24ac1fd2",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x88f1d4f4271597f77b3e5794fd4687f3a3ea86648bfced5544c203ab24ac1fd2",
+      "tx": "0xd0fdc68f17044d1b8cd2c5d7dcd35db9e02b883e9ada9b2ad7c17bf460dda126",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xd0fdc68f17044d1b8cd2c5d7dcd35db9e02b883e9ada9b2ad7c17bf460dda126",
       "status": "success",
-      "gasUsed": 98706,
-      "block": 127138483
+      "gasUsed": 100954,
+      "block": 127565271
     },
     {
       "label": "3 mint USDG for the maker",
-      "tx": "0x6a015cce06e5fb79fa88f00727596bd013e70f03b34f391462c0f03614e4c1e0",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x6a015cce06e5fb79fa88f00727596bd013e70f03b34f391462c0f03614e4c1e0",
+      "tx": "0x31a460e6bce3e7b4b7c42d0daf5340ac8d7cc6f350bb0badb3a727aae8185e62",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x31a460e6bce3e7b4b7c42d0daf5340ac8d7cc6f350bb0badb3a727aae8185e62",
       "status": "success",
-      "gasUsed": 38580,
-      "block": 127138506
+      "gasUsed": 42058,
+      "block": 127565299
     },
     {
       "label": "3 deposit 2000 USDG into the maker account",
-      "tx": "0x91eed33da49abbc41c635728a619e7e6228b914ae355b8e4bc553fc57c95c609",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x91eed33da49abbc41c635728a619e7e6228b914ae355b8e4bc553fc57c95c609",
+      "tx": "0x808e0d892dd2aa70e7888b4bcacb378bfa6910e995b73a4afaa2e240ba688d94",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x808e0d892dd2aa70e7888b4bcacb378bfa6910e995b73a4afaa2e240ba688d94",
       "status": "success",
-      "gasUsed": 81953,
-      "block": 127138525
+      "gasUsed": 86082,
+      "block": 127565330
     },
     {
       "label": "3 RFQ fill: user sells 5 NVDA puts to the maker",
-      "tx": "0x1e985233111b657dd484db8f86c9babc95d530c28f1c08ce62a0a2c1a2c921e1",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x1e985233111b657dd484db8f86c9babc95d530c28f1c08ce62a0a2c1a2c921e1",
+      "tx": "0x4a3ae55b02d64356f67b69ed81bbbcb0d53830fdf8f2af6a3761e3907d2fc233",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x4a3ae55b02d64356f67b69ed81bbbcb0d53830fdf8f2af6a3761e3907d2fc233",
       "status": "success",
-      "gasUsed": 736011,
-      "block": 127138546
+      "gasUsed": 725812,
+      "block": 127565364
     },
     {
       "label": "4 createSubaccount (agent-run)",
-      "tx": "0xe0b9803c2fce2be2e8476afaf4ffbc18ec29dad2b05b3098eb074f2721b6b502",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xe0b9803c2fce2be2e8476afaf4ffbc18ec29dad2b05b3098eb074f2721b6b502",
+      "tx": "0x80cdc5de0738e63d14fc4bc3edfaa52ca87b6ed018f55f1b5d1487890892a701",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x80cdc5de0738e63d14fc4bc3edfaa52ca87b6ed018f55f1b5d1487890892a701",
       "status": "success",
-      "gasUsed": 81658,
-      "block": 127138567
+      "gasUsed": 83944,
+      "block": 127565384
     },
     {
       "label": "4 deposit 500 USDG (agent-run)",
-      "tx": "0xcddf71f417b5b407381949a19a2cb6bee0088de4cb37251053e13063c37e4b3e",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xcddf71f417b5b407381949a19a2cb6bee0088de4cb37251053e13063c37e4b3e",
+      "tx": "0x7b4666736325d6f315c7ac367db2a04e434c88cc05ceaed7880d9aa986fd5e58",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x7b4666736325d6f315c7ac367db2a04e434c88cc05ceaed7880d9aa986fd5e58",
       "status": "success",
-      "gasUsed": 81953,
-      "block": 127138590
+      "gasUsed": 86082,
+      "block": 127565418
     },
     {
       "label": "4 grantAgent (risk budget 1.5x one call)",
-      "tx": "0xe6523c11feaa2f525c1f930a11a5b2bae14cd3e917075ec9f801f880a134cd3b",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xe6523c11feaa2f525c1f930a11a5b2bae14cd3e917075ec9f801f880a134cd3b",
+      "tx": "0xfec062996b830cc13c65433a2e6afa4e63115e185f0c5d4af550ed36e5dfe9a7",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xfec062996b830cc13c65433a2e6afa4e63115e185f0c5d4af550ed36e5dfe9a7",
       "status": "success",
-      "gasUsed": 80511,
-      "block": 127138615
+      "gasUsed": 85934,
+      "block": 127565454
     },
     {
       "label": "4 agent buys 1 call (in budget)",
-      "tx": "0x4bc0386cb4183e19ae7ac2650ef06684f89414e8326ba0ad25ed6699f1ba9328",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x4bc0386cb4183e19ae7ac2650ef06684f89414e8326ba0ad25ed6699f1ba9328",
+      "tx": "0xd8e2ffa2ecc82323c74342691fb6711126bfab998cbdcaece45900949df6387f",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xd8e2ffa2ecc82323c74342691fb6711126bfab998cbdcaece45900949df6387f",
       "status": "success",
-      "gasUsed": 807111,
-      "block": 127138631
+      "gasUsed": 812775,
+      "block": 127565479
     },
     {
       "label": "4 agent buys 3 more calls (over budget)",
-      "tx": "0xa411c8e1173e78c41e6c2f12611d553f54583cb1203eaf651bc9bc725e2c1b9a",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xa411c8e1173e78c41e6c2f12611d553f54583cb1203eaf651bc9bc725e2c1b9a",
+      "tx": "0xb0cbe3415a6439ecee889ac1c7d6e4438093f0b71b6863842f9128c72f63f4db",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xb0cbe3415a6439ecee889ac1c7d6e4438093f0b71b6863842f9128c72f63f4db",
       "status": "reverted",
-      "gasUsed": 759467,
-      "block": 127138649,
+      "gasUsed": 765080,
+      "block": 127565509,
       "expectedError": "AgentRiskBudgetExceeded"
     },
     {
       "label": "5 withdraw past initial margin",
-      "tx": "0xc947dc28bb91b5499f88ac89911507758d7447db5666720a8eb7d86dd77c3094",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xc947dc28bb91b5499f88ac89911507758d7447db5666720a8eb7d86dd77c3094",
+      "tx": "0xa7e650bedb2c60418117f762f2c775d019f491d49d5d34e5e66e7783e25f9958",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xa7e650bedb2c60418117f762f2c775d019f491d49d5d34e5e66e7783e25f9958",
       "status": "reverted",
-      "gasUsed": 256705,
-      "block": 127138669,
+      "gasUsed": 261266,
+      "block": 127565540,
       "expectedError": "InsufficientMargin"
     },
     {
       "label": "6 mint NVDA for the vault deposit",
-      "tx": "0xafc9a113ed44c11f4cbf6f17c0c946c801361e1fc8522810d5f89eac8c4e6602",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xafc9a113ed44c11f4cbf6f17c0c946c801361e1fc8522810d5f89eac8c4e6602",
+      "tx": "0x504261657299f226862493ac915e41cdea728d3828bda2d3efe55e327b6891e1",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x504261657299f226862493ac915e41cdea728d3828bda2d3efe55e327b6891e1",
       "status": "success",
-      "gasUsed": 55782,
-      "block": 127138684
+      "gasUsed": 59260,
+      "block": 127565569
     },
     {
       "label": "6 approve the vault",
-      "tx": "0x14c9fb9917a76d728c9bdc1d2c3fcbdfec33532bd593b02391effa57486de274",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x14c9fb9917a76d728c9bdc1d2c3fcbdfec33532bd593b02391effa57486de274",
+      "tx": "0xe89c2e3b512539bb9e540fcd90cf42c993e7445b27bb6d384de01cc0133cf2ab",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xe89c2e3b512539bb9e540fcd90cf42c993e7445b27bb6d384de01cc0133cf2ab",
       "status": "success",
-      "gasUsed": 50676,
-      "block": 127138699
+      "gasUsed": 54154,
+      "block": 127565589
     },
     {
       "label": "6 deposit 1 NVDA into the covered-call vault",
-      "tx": "0xe3c724ac5d86fcebf3a09e8fa287823a7e404bbfa201c85a637319118fc70495",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xe3c724ac5d86fcebf3a09e8fa287823a7e404bbfa201c85a637319118fc70495",
+      "tx": "0x14cc39011bda86c4f3a99891bd6483bff480a5c721d4811c69c3396725221e3f",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x14cc39011bda86c4f3a99891bd6483bff480a5c721d4811c69c3396725221e3f",
       "status": "success",
-      "gasUsed": 573671,
-      "block": 127138726
+      "gasUsed": 581082,
+      "block": 127565607
     },
     {
       "label": "7 AAPL announces a 2-for-1 multiplier change effective in 30 min (mock)",
-      "tx": "0x61ce8869370bd4d33eaa7654904c939eb57f880e8dc9e99eb8349211ff6e886d",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x61ce8869370bd4d33eaa7654904c939eb57f880e8dc9e99eb8349211ff6e886d",
+      "tx": "0xfd341dabc180f4f31984e9d50135497a2c420fe2ce21516c0a82805b00ab7948",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xfd341dabc180f4f31984e9d50135497a2c420fe2ce21516c0a82805b00ab7948",
       "status": "success",
-      "gasUsed": 56862,
-      "block": 127139279
+      "gasUsed": 60947,
+      "block": 127566298
     },
     {
       "label": "7 RFQ fill on AAPL inside the multiplier window",
-      "tx": "0x7756c29f080df6458613f129e8aa9b9dc5adadc3c098bb31edd04ecacb447c46",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x7756c29f080df6458613f129e8aa9b9dc5adadc3c098bb31edd04ecacb447c46",
+      "tx": "0xeed1994e57e6b1d0f7da167b4a44b093ad9e6dcbd42167679f165200e45360e7",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xeed1994e57e6b1d0f7da167b4a44b093ad9e6dcbd42167679f165200e45360e7",
       "status": "reverted",
-      "gasUsed": 196192,
-      "block": 127139302,
+      "gasUsed": 203482,
+      "block": 127566326,
       "expectedError": "OpeningNotAllowed"
     },
     {
       "label": "7 reset the AAPL mock multiplier",
-      "tx": "0xed6169a9d1eb02834299f1e9b67e62db8c6bca15f41741ac7ee85242c1ade156",
-      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xed6169a9d1eb02834299f1e9b67e62db8c6bca15f41741ac7ee85242c1ade156",
+      "tx": "0x541b8f8a631ff2f843e64839b34a4f6c49794784d12974ac8096900703846a87",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x541b8f8a631ff2f843e64839b34a4f6c49794784d12974ac8096900703846a87",
       "status": "success",
-      "gasUsed": 34914,
-      "block": 127139320
+      "gasUsed": 38999,
+      "block": 127566346
     }
   ],
   "userSubaccount": 4,
   "callSeries": {
-    "id": 5,
+    "id": 21,
     "series": [
       "0xc2DBC8d95f357C2746242a497BD3170B87F77999",
-      1790971200,
+      1791576000,
       true,
       255000000000000000000
     ],
-    "premiumQuote": 1871440595051364174
+    "premiumQuote": 13601725027399997262
   },
   "rfq": {
     "makerSubaccount": 5,
@@ -230,19 +230,19 @@
     "strike": 220000000000000000000,
     "expiry": 1791576000,
     "qty": 5000000000000000000,
-    "price": 15191009000000000000
+    "price": 12851762000000000000
   },
   "agent": {
     "subaccount": 6,
-    "maxWorstLoss": 2119764438004262218,
-    "imAfterOneCall": 1413176292002841479
+    "maxWorstLoss": 17717938382069689195,
+    "imAfterOneCall": 11811958921379792797
   },
   "withdraw": {
     "subaccount": 4,
-    "cash": 2073668941423008507625,
-    "equity": 2228001997980207684742,
-    "im": 444647534710162666858,
-    "amountUsdg": 1784354463
+    "cash": 2050236309400620438601,
+    "equity": 2230280948189922376116,
+    "im": 456219224755483655525,
+    "amountUsdg": 1775061723
   },
   "corporateAction": {
     "underlying": "AAPL",
@@ -255,22 +255,129 @@
     "txGasCap": 32000000,
     "stylus": {
       "address": "0xAeE1D4F45AF43a9C4d52ADa65d423b1c0e67f0fd",
-      "estimateGas": 1663660
+      "estimateGas": 1672511
     },
     "solidityReference": {
       "address": "0xB7d9232c8ff46b4950d85ed639908c86C08750C6",
       "error": "{'code': -32000, 'message': 'gas required exceeds allowance (32000000)'}"
     }
   },
-  "ethSpentByDeployer": 3.880967e-05,
+  "ethSpentByDeployer": 3.959021e-05,
   "ethSpentByThrowawayKeys": {
-    "0xB45a00D9ffF5348E6aB4Eb0D6B82B43610AE951E": 9.8706e-07,
-    "0xf6D60d787dC6222fA53C644d34F578f5A439d4DC": 1.566578e-05
+    "0xB45a00D9ffF5348E6aB4Eb0D6B82B43610AE951E": 1.00954e-06,
+    "0xf6D60d787dC6222fA53C644d34F578f5A439d4DC": 1.577855e-05
   },
   "revertReplay": {
     "method": "eth_call of the same tx at block-1 (RH testnet has no debug_traceTransaction)",
-    "0xa411c8e1173e78c41e6c2f12611d553f54583cb1203eaf651bc9bc725e2c1b9a": "AgentRiskBudgetExceeded(uint256,uint256,uint256)",
-    "0xc947dc28bb91b5499f88ac89911507758d7447db5666720a8eb7d86dd77c3094": "InsufficientMargin(uint256,int256,uint256)",
-    "0x7756c29f080df6458613f129e8aa9b9dc5adadc3c098bb31edd04ecacb447c46": "OpeningNotAllowed(uint256)"
-  }
+    "0xb0cbe3415a6439ecee889ac1c7d6e4438093f0b71b6863842f9128c72f63f4db": "AgentRiskBudgetExceeded(uint256,uint256,uint256)",
+    "0xa7e650bedb2c60418117f762f2c775d019f491d49d5d34e5e66e7783e25f9958": "InsufficientMargin(uint256,int256,uint256)",
+    "0xeed1994e57e6b1d0f7da167b4a44b093ad9e6dcbd42167679f165200e45360e7": "OpeningNotAllowed(uint256)"
+  },
+  "seedResume": [
+    {
+      "function": "listSeries(address,uint64,uint128,bool)",
+      "to": "0x9c99381de80518350feaa09db17a064ed2180b7b",
+      "tx": "0xbf670eea67da25b0db5c7327c31507509cbb39a6a89dd8e6213be0423025c2a7",
+      "status": 1,
+      "gasUsed": 216577
+    },
+    {
+      "function": "listSeries(address,uint64,uint128,bool)",
+      "to": "0x9c99381de80518350feaa09db17a064ed2180b7b",
+      "tx": "0x6c93f3e6b2ea811bb55f6b503ccf4b051fa1416f01853d70dc2a6317237633a3",
+      "status": 1,
+      "gasUsed": 216577
+    },
+    {
+      "function": "listSeries(address,uint64,uint128,bool)",
+      "to": "0x9c99381de80518350feaa09db17a064ed2180b7b",
+      "tx": "0x8941382bc1dc83f80f0c3e34db902b5a535fae7595cd69c594ab442d85e9e9eb",
+      "status": 1,
+      "gasUsed": 216565
+    },
+    {
+      "function": "listSeries(address,uint64,uint128,bool)",
+      "to": "0x9c99381de80518350feaa09db17a064ed2180b7b",
+      "tx": "0xda6a734c50b7245cd6ebee29761f70d0ed3acfe1206fde469d9fe35b64cc833d",
+      "status": 1,
+      "gasUsed": 216589
+    },
+    {
+      "function": "listSeries(address,uint64,uint128,bool)",
+      "to": "0x9c99381de80518350feaa09db17a064ed2180b7b",
+      "tx": "0x3ba93e39fe3621d4fc59be9bb6fa0b4bc4d3e2e0c0ee102fe236e26ea930faf4",
+      "status": 1,
+      "gasUsed": 216577
+    },
+    {
+      "function": "mint(address,uint256)",
+      "to": "0xfbb0e60027151cb321b936c2c71278cd08d03921",
+      "tx": "0x1c55df72e5b8f7e5c74f6e0a4797e9969179e42f3dc33a9c980cd35341a4261a",
+      "status": 1,
+      "gasUsed": 59170
+    },
+    {
+      "function": "mint(address,uint256)",
+      "to": "0xc2dbc8d95f357c2746242a497bd3170b87f77999",
+      "tx": "0xc78df01960e8fad19771d252ddc0594396d58f71a3124f223c42c21995e421fd",
+      "status": 1,
+      "gasUsed": 59272
+    },
+    {
+      "function": "approve(address,uint256)",
+      "to": "0xc2dbc8d95f357c2746242a497bd3170b87f77999",
+      "tx": "0xf40fa05ef2117bcaef33044300d55b00f97c939aab0de541d51996250c5f1ec1",
+      "status": 1,
+      "gasUsed": 54166
+    },
+    {
+      "function": "deposit(uint256,address)",
+      "to": "0xccf205358ef9bfd97335f0d7bd5240487bb64865",
+      "tx": "0x10178ad55b35059db0bbf3b3f9abd60b2cea8e29b51e86692a01e8afe0c8972c",
+      "status": 1,
+      "gasUsed": 492151
+    },
+    {
+      "function": "mint(address,uint256)",
+      "to": "0x8f5a67fab73bcabd569ac1263433a2df633b8ff5",
+      "tx": "0x2ffb386e607e746989dacbb8ef9a1e1f0bf6f844abb327abab50abf3f93b6463",
+      "status": 1,
+      "gasUsed": 59272
+    },
+    {
+      "function": "approve(address,uint256)",
+      "to": "0x8f5a67fab73bcabd569ac1263433a2df633b8ff5",
+      "tx": "0x5f39806a3427b7b2ac9bdff2674094817c8b7d4a46f1be2a4a9332fa4f81173b",
+      "status": 1,
+      "gasUsed": 54166
+    },
+    {
+      "function": "deposit(uint256,address)",
+      "to": "0xf95eabf20ee1d9034aba1b240d0242b75e645bd5",
+      "tx": "0x3d01aaef6757ac2e956c3ad947ee785dc00cdf3cad45ad7306e8681d5707e0b9",
+      "status": 1,
+      "gasUsed": 445696
+    },
+    {
+      "function": "mint(address,uint256)",
+      "to": "0xfbb0e60027151cb321b936c2c71278cd08d03921",
+      "tx": "0x0f50100f5314983ba2f66c23cc4d5daa2244205ebf05b9fd60900213589111e8",
+      "status": 1,
+      "gasUsed": 42070
+    },
+    {
+      "function": "approve(address,uint256)",
+      "to": "0xfbb0e60027151cb321b936c2c71278cd08d03921",
+      "tx": "0xe5473b8f6da876923d4c4583a39b035c7adb1c959dee3cd933834c5d2cb4047c",
+      "status": 1,
+      "gasUsed": 54130
+    },
+    {
+      "function": "deposit(uint256,address)",
+      "to": "0x0feee896be42e954c2881668da9035efc5db0947",
+      "tx": "0x101a2074662f077e31f97709cf6d9d68889d6e1505b2ff33678677f09555d3d7",
+      "status": 1,
+      "gasUsed": 370595
+    }
+  ]
 }
