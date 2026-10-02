@@ -49,6 +49,20 @@ function run(args: string[], env: Record<string, string> = {}): string {
   return r.stdout;
 }
 
+/** The libraries forge deployed and linked for Deploy.s.sol, by name (as tools/deploy/record_libraries.py records them). */
+function linkedLibraries(): Record<string, string> {
+  const run = join(CONTRACTS, 'broadcast', 'Deploy.s.sol', '31337', 'run-latest.json');
+  if (!existsSync(run)) return {};
+  const libs = (JSON.parse(readFileSync(run, 'utf8')) as { libraries?: string[] }).libraries ?? [];
+  return Object.fromEntries(
+    libs.map((l) => {
+      const parts = l.split(':');
+      const address = parts.pop() as string;
+      return [parts.pop() as string, address];
+    }),
+  );
+}
+
 async function rpcUp(url: string, tries = 100): Promise<void> {
   for (let i = 0; i < tries; i++) {
     try {
@@ -97,12 +111,14 @@ export default async function setup(project: TestProject) {
       SEED_AAPL_UPDATED_AT: String(now - 60),
       SEED_SPY_UPDATED_AT: String(now - 60),
       DEPLOYER_PRIVATE_KEY: key,
+      // a vault's first sale in a series may be one contract, as on RH testnet (Deploy.s.sol's default elsewhere is 10)
+      VAULT_MIN_NEW_SERIES_QTY: String(10n ** 18n),
     };
     const script = (name: string) => run(['script', `script/${name}`, '--rpc-url', rpcUrl, '--broadcast', '--slow', '--private-key', key], seed);
     script('DeployMocks.s.sol');
     script('Deploy.s.sol');
     script('Seed.s.sol');
-    const deployment = JSON.parse(readFileSync(DEPLOYMENT, 'utf8'));
+    const deployment = { ...JSON.parse(readFileSync(DEPLOYMENT, 'utf8')), libraries: linkedLibraries() };
     project.provide('anvil', { rpcUrl, deployment });
   } catch (e) {
     stop();

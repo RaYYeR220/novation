@@ -146,6 +146,20 @@ export async function getSocializedDebt(ctx: NovationContext, account: bigint | 
   return ctx.client.readContract({ ...ch(ctx), functionName: 'socializedDebtOf', args: [id(account)] });
 }
 
+/** How long a collateral token must stay marked without a price (and without a new feed round) before socialization counts it as 0. */
+export const PRICE_OUTAGE_WRITE_OFF = 72 * 3600;
+
+/**
+ * The clearinghouse's record of a collateral token without a price (Clearinghouse.priceOutageOf),
+ * or null when it isn't marked. `writeOffAt` is when socializeRemainder may count the token as 0,
+ * provided its feed has printed no new round by then (a new round restarts the clock).
+ */
+export async function getPriceOutage(ctx: NovationContext, token: Address): Promise<{ since: number; round: bigint; writeOffAt: number } | null> {
+  const [since, round] = await ctx.client.readContract({ ...ch(ctx), functionName: 'priceOutageOf', args: [token] });
+  if (since === 0n) return null;
+  return { since: Number(since), round, writeOffAt: Number(since) + PRICE_OUTAGE_WRITE_OFF };
+}
+
 export async function getCashIndex(ctx: NovationContext): Promise<bigint> {
   return ctx.client.readContract({ ...ch(ctx), functionName: 'cashIndex' });
 }

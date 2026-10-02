@@ -7,6 +7,7 @@ export { insuranceFundAbi } from './insuranceFund';
 export { auctionHouseAbi } from './auctionHouse';
 export { rfqVenueAbi } from './rfqVenue';
 export { optionVaultAbi } from './optionVault';
+export { vaultPricingAbi } from './vaultPricing';
 export { riskKernelAbi } from './riskKernel';
 export { aggregatorAbi } from './aggregator';
 export { mockAggregatorAbi } from './mockAggregator';

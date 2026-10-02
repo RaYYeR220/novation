@@ -342,6 +342,16 @@ export const seriesRegistryAbi = [
   },
   {
     "type": "error",
+    "name": "ImplausiblePrice",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NoPrice",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "NotWeeklyExpiry",
     "inputs": []
   },

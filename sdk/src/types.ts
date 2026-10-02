@@ -34,6 +34,8 @@ export interface Deployment {
   auctionHouse: Address;
   rfq: Address;
   vaults: { address: Address; type: VaultKind; underlying: string }[];
+  /** The linked libraries (TradeLogic, SettlementLogic, VaultPricing, ...), when recorded. */
+  libraries?: Record<string, Address>;
 }
 
 /** What every SDK helper reads through. */

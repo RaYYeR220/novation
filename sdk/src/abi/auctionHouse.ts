@@ -143,6 +143,19 @@ export const auctionHouseAbi = [
   },
   {
     "type": "function",
+    "name": "endLiquidation",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "hub",
     "inputs": [],
     "outputs": [
@@ -542,6 +555,11 @@ export const auctionHouseAbi = [
   {
     "type": "error",
     "name": "SelfBid",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "StillLiquidatable",
     "inputs": []
   },
   {

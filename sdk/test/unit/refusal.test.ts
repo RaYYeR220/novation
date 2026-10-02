@@ -73,6 +73,18 @@ describe('refusal decoding', () => {
     expect(bd.numbers).toEqual({ balance: 5_000_000, needed: 9_000_000 });
   });
 
+  it('keeps the legs of BelowMinOut in raw units and explains the new auction refusals', () => {
+    const e = errors.find((x) => x.name === 'BelowMinOut')!;
+    const r = decodeRevertData(encodeErrorResult({ abi: [e], errorName: 'BelowMinOut', args: [1_234_567_890_123_456_789n, 4_200_000n] as never }))!;
+    expect(r.numbers).toEqual({ tokens: 1_234_567_890_123_456_789, cash: 4_200_000 });
+    expect(r.message).toBe(refusalMessage('BelowMinOut'));
+    for (const name of ['BelowMinOut', 'StillLiquidatable', 'AuctionActive', 'AuctionNotActive', 'DepositNotAllowed']) {
+      expect(refusalMessage(name), name).not.toMatch(/^Reverted with/);
+    }
+    const s = errors.find((x) => x.name === 'StillLiquidatable')!;
+    expect(decodeRevertData(encodeErrorResult({ abi: [s], errorName: 'StillLiquidatable' }))?.code).toBe('StillLiquidatable');
+  });
+
   it('finds the revert data anywhere in an error chain', () => {
     const e = errors.find((x) => x.name === 'AgentRiskBudgetExceeded')!;
     const data = encodeErrorResult({ abi: [e], errorName: 'AgentRiskBudgetExceeded', args: [3n, 2n * 10n ** 18n, 10n ** 18n] as never });

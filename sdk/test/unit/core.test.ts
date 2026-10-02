@@ -7,8 +7,11 @@ import { createWalletClient, getAddress, http, keccak256, toHex, type PublicClie
 import { privateKeyToAccount } from 'viem/accounts';
 import {
   baseSession,
+  assertSimulatedFor,
   createNovation,
   DEPLOYED_CHAIN_IDS,
+  exitMinimums,
+  simulatedAccountOf,
   fromWad,
   getDeployment,
   getEvents,
@@ -53,6 +56,12 @@ describe('units', () => {
     expect(wadToToken(1_999_999_999_999_999_999n, 6)).toBe(1_999_999n);
     expect(mulWadUp(3n, WAD / 2n)).toBe(2n);
     expect(mulWadUp(0n, 5n)).toBe(0n);
+  });
+
+  it('takes per-leg exit minimums off a preview, rounding down', () => {
+    expect(exitMinimums({ tokens: 10_000n, cash: 333n }, 50)).toEqual({ minTokens: 9_950n, minCash: 331n });
+    expect(exitMinimums({ tokens: 5n, cash: 0n }, 0)).toEqual({ minTokens: 5n, minCash: 0n });
+    expect(() => exitMinimums({ tokens: 1n, cash: 1n }, 10_001)).toThrow(RangeError);
   });
 
   it('pads gas estimates by a quarter', () => {
@@ -131,6 +140,7 @@ describe('deployments', () => {
       for (const k of ['hub', 'registry', 'clearinghouse', 'rfq', 'riskParams', 'insurance', 'auctionHouse'] as const) expect(d[k]).toBe(getAddress(json[k]));
       expect(d.vaults.map((v) => v.address)).toEqual(json.vaults.map((v: { address: string }) => getAddress(v.address)));
       expect(Object.keys(d.tokens).sort()).toEqual(Object.keys(json.tokens).sort());
+      for (const [k, a] of Object.entries((json.libraries ?? {}) as Record<string, string>)) expect(d.libraries?.[k]).toBe(getAddress(a));
     }
     expect(() => getDeployment(1)).toThrow(/no Novation deployment/);
   });
@@ -291,6 +301,16 @@ describe('sendRequest', () => {
     const wallet = createWalletClient({ account: '0x00000000000000000000000000000000000000aa', chain: robinhoodChainTestnet, transport: http('http://127.0.0.1:1') });
     const client = {} as PublicClient;
     await expect(sendRequest(wallet, client, undefined, {} as never)).rejects.toThrow(/LocalAccount/);
+  });
+
+  it('names the account a request was simulated for, for any sender to compare', () => {
+    const a = '0x00000000000000000000000000000000000000aa';
+    expect(simulatedAccountOf({ account: a })).toBe(a);
+    expect(simulatedAccountOf({ account: { address: a, type: 'json-rpc' } })).toBe(a);
+    expect(simulatedAccountOf({})).toBeUndefined();
+    expect(() => assertSimulatedFor({ account: a }, '0x00000000000000000000000000000000000000AA')).not.toThrow();
+    expect(() => assertSimulatedFor({ account: { address: a } }, '0x00000000000000000000000000000000000000bb')).toThrow(/simulated for/);
+    expect(() => assertSimulatedFor({}, a)).not.toThrow();
   });
 
   it('refuses a request simulated for another account', async () => {

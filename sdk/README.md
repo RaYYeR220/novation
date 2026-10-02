@@ -24,11 +24,11 @@ console.log(fromWad(st.equity), fromWad(st.im));
 | `addresses` | `getDeployment(chainId)`, `parseDeployment(json)`, `proofRefusals(chainId)` |
 | `hub` | spot, session, mark vol, vol state, risk parameters, and `getMarket` with the reason an underlying is halted |
 | `registry` | series, expiries, settlement prices |
-| `clearinghouse` | account state, positions, collateral, `getMarginAfter` and `whatIfTrade` (the pre-sign what-if), scenario grid, subaccounts, agent policies, pools, claims, deficits, insurance, auctions, `tradeFee` |
-| `vault` | NAV, totals, free and locked assets, epochs, holdings, `getVaultQuote`, and `getVaultQuotesSynced`: quotes as the vault's next operation prices them, through a deployless lens that syncs the mark vol first |
+| `clearinghouse` | account state, positions, collateral, `getMarginAfter` and `whatIfTrade` (the pre-sign what-if), scenario grid, subaccounts, agent policies, pools, claims, deficits, insurance, auctions, `tradeFee`, `getPriceOutage` (a collateral token marked without a price, and when it may be written off) |
+| `vault` | NAV, totals, free and locked assets, epochs, holdings (with the USDG part of rolled redemptions), `getVaultQuote`, `getVaultQuotesSynced` (quotes as the vault's next operation prices them, through a deployless lens that syncs the mark vol first), `previewRedeemInKind` and `exitMinimums` for in-kind exits, `getVaultExitWait` (an expired series holding deposits and exits), and `getVaultUnitPrice` / `getVaultAbsDelta` through the linked `VaultPricing` library |
 | `rfq`, `quote712` | quote hashing, signing and verification matching `RfqVenue`, fills and nonces |
 | `kernel` | the risk kernel's `margin`, `scenarioGrid` and `bsQuote`; `buildKernelInput` rebuilds the clearinghouse's kernel input exactly, `scenarioGridFor` prices it under another session (the weekend gap on a weekday) or after a trade |
-| `writes` | `simulate*` helpers returning viem `simulateContract` results; `sendRequest`, `withGasHeadroom`, `padGas` |
+| `writes` | `simulate*` helpers returning viem `simulateContract` results (vault `redeemInKind`, `claimRedeemed` and `claimRedeemedCash`, `endLiquidation`, `markUnpriced` included); `sendRequest`, `withGasHeadroom`, `padGas`, `assertSimulatedFor` |
 | `refusal` | `decodeRefusal(err)`, `RefusalError`, `explainTx(ctx, hash)` |
 | `events` | `getEvents` and typed scans (trades, agents, settlements, claims, vault activity, insurance, auctions) in block chunks from the deployment block |
 | `calendar` | the NYSE sessions and weekly expiries, bit for bit with `NyseCalendar.sol` |
@@ -52,9 +52,11 @@ try {
 }
 ```
 
-**Sign locally.** `sendRequest` needs a wallet client bound to a `LocalAccount` (`privateKeyToAccount`): it signs in-process and sends the raw transaction. Public RPCs, the Robinhood Chain testnet one included, refuse `eth_sendTransaction`, so a request whose account is a bare address only works through a browser wallet. In a browser, hand the request to the wallet client wagmi gives you, after `withGasHeadroom`.
+**Sign locally.** `sendRequest` needs a wallet client bound to a `LocalAccount` (`privateKeyToAccount`): it signs in-process and sends the raw transaction. Public RPCs, the Robinhood Chain testnet one included, refuse `eth_sendTransaction`, so a request whose account is a bare address only works through a browser wallet. In a browser, hand the request to the wallet client wagmi gives you, after `withGasHeadroom`, and check first with `assertSimulatedFor(request, address)` that the wallet still signs as the account the request was simulated for.
 
 **Gas headroom.** `sendRequest` estimates gas and adds 25% (`padGas`, `withGasHeadroom`). The Black-Scholes inside the margin check costs a little more or less gas at a different block timestamp, so a transaction sent with its exact estimate can run out. Use `withGasHeadroom` for any write you send yourself.
+
+**Vault exits.** A covered-call vault pays exits in kind: the holder's share of the vault's USDG premium cash in USDG, the rest in the stock token. `previewRedeem` and `redeem`'s return value are the token part only; use `previewRedeemInKind(ctx, vault, shares)` for both parts and send `simulateVaultRedeemInKind` with a floor on each (`exitMinimums(preview, slippageBps)`), so the exit reverts `BelowMinOut` rather than pay less. A queued redemption is claimed in two calls, `claimRedeemed` (tokens) and `claimRedeemedCash` (USDG); `getVaultHolding` returns both amounts. While the vault holds an expired series not yet settled into its account, deposits and instant exits wait; `getVaultExitWait` says which expiry and whether a roll can settle it now.
 
 **Why a transaction reverted.** `explainTx(ctx, hash)` replays it with `eth_call` at the block before (Robinhood Chain has no debug tracing). The public node prunes old state, so it falls back to the revert data Blockscout recorded.
 
@@ -76,4 +78,4 @@ pnpm --filter @novation/sdk test:anvil     # needs anvil and forge; ANVIL=off sk
 pnpm --filter @novation/sdk test:testnet   # read-only, live RH testnet; RH_TESTNET_RPC=off skips it
 ```
 
-The anvil suite deploys the stack with the repo's own forge scripts (`DeployMocks`, `Deploy`, `Seed`) and the Solidity `KernelReference` as the kernel, then opens an account, buys from a vault after the what-if, fills an RFQ quote signed with `signQuote` (the venue accepts it and rejects a tampered one), decodes refusals before signing and from a mined revert, and checks that `scenarioGridFor` reproduces the clearinghouse's grid and initial margin exactly.
+The anvil suite deploys the stack with the repo's own forge scripts (`DeployMocks`, `Deploy`, `Seed`) and the Solidity `KernelReference` as the kernel, then opens an account, buys from a vault after the what-if, fills an RFQ quote signed with `signQuote` (the venue accepts it and rejects a tampered one), decodes refusals before signing and from a mined revert, exits a covered-call vault in kind (both parts bounded, a queued exit claimed in both parts), checks the `VaultPricing` library against the kernel's Black-Scholes, marks and clears a price outage, and checks that `scenarioGridFor` reproduces the clearinghouse's grid and initial margin exactly.

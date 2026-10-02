@@ -699,6 +699,19 @@ export const clearinghouseAbi = [
   },
   {
     "type": "function",
+    "name": "markUnpriced",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "openInterest",
     "inputs": [
       {
@@ -828,6 +841,30 @@ export const clearinghouseAbi = [
             "internalType": "int128"
           }
         ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "priceOutageOf",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "since",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "round",
+        "type": "uint80",
+        "internalType": "uint80"
       }
     ],
     "stateMutability": "view"
@@ -1440,6 +1477,31 @@ export const clearinghouseAbi = [
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "PriceOutageMarked",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "since",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "round",
+        "type": "uint80",
+        "indexed": false,
+        "internalType": "uint80"
       }
     ],
     "anonymous": false

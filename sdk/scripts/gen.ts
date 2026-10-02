@@ -36,6 +36,7 @@ const ABIS: Record<string, { file: string; contract: string; module: string }> =
   auctionHouseAbi: { file: 'AuctionHouse', contract: 'AuctionHouse', module: 'auctionHouse' },
   rfqVenueAbi: { file: 'RfqVenue', contract: 'RfqVenue', module: 'rfqVenue' },
   optionVaultAbi: { file: 'OptionVaultBase', contract: 'OptionVaultBase', module: 'optionVault' },
+  vaultPricingAbi: { file: 'VaultPricing', contract: 'VaultPricing', module: 'vaultPricing' },
   riskKernelAbi: { file: 'IRiskKernel', contract: 'IRiskKernel', module: 'riskKernel' },
   aggregatorAbi: { file: 'IAggregatorV3', contract: 'IAggregatorV3', module: 'aggregator' },
   mockAggregatorAbi: { file: 'MockAggregator', contract: 'MockAggregator', module: 'mockAggregator' },

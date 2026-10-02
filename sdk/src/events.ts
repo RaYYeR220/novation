@@ -224,10 +224,10 @@ export function getQuoteFills(ctx: NovationContext, f: { takerId?: bigint } & Ev
   return getEvents(ctx, { address: ctx.deployment.rfq, abi: rfqVenueAbi, eventName: 'QuoteFilled', args: { takerId }, ...scan });
 }
 
-/** A vault's sales, buybacks, rolls and redemption requests. */
+/** A vault's sales, buybacks, rolls, redemption requests, claims and exits (cashLegs: the USDG part of in-kind exits). */
 export async function getVaultActivity(ctx: NovationContext, vault: Address, scan: EventScan = {}) {
   const v = { address: vault, abi: optionVaultAbi } as const;
-  const [bought, soldBack, rolled, requested, claimed, deposits, withdrawals] = await Promise.all([
+  const [bought, soldBack, rolled, requested, claimed, deposits, withdrawals, cashLegs] = await Promise.all([
     getEvents(ctx, { ...v, eventName: 'Bought', ...scan }),
     getEvents(ctx, { ...v, eventName: 'SoldBack', ...scan }),
     getEvents(ctx, { ...v, eventName: 'Rolled', ...scan }),
@@ -235,8 +235,15 @@ export async function getVaultActivity(ctx: NovationContext, vault: Address, sca
     getEvents(ctx, { ...v, eventName: 'RedeemClaimed', ...scan }),
     getEvents(ctx, { ...v, eventName: 'Deposit', ...scan }),
     getEvents(ctx, { ...v, eventName: 'Withdraw', ...scan }),
+    getEvents(ctx, { ...v, eventName: 'CashLegPaid', ...scan }),
   ]);
-  return { bought, soldBack, rolled, requested, claimed, deposits, withdrawals };
+  return { bought, soldBack, rolled, requested, claimed, deposits, withdrawals, cashLegs };
+}
+
+/** Clearinghouse.markUnpriced records: `since` 0 means the token was priced again and the record cleared. */
+export function getPriceOutageEvents(ctx: NovationContext, f: { token?: Address } & EventScan = {}) {
+  const { token, ...scan } = f;
+  return getEvents(ctx, { ...ch(ctx), eventName: 'PriceOutageMarked', args: { token }, ...scan });
 }
 
 export async function getInsuranceEvents(ctx: NovationContext, scan: EventScan = {}) {

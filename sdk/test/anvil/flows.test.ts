@@ -1,7 +1,23 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { maxUint256, type Address } from 'viem';
+import { erc20Abi, maxUint256, type Address } from 'viem';
 import {
+  bsQuote,
   clearinghouseAbi,
+  exitMinimums,
+  getMarkVol,
+  getPriceOutage,
+  getPriceOutageEvents,
+  getVault,
+  getVaultAbsDelta,
+  getVaultExitWait,
+  getVaultUnitPrice,
+  previewRedeemInKind,
+  simulateClaimRedeemed,
+  simulateClaimRedeemedCash,
+  simulateEndLiquidation,
+  simulateMarkUnpriced,
+  simulateVaultRedeemInKind,
+  simulateVaultRoll,
   explainTx,
   expiriesOf,
   fromWad,
@@ -270,6 +286,102 @@ d('Novation on a local chain (KernelReference kernel, repo deploy scripts)', () 
     await send(L, taker!.wallet, (await simulateRequestRedeem(L.ctx, me, cc, h.shares / 2n, me)).request);
     expect((await getVaultHolding(L.ctx, cc, me)).pendingShares).toBe(h.shares / 2n);
     await send(L, taker!.wallet, (await simulateVaultWithdraw(L.ctx, me, cc, WAD / 2n, me, me)).request);
+  });
+
+  it('exits a covered-call vault in kind, bounds both legs and claims both parts of a queued exit', async () => {
+    const me = taker!.account.address;
+    const bal = (t: Address) => L.client.readContract({ address: t, abi: erc20Abi, functionName: 'balanceOf', args: [me] });
+    // the vault sold a call: its premium sits as USDG cash, so an exit takes a share of it
+    expect(await getVaultExitWait(L.ctx, cc)).toEqual({ waiting: false, expiries: [], awaitingPrice: false, rollable: false });
+    const h = await getVaultHolding(L.ctx, cc, me);
+    const shares = h.maxRedeem / 2n;
+    expect(shares).toBeGreaterThan(0n);
+    const preview = await previewRedeemInKind(L.ctx, cc, shares);
+    expect(preview.tokens).toBeGreaterThan(0n);
+    expect(preview.cash).toBeGreaterThan(0n);
+
+    // one unit more cash than the exit pays: refused before signing, with both legs in raw units
+    const r = await refusal(simulateVaultRedeemInKind(L.ctx, me, cc, shares, me, me, preview.tokens, preview.cash + 1n));
+    expect(r.refusal.code).toBe('BelowMinOut');
+    expect(r.refusal.numbers).toEqual({ tokens: Number(preview.tokens), cash: Number(preview.cash) });
+
+    const { minTokens, minCash } = exitMinimums(preview, 50);
+    expect(minTokens).toBe((preview.tokens * 9950n) / 10_000n);
+    const [nvda0, usdg0] = await Promise.all([bal(NVDA), bal(USDG)]);
+    const sim = await simulateVaultRedeemInKind(L.ctx, me, cc, shares, me, me, minTokens, minCash);
+    expect(sim.result).toEqual([preview.tokens, preview.cash]);
+    await send(L, taker!.wallet, sim.request);
+    const [nvda1, usdg1] = await Promise.all([bal(NVDA), bal(USDG)]);
+    // mined a block later: the short's mark has moved by a second of theta, no more
+    expect(nvda1 - nvda0).toBeGreaterThanOrEqual(minTokens);
+    expect(Math.abs(Number(nvda1 - nvda0 - preview.tokens)) / Number(preview.tokens)).toBeLessThan(1e-6);
+    expect(usdg1 - usdg0).toBeGreaterThanOrEqual(minCash);
+    expect(Math.abs(Number(usdg1 - usdg0 - preview.cash))).toBeLessThanOrEqual(1);
+
+    // the shares queued earlier: a roll pays the epoch in kind, and each part is claimed on its own
+    expect(h.pendingShares).toBeGreaterThan(0n);
+    await send(L, taker!.wallet, (await simulateVaultRoll(L.ctx, me, cc, [])).request);
+    const after = await getVaultHolding(L.ctx, cc, me);
+    expect(after.pendingShares).toBe(0n);
+    expect(after.redeemable).toBeGreaterThan(0n);
+    expect(after.redeemableCash).toBeGreaterThan(0n);
+    const v = await getVault(L.ctx, cc);
+    expect(v.reservedAssets).toBeGreaterThanOrEqual(after.redeemable);
+    expect(v.reservedCash).toBeGreaterThanOrEqual(after.redeemableCash);
+    const claimTokens = await simulateClaimRedeemed(L.ctx, me, cc, me);
+    expect(claimTokens.result).toBe(after.redeemable);
+    await send(L, taker!.wallet, claimTokens.request);
+    const claimCash = await simulateClaimRedeemedCash(L.ctx, me, cc, me);
+    expect(claimCash.result).toBe(after.redeemableCash);
+    await send(L, taker!.wallet, claimCash.request);
+    expect(await bal(USDG)).toBe(usdg1 + after.redeemableCash);
+    expect((await refusal(simulateClaimRedeemedCash(L.ctx, me, cc, me))).refusal.code).toBe('NothingToClaim');
+  });
+
+  it('prices like the vaults through the linked VaultPricing library', async () => {
+    expect(L.ctx.deployment.libraries?.VaultPricing).toBeDefined();
+    const g = await getGlobals(L.ctx);
+    const spot = (await getSpot(L.ctx, NVDA)).price;
+    const vol = await getMarkVol(L.ctx, NVDA);
+    const tau = BigInt(callSeries.expiry - Number((await L.client.getBlock()).timestamp));
+    const plain = { spot, strike: callSeries.strike, tau, vol, rate: g.rate, isCall: true };
+    // no skew, utilization or session add: the vaults' price is the kernel's Black-Scholes, bit for bit
+    const [px, k, delta] = await Promise.all([
+      getVaultUnitPrice(L.ctx, { ...plain, skewSlope: 0n, utilTerm: 0n, sessionAdd: 0n, takerBuys: true }),
+      bsQuote(L.ctx, plain),
+      getVaultAbsDelta(L.ctx, plain),
+    ]);
+    expect(px).toBe(k.price);
+    expect(delta).toBe(k.delta < 0n ? -k.delta : k.delta);
+    // a skew raises the ask; a buyback is never priced above the mark
+    const skewed = { ...plain, skewSlope: WAD / 2n, utilTerm: 0n, sessionAdd: 0n };
+    expect(await getVaultUnitPrice(L.ctx, { ...skewed, takerBuys: true })).toBeGreaterThan(px);
+    expect(await getVaultUnitPrice(L.ctx, { ...skewed, takerBuys: false })).toBe(px);
+  });
+
+  it('marks a collateral token without a price, clears it once priced, and refuses to end a liquidation that is not running', async () => {
+    const me = maker!.account.address;
+    const TSLA = L.ctx.deployment.tokens.TSLA as Address;
+    const feed = L.ctx.deployment.feeds.TSLA as Address;
+    const now = () => L.client.getBlock().then((b) => b.timestamp);
+    expect(await getPriceOutage(L.ctx, TSLA)).toBeNull();
+    // a print far below the plausibility band: the hub has no price for TSLA
+    await send(L, maker!.wallet, (await simulatePushRound(L.ctx, me, feed, 1n, await now())).request);
+    await send(L, maker!.wallet, (await simulateMarkUnpriced(L.ctx, me, TSLA)).request);
+    const marked = await getPriceOutage(L.ctx, TSLA);
+    expect(marked).not.toBeNull();
+    expect(marked!.writeOffAt - marked!.since).toBe(72 * 3600);
+    // a good print again: marking clears the record
+    await send(L, maker!.wallet, (await simulatePushRound(L.ctx, me, feed, 440n * 10n ** 8n, await now())).request);
+    await send(L, maker!.wallet, (await simulateMarkUnpriced(L.ctx, me, TSLA)).request);
+    expect(await getPriceOutage(L.ctx, TSLA)).toBeNull();
+    // up to the block just mined (viem caches the head for a few seconds)
+    const evs = await getPriceOutageEvents(L.ctx, { token: TSLA, toBlock: await L.client.getBlockNumber({ cacheTime: 0 }) });
+    expect(evs.map((e) => e.args.since === 0n)).toEqual([false, true]);
+    expect(evs[0]!.args.round).toBe(marked!.round);
+
+    const r = await refusal(simulateEndLiquidation(L.ctx, me, takerId));
+    expect(r.refusal.code).toBe('AuctionNotActive');
   });
 
   it('quotes through the lens when a new feed round leaves the stored vol behind', async () => {

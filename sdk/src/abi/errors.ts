@@ -171,6 +171,22 @@ export const novationErrorsAbi = [
   },
   {
     "type": "error",
+    "name": "BelowMinOut",
+    "inputs": [
+      {
+        "name": "tokens",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "cash",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "BidRaisesRisk",
     "inputs": [
       {
@@ -966,6 +982,11 @@ export const novationErrorsAbi = [
   {
     "type": "error",
     "name": "SignerNotAuthorized",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "StillLiquidatable",
     "inputs": []
   },
   {

@@ -15,6 +15,19 @@ export const optionVaultAbi = [
   },
   {
     "type": "function",
+    "name": "SETTLEMENT_WAIT",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "allowance",
     "inputs": [
       {
@@ -153,6 +166,25 @@ export const optionVaultAbi = [
     "outputs": [
       {
         "name": "assets",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "claimRedeemedCash",
+    "inputs": [
+      {
+        "name": "receiver",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "cash",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -609,7 +641,31 @@ export const optionVaultAbi = [
     ],
     "outputs": [
       {
-        "name": "",
+        "name": "tokens",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "previewRedeemInKind",
+    "inputs": [
+      {
+        "name": "shares",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "tokens",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "cash",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -695,6 +751,50 @@ export const optionVaultAbi = [
   },
   {
     "type": "function",
+    "name": "redeemInKind",
+    "inputs": [
+      {
+        "name": "shares",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "receiver",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "owner",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "minTokens",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "minCash",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "tokens",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "cash",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "redeemable",
     "inputs": [
       {
@@ -706,6 +806,25 @@ export const optionVaultAbi = [
     "outputs": [
       {
         "name": "assets",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "redeemableCash",
+    "inputs": [
+      {
+        "name": "receiver",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "cash",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -752,6 +871,19 @@ export const optionVaultAbi = [
   {
     "type": "function",
     "name": "reservedAssets",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "reservedCash",
     "inputs": [],
     "outputs": [
       {
@@ -1020,6 +1152,25 @@ export const optionVaultAbi = [
   },
   {
     "type": "event",
+    "name": "CashLegPaid",
+    "inputs": [
+      {
+        "name": "receiver",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "Deposit",
     "inputs": [
       {
@@ -1242,6 +1393,22 @@ export const optionVaultAbi = [
     "type": "error",
     "name": "BelowMinNewSeries",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "BelowMinOut",
+    "inputs": [
+      {
+        "name": "tokens",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "cash",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
   },
   {
     "type": "error",
@@ -1492,16 +1659,6 @@ export const optionVaultAbi = [
         "internalType": "uint256"
       }
     ]
-  },
-  {
-    "type": "error",
-    "name": "ExpOverflow",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "LnNonPositive",
-    "inputs": []
   },
   {
     "type": "error",

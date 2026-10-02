@@ -83,6 +83,15 @@ export function simulateRepayDeficit(ctx: NovationContext, account: Who, id: big
   return guard(ctx.client.simulateContract({ ...ch(ctx), functionName: 'repayDeficit', args: [BigInt(id)], account }));
 }
 
+/**
+ * Permissionless: records that collateral `token` has no price now (with its feed's round), or
+ * clears the record once it has one. A token marked 72 hours ago whose feed still shows the same
+ * round and no price counts as 0 in socializeRemainder's dust test (see getPriceOutage).
+ */
+export function simulateMarkUnpriced(ctx: NovationContext, account: Who, token: Address) {
+  return guard(ctx.client.simulateContract({ ...ch(ctx), functionName: 'markUnpriced', args: [token], account }));
+}
+
 export function simulateSettleExpiry(ctx: NovationContext, account: Who, underlying: Address, expiry: number, roundIdHint: bigint) {
   return guard(
     ctx.client.simulateContract({
@@ -139,8 +148,32 @@ export function simulateVaultWithdraw(ctx: NovationContext, account: Who, v: Add
   return guard(ctx.client.simulateContract({ ...vault(v), functionName: 'withdraw', args: [assets, receiver, owner], account }));
 }
 
+/**
+ * ERC-4626 redeem. For a covered-call vault the result is the token part only; the USDG part goes to
+ * `receiver` on top. Prefer simulateVaultRedeemInKind, which returns and bounds both.
+ */
 export function simulateVaultRedeem(ctx: NovationContext, account: Who, v: Address, shares: bigint, receiver: Address, owner: Address) {
   return guard(ctx.client.simulateContract({ ...vault(v), functionName: 'redeem', args: [shares, receiver, owner], account }));
+}
+
+/**
+ * Redeems `shares` in kind: `result` is [tokens, cash] (raw asset units, raw USDG units). Reverts
+ * BelowMinOut unless each part meets its minimum: take them from previewRedeemInKind less a slippage
+ * allowance (exitMinimums).
+ */
+export function simulateVaultRedeemInKind(
+  ctx: NovationContext,
+  account: Who,
+  v: Address,
+  shares: bigint,
+  receiver: Address,
+  owner: Address,
+  minTokens: bigint,
+  minCash: bigint,
+) {
+  return guard(
+    ctx.client.simulateContract({ ...vault(v), functionName: 'redeemInKind', args: [shares, receiver, owner, minTokens, minCash], account }),
+  );
 }
 
 /** Escrows `shares` for the current epoch; the roll that pays the epoch makes them claimable. */
@@ -148,8 +181,14 @@ export function simulateRequestRedeem(ctx: NovationContext, account: Who, v: Add
   return guard(ctx.client.simulateContract({ ...vault(v), functionName: 'requestRedeem', args: [shares, receiver], account }));
 }
 
+/** Pays `receiver` the asset part of its rolled redemptions (anyone may call it). */
 export function simulateClaimRedeemed(ctx: NovationContext, account: Who, v: Address, receiver: Address) {
   return guard(ctx.client.simulateContract({ ...vault(v), functionName: 'claimRedeemed', args: [receiver], account }));
+}
+
+/** Pays `receiver` the USDG part of its rolled redemptions (covered call; anyone may call it). */
+export function simulateClaimRedeemedCash(ctx: NovationContext, account: Who, v: Address, receiver: Address) {
+  return guard(ctx.client.simulateContract({ ...vault(v), functionName: 'claimRedeemedCash', args: [receiver], account }));
 }
 
 export function simulateVaultRoll(ctx: NovationContext, account: Who, v: Address, expiries: number[]) {
@@ -195,6 +234,16 @@ export function simulateBidLiquidation(ctx: NovationContext, account: Who, id: b
   );
 }
 
+/**
+ * Permissionless: ends the liquidation of an account that is no longer liquidatable (it recovered
+ * without a bid), so a later fall starts a fresh ramp. Reverts AuctionNotActive or StillLiquidatable.
+ */
+export function simulateEndLiquidation(ctx: NovationContext, account: Who, id: bigint | number) {
+  return guard(
+    ctx.client.simulateContract({ address: ctx.deployment.auctionHouse, abi: auctionHouseAbi, functionName: 'endLiquidation', args: [BigInt(id)], account }),
+  );
+}
+
 // ---------------------------------------------------------------- sending
 
 /** Gas headroom over the estimate, in percent. Black-Scholes inside the margin check costs a little
@@ -215,6 +264,24 @@ export async function withGasHeadroom<R extends object>(client: PublicClient, re
   return { ...request, gas: padGas(estimate) };
 }
 
+/** The address a simulated request was simulated from (its `account`), if it names one. */
+export function simulatedAccountOf(request: unknown): Address | undefined {
+  const a = (request as { account?: Address | { address?: Address } } | undefined)?.account;
+  return typeof a === 'string' ? a : a?.address;
+}
+
+/**
+ * Throws unless `request` was simulated for `signer`: a wallet that switched accounts after the
+ * simulation must not sign a transaction checked for someone else. A request that names no account
+ * passes.
+ */
+export function assertSimulatedFor(request: unknown, signer: Address): void {
+  const from = simulatedAccountOf(request);
+  if (from && from.toLowerCase() !== signer.toLowerCase()) {
+    throw new Error(`The request was simulated for ${from}, but the wallet signs as ${signer}.`);
+  }
+}
+
 /**
  * Signs a simulated request locally, sends it with gas headroom and waits for it. `wallet` must be
  * bound to a LocalAccount (privateKeyToAccount): public RPCs such as Robinhood Chain testnet's refuse
@@ -232,11 +299,7 @@ export async function sendRequest(
   if (!account || account.type !== 'local') {
     throw new Error('sendRequest signs locally: pass a wallet client bound to a LocalAccount (viem/accounts privateKeyToAccount).');
   }
-  const simulatedFor = (request as { account?: Address | { address: Address } }).account;
-  const from = typeof simulatedFor === 'string' ? simulatedFor : simulatedFor?.address;
-  if (from && from.toLowerCase() !== account.address.toLowerCase()) {
-    throw new Error(`sendRequest: the request was simulated for ${from}, but the wallet signs as ${account.address}.`);
-  }
+  assertSimulatedFor(request, account.address);
   const req = await withGasHeadroom(client, { ...request, account } as Parameters<WalletClient['writeContract']>[0]);
   const hash = await wallet.writeContract(req);
   const receipt = await client.waitForTransactionReceipt({ hash });

@@ -1,6 +1,7 @@
 import { decodeFunctionResult, encodeFunctionData, type Address, type Hex } from 'viem';
-import { erc20Abi, optionVaultAbi, vaultQuoteLensAbi, vaultQuoteLensBytecode } from './abi/index';
+import { clearinghouseAbi, erc20Abi, optionVaultAbi, seriesRegistryAbi, vaultPricingAbi, vaultQuoteLensAbi, vaultQuoteLensBytecode } from './abi/index';
 import { decodeRevertData, type Refusal } from './refusal';
+import { getSeries } from './registry';
 import type { NovationContext, VaultKind } from './types';
 
 /** OptionVaultBase.config(). Fractions are WAD. */
@@ -42,7 +43,10 @@ export interface VaultState {
   lockedAssets: bigint;
   epoch: bigint;
   escrowedShares: bigint;
+  /** Assets held for rolled epochs and not yet claimed (claimRedeemed). */
   reservedAssets: bigint;
+  /** The USDG part of those epochs (raw USDG units, claimRedeemedCash); 0 for a put write. */
+  reservedCash: bigint;
   live: boolean;
   config: VaultConfig;
   /** EXIT_COOLDOWN, seconds. */
@@ -55,10 +59,25 @@ export interface VaultHolding {
   lastReceive: number;
   /** Shares queued in the current epoch. */
   pendingShares: bigint;
-  /** Assets claimable now from rolled epochs. */
+  /** Assets claimable now from rolled epochs (claimRedeemed). */
   redeemable: bigint;
+  /** Raw USDG units claimable now alongside them (claimRedeemedCash): the cash part of an in-kind exit. */
+  redeemableCash: bigint;
+  /** The asset part of the most the holder can take out now (0 during the cooldown, a halt, a deficit or a settlement wait). */
   maxWithdraw: bigint;
   maxRedeem: bigint;
+}
+
+/**
+ * Both parts of a vault exit. A covered-call vault pays exits in kind: the holder's share of the
+ * account's USDG cash in USDG, the rest of the value in the stock token. A put-write vault's asset is
+ * USDG, so its exits have no second part.
+ */
+export interface InKindExit {
+  /** Raw units of the vault's asset (the stock token for a covered call, USDG for a put write). */
+  tokens: bigint;
+  /** Raw USDG units paid on top (covered call only). */
+  cash: bigint;
 }
 
 const v = (address: Address) => ({ address, abi: optionVaultAbi }) as const;
@@ -66,7 +85,7 @@ const v = (address: Address) => ({ address, abi: optionVaultAbi }) as const;
 export async function getVault(ctx: NovationContext, address: Address): Promise<VaultState> {
   const c = ctx.client;
   const kind = ctx.deployment.vaults.find((x) => x.address.toLowerCase() === address.toLowerCase())?.type;
-  const [name, symbol, underlying, asset, shareDecimals, vaultId, totalAssets, totalSupply, freeAssets, lockedAssets, epoch, escrowedShares, reservedAssets, live, cfg, cooldown] =
+  const [name, symbol, underlying, asset, shareDecimals, vaultId, totalAssets, totalSupply, freeAssets, lockedAssets, epoch, escrowedShares, reservedAssets, reservedCash, live, cfg, cooldown] =
     await Promise.all([
       c.readContract({ ...v(address), functionName: 'name' }),
       c.readContract({ ...v(address), functionName: 'symbol' }),
@@ -81,6 +100,7 @@ export async function getVault(ctx: NovationContext, address: Address): Promise<
       c.readContract({ ...v(address), functionName: 'epoch' }),
       c.readContract({ ...v(address), functionName: 'escrowedShares' }),
       c.readContract({ ...v(address), functionName: 'reservedAssets' }),
+      c.readContract({ ...v(address), functionName: 'reservedCash' }),
       c.readContract({ ...v(address), functionName: 'isLive' }),
       c.readContract({ ...v(address), functionName: 'config' }),
       c.readContract({ ...v(address), functionName: 'EXIT_COOLDOWN' }),
@@ -105,6 +125,7 @@ export async function getVault(ctx: NovationContext, address: Address): Promise<
     epoch,
     escrowedShares,
     reservedAssets,
+    reservedCash,
     live,
     config: {
       minOtm: BigInt(cfg.minOtm),
@@ -185,27 +206,174 @@ export async function getVaultQuotesSynced(
 
 export async function getVaultHolding(ctx: NovationContext, vault: Address, owner: Address): Promise<VaultHolding> {
   const c = ctx.client;
-  const [shares, lastReceive, pendingShares, redeemable, maxWithdraw, maxRedeem] = await Promise.all([
+  const [shares, lastReceive, pendingShares, redeemable, redeemableCash, maxWithdraw, maxRedeem] = await Promise.all([
     c.readContract({ ...v(vault), functionName: 'balanceOf', args: [owner] }),
     c.readContract({ ...v(vault), functionName: 'lastReceive', args: [owner] }),
     c.readContract({ ...v(vault), functionName: 'pendingRedeem', args: [owner] }),
     c.readContract({ ...v(vault), functionName: 'redeemable', args: [owner] }),
+    c.readContract({ ...v(vault), functionName: 'redeemableCash', args: [owner] }),
     c.readContract({ ...v(vault), functionName: 'maxWithdraw', args: [owner] }),
     c.readContract({ ...v(vault), functionName: 'maxRedeem', args: [owner] }),
   ]);
-  return { shares, lastReceive: Number(lastReceive), pendingShares, redeemable, maxWithdraw, maxRedeem };
+  return { shares, lastReceive: Number(lastReceive), pendingShares, redeemable, redeemableCash, maxWithdraw, maxRedeem };
+}
+
+/**
+ * Both parts of redeeming `shares` now (OptionVaultBase.previewRedeemInKind): `tokens` of the asset
+ * and `cash` raw USDG units. previewRedeem alone returns only the asset part.
+ */
+export async function previewRedeemInKind(ctx: NovationContext, vault: Address, shares: bigint): Promise<InKindExit> {
+  const [tokens, cash] = await ctx.client.readContract({ ...v(vault), functionName: 'previewRedeemInKind', args: [shares] });
+  return { tokens, cash };
+}
+
+/**
+ * The per-leg minimums for redeemInKind: each part of a preview less `slippageBps` basis points,
+ * rounded down. A part the preview shows as 0 has no minimum.
+ */
+export function exitMinimums(preview: InKindExit, slippageBps: number | bigint): { minTokens: bigint; minCash: bigint } {
+  const bps = BigInt(slippageBps);
+  if (bps < 0n || bps > 10_000n) throw new RangeError('slippageBps must be between 0 and 10000');
+  const keep = 10_000n - bps;
+  return { minTokens: (preview.tokens * keep) / 10_000n, minCash: (preview.cash * keep) / 10_000n };
+}
+
+/** Why a vault's deposits and exits wait (see getVaultExitWait). */
+export interface VaultExitWait {
+  /**
+   * The vault's account holds a position whose series has expired and isn't settled into it: its
+   * payoff isn't in the expiry's pool yet and NAV marks it at today's spot, not the settlement
+   * print. Deposits (maxDeposit reads 0), withdraw, redeem, redeemInKind (maxWithdraw and maxRedeem
+   * read 0) and the queue's payout wait until roll settles it. Queuing a redemption still works.
+   */
+  waiting: boolean;
+  /** The expiries holding them, oldest first. */
+  expiries: number[];
+  /** True while one of them still lacks its settlement price in the registry. */
+  awaitingPrice: boolean;
+  /** True when the registry has the price of one of them: anyone can roll the vault now to settle it. */
+  rollable: boolean;
+  /**
+   * Unix seconds: when an expiry still lacking its price stops holding the vault (SETTLEMENT_WAIT
+   * after it: the 72-hour oracle fallback plus a week). Undefined while a priced one holds it.
+   */
+  until?: number;
+}
+
+/**
+ * Whether a vault's deposits and exits wait for an expired series to settle, and which, by the
+ * vault's own rule (OptionVaultBase._holdsExpired): an expired position holds them while the
+ * registry has its price (roll settles it), or until SETTLEMENT_WAIT after its expiry while the
+ * price is still missing.
+ */
+export async function getVaultExitWait(ctx: NovationContext, vault: Address): Promise<VaultExitWait> {
+  const c = ctx.client;
+  const [vaultId, wait, block] = await Promise.all([
+    c.readContract({ ...v(vault), functionName: 'vaultId' }),
+    c.readContract({ ...v(vault), functionName: 'SETTLEMENT_WAIT' }),
+    c.getBlock(),
+  ]);
+  const positions = await c.readContract({ address: ctx.deployment.clearinghouse, abi: clearinghouseAbi, functionName: 'positionsOf', args: [vaultId] });
+  const now = Number(block.timestamp);
+  const series = (await Promise.all(positions.map((p) => getSeries(ctx, Number(p.seriesId))))).filter((s) => s.expiry <= now);
+  const priced = await Promise.all(
+    series.map((s) =>
+      c.readContract({ address: ctx.deployment.registry, abi: seriesRegistryAbi, functionName: 'settlementPriceOf', args: [s.underlying, BigInt(s.expiry)] }),
+    ),
+  );
+  const expiries = new Set<number>();
+  let rollable = false;
+  let awaitingPrice = false;
+  let until = 0;
+  series.forEach((s, i) => {
+    const settled = priced[i]![1];
+    const end = s.expiry + Number(wait);
+    if (settled) {
+      rollable = true;
+      expiries.add(s.expiry);
+    } else if (now <= end) {
+      awaitingPrice = true;
+      until = Math.max(until, end);
+      expiries.add(s.expiry);
+    }
+  });
+  return {
+    waiting: expiries.size > 0,
+    expiries: [...expiries].sort((a, b) => a - b),
+    awaitingPrice,
+    rollable,
+    ...(awaitingPrice && !rollable ? { until } : {}),
+  };
+}
+
+/** VaultPricing.unitPrice inputs: WAD amounts, `tau` in seconds. */
+export interface VaultPriceInput {
+  spot: bigint;
+  strike: bigint;
+  tau: bigint | number;
+  /** The hub's mark vol. */
+  vol: bigint;
+  skewSlope: bigint;
+  /** utilSlope x utilization after the trade (the vault computes it from its book). */
+  utilTerm: bigint;
+  /** The vault's vol add for the session. */
+  sessionAdd: bigint;
+  rate: bigint;
+  isCall: boolean;
+  takerBuys: boolean;
+}
+
+function pricingLibrary(ctx: NovationContext, library?: Address): Address {
+  const address = library ?? ctx.deployment.libraries?.VaultPricing;
+  if (!address) throw new Error('No VaultPricing library recorded for this deployment: pass its address.');
+  return address;
+}
+
+/**
+ * The vaults' price per contract (the linked VaultPricing library, pure): Black-Scholes at
+ * vol x (1 + skewSlope x |ln(K/S)| + utilTerm) + sessionAdd, and for a buyback never above the
+ * price at the plain mark vol. `library` defaults to the deployment's recorded VaultPricing.
+ */
+export async function getVaultUnitPrice(ctx: NovationContext, p: VaultPriceInput, library?: Address): Promise<bigint> {
+  return ctx.client.readContract({
+    address: pricingLibrary(ctx, library),
+    abi: vaultPricingAbi,
+    functionName: 'unitPrice',
+    args: [p.spot, p.strike, BigInt(p.tau), p.vol, p.skewSlope, p.utilTerm, p.sessionAdd, p.rate, p.isCall, p.takerBuys],
+  });
+}
+
+/** |delta| of the option at `vol` (VaultPricing.absDelta): the number the vaults' offer band checks. */
+export async function getVaultAbsDelta(
+  ctx: NovationContext,
+  p: Pick<VaultPriceInput, 'spot' | 'strike' | 'tau' | 'vol' | 'rate' | 'isCall'>,
+  library?: Address,
+): Promise<bigint> {
+  return ctx.client.readContract({
+    address: pricingLibrary(ctx, library),
+    abi: vaultPricingAbi,
+    functionName: 'absDelta',
+    args: [p.spot, p.strike, BigInt(p.tau), p.vol, p.rate, p.isCall],
+  });
 }
 
 export async function previewDeposit(ctx: NovationContext, vault: Address, assets: bigint): Promise<bigint> {
   return ctx.client.readContract({ ...v(vault), functionName: 'previewDeposit', args: [assets] });
 }
 
+/** The shares withdraw(assets) burns: enough that their asset part is `assets` (a covered-call exit pays USDG on top). */
 export async function previewWithdraw(ctx: NovationContext, vault: Address, assets: bigint): Promise<bigint> {
   return ctx.client.readContract({ ...v(vault), functionName: 'previewWithdraw', args: [assets] });
 }
 
+/** The value of `shares` at NAV, in asset units (an exit pays it partly in USDG: previewRedeemInKind). */
 export async function convertToAssets(ctx: NovationContext, vault: Address, shares: bigint): Promise<bigint> {
   return ctx.client.readContract({ ...v(vault), functionName: 'convertToAssets', args: [shares] });
+}
+
+/** The shares worth `assets` (asset units) at NAV, rounded down. */
+export async function convertToShares(ctx: NovationContext, vault: Address, assets: bigint): Promise<bigint> {
+  return ctx.client.readContract({ ...v(vault), functionName: 'convertToShares', args: [assets] });
 }
 
 /** maxDeposit(receiver): unlimited while live and not in deficit, else 0. */

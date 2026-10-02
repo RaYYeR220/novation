@@ -43,6 +43,7 @@ export function parseDeployment(json: unknown): Deployment {
       type: v.type as VaultKind,
       underlying: String(v.underlying),
     })),
+    ...(d.libraries ? { libraries: addrMap(d.libraries, 'libraries') } : {}),
   };
 }
 

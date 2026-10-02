@@ -25,7 +25,7 @@ export interface Refusal {
 /** Arguments that are integers, not WAD amounts. */
 const INTEGER_ARGS = new Set(['id', 'bidderId', 'until', 'bits', 'requestId', 'epoch', 'code', 'index']);
 /** Errors whose numeric arguments are raw token or share units (or plain integers), not WAD. */
-const RAW_ERRORS = /^(ERC20|ERC4626|ERC721|SafeCast|Panic|ExceedsFreeAssets)/;
+const RAW_ERRORS = /^(ERC20|ERC4626|ERC721|SafeCast|Panic|ExceedsFreeAssets|BelowMinOut)/;
 
 const MESSAGES: Partial<Record<RefusalCode, string>> = {
   InsufficientMargin: 'Initial margin after the trade exceeds equity.',
@@ -49,7 +49,7 @@ const MESSAGES: Partial<Record<RefusalCode, string>> = {
   SelfTrade: 'An account cannot trade with itself.',
   ZeroAmount: 'The amount is zero.',
   TokenNotAllowed: 'The token is not accepted as collateral.',
-  DepositNotAllowed: 'Only the owner can deposit stock tokens into an account.',
+  DepositNotAllowed: 'Only the owner can deposit stock tokens into an account, and not while it owes a deficit.',
   TooManyPositions: 'The account holds the maximum number of series.',
   TooManyUnderlyings: 'The account holds the maximum number of underlyings.',
   UnderlyingDisabled: 'The underlying is disabled.',
@@ -71,6 +71,8 @@ const MESSAGES: Partial<Record<RefusalCode, string>> = {
   ExceedsCapacity: 'The vault does not have the backing to sell that much.',
   ExceedsShort: 'The vault buys back at most its short in the series.',
   ExceedsFreeAssets: 'Only the free assets can leave now; the rest waits for a roll.',
+  BelowMinOut: 'The exit pays less than your minimum on one of its parts (tokens or USDG).',
+  BadReceiver: 'The vault itself cannot receive a redemption.',
   PremiumAboveMax: 'The premium moved above your maximum.',
   PremiumBelowMin: 'The premium moved below your minimum.',
   NothingToClaim: 'Nothing to claim yet.',
@@ -87,6 +89,28 @@ const MESSAGES: Partial<Record<RefusalCode, string>> = {
   PoolNotReady: 'The pool is not ready: shorts are unsettled or a shortfall is pending.',
   PoolShortfall: 'The pool cannot pay the claim.',
   NotLiquidatable: 'The account is above maintenance margin.',
+  StillLiquidatable: 'The account is still below maintenance margin: its liquidation goes on.',
+  AuctionActive: 'A liquidation of this account is already running.',
+  AuctionNotActive: 'No liquidation of this account is running.',
+  SaleNotActive: 'No deficit sale is running for that account and expiry.',
+  FractionTooLarge: 'The bid takes a larger fraction of the account than one bid may.',
+  PayAboveMax: 'The bid would pay more than your maximum.',
+  SelfBid: 'An account cannot bid on itself.',
+  NotBidder: 'Only the owner of the bidding account can bid with it.',
+  BidderInDeficit: 'The bidding account owes a deficit.',
+  ExceedsCollateral: 'The bid asks for more of the token than the account holds.',
+  ExceedsDeficit: 'The bid buys more tokens than the account still owes.',
+  NothingToSocialize: 'The account has no pending deficit to spread.',
+  UnderlyingHalted: 'The underlying is halted, so no series can be listed now.',
+  NotWeeklyExpiry: 'Series expire at the weekly close only.',
+  BadExpiry: 'The expiry is in the past or further out than listing allows.',
+  BadStrike: 'The strike is zero or off the strike grid.',
+  StrikeTooFar: 'The strike is too far from spot to list.',
+  AlreadySettled: 'That expiry is already settled.',
+  TooEarly: 'Too early: the expiry (or the fallback delay after it) has not passed yet.',
+  BadHint: 'That feed round cannot settle this expiry.',
+  FallbackNotAllowed: 'The fallback price is only for an expiry without a usable print.',
+  NotExpiry: 'That time is not a weekly expiry.',
   MarketClosed: 'Auctions pause while an underlying is halted or in a weekend session.',
   BidRaisesRisk: "The bid would raise the bidder's worst-case loss beyond its margin.",
   BidderUnhealthy: 'The bidder would be below initial margin after the bid.',
