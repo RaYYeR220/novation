@@ -1008,13 +1008,95 @@ contract MarketDataHubTest is Test {
         assertTrue(hub.volCurrent(address(token)));
         assertEq(hub.markVol(address(token)), v);
 
-        // a round printed but not folded in: stale, so volCap until anyone syncs
+        // a round printed but not folded in (the first of the week): the estimate stays until that
+        // round has waited unfolded for volStaleness, counted from its own timestamp
         feed.pushRound(150e8, t);
         assertFalse(hub.volCurrent(address(token)));
+        assertFalse(hub.volStale(address(token)));
+        assertEq(hub.markVol(address(token)), v);
+        vm.warp(t + 3600);
+        feed.pushRound(150e8, t + 3600); // a later print doesn't restart the age
+        assertEq(hub.markVol(address(token)), v);
+        vm.warp(t + 3601);
+        assertTrue(hub.volStale(address(token)));
         assertEq(hub.markVol(address(token)), 1.5e18);
+        // anyone lifts it by folding
         hub.syncVol(address(token));
         assertTrue(hub.volCurrent(address(token)));
+        assertFalse(hub.volStale(address(token)));
         assertLt(hub.markVol(address(token)), 1.5e18);
+    }
+
+    /// A partial fold leaves the oldest unfolded round as the one that ages: a backlog whose head
+    /// is older than volStaleness is still stale after a fold that didn't reach past it.
+    function test_markVolAgeFromOldestUnfoldedRound() public {
+        vm.warp(REGULAR_TS);
+        feed.pushRound(150e8, REGULAR_TS);
+        hub.initVol(address(token));
+        feed.pushRound(151e8, REGULAR_TS + 10); // (1,2)
+        vm.warp(REGULAR_TS + 3000);
+        feed.pushRound(150e8, REGULAR_TS + 3000); // (1,3)
+        vm.warp(REGULAR_TS + 3611);
+        assertTrue(hub.volStale(address(token))); // (1,2) is 3601 s old
+        _pokeN(2, 1);
+        assertFalse(hub.volStale(address(token))); // now (1,3) ages: 611 s
+        vm.warp(REGULAR_TS + 3000 + 3601);
+        assertTrue(hub.volStale(address(token)));
+        assertEq(hub.markVol(address(token)), 1.5e18);
+    }
+
+    /// After an aggregator migration the stored phase has no next round: the age counts from round
+    /// 1 of the new phase, so the migration doesn't read volCap before anyone can rebase.
+    function test_markVolAcrossPhaseChange() public {
+        vm.warp(REGULAR_TS);
+        feed.pushRound(150e8, REGULAR_TS);
+        hub.initVol(address(token));
+        for (uint64 i = 0; i < 64; i++) {
+            feed.pushRound(150e8, REGULAR_TS + 60 * (i + 1));
+        }
+        hub.syncVol(address(token));
+        uint256 v = hub.markVol(address(token));
+        assertLt(v, 1.5e18);
+
+        uint256 t = REGULAR_TS + 60 * 64 + 7200; // the old phase went quiet long ago
+        vm.warp(t);
+        feed.setPhase(2);
+        feed.pushRound(151e8, t); // (2,1)
+        assertFalse(hub.volCurrent(address(token)));
+        assertFalse(hub.volStale(address(token)));
+        assertEq(hub.markVol(address(token)), v);
+        vm.warp(t + 3601);
+        assertTrue(hub.volStale(address(token)));
+        assertEq(hub.markVol(address(token)), 1.5e18);
+        hub.rebaseVol(address(token));
+        assertTrue(hub.volCurrent(address(token)));
+        assertEq(hub.markVol(address(token)), v);
+    }
+
+    /// The old phase still has unfolded rounds after the migration: those age first.
+    function test_markVolPhaseChangeOldPhaseBacklogAges() public {
+        vm.warp(REGULAR_TS);
+        feed.pushRound(150e8, REGULAR_TS);
+        hub.initVol(address(token));
+        feed.pushRound(151e8, REGULAR_TS + 10); // (1,2), never folded
+        vm.warp(REGULAR_TS + 3000);
+        feed.setPhase(2);
+        feed.pushRound(152e8, REGULAR_TS + 3000); // (2,1)
+        vm.warp(REGULAR_TS + 3611);
+        assertTrue(hub.volStale(address(token))); // (1,2) is 3601 s old, (2,1) only 611 s
+        _pokeN(2, 1); // the rest of phase 1
+        assertFalse(hub.volStale(address(token))); // now (2,1) ages
+    }
+
+    /// A feed whose calls fail has no round to age: stale (markVol never reverts on it).
+    function test_markVolUnreadableFeedIsStale() public {
+        vm.warp(REGULAR_TS);
+        feed.pushRound(150e8, REGULAR_TS);
+        hub.initVol(address(token));
+        vm.mockCallRevert(address(feed), abi.encodeWithSelector(MockAggregator.latestRoundData.selector), "");
+        vm.mockCallRevert(address(feed), abi.encodeWithSelector(MockAggregator.getRoundData.selector), "");
+        assertTrue(hub.volStale(address(token)));
+        assertEq(hub.markVol(address(token)), 1.5e18);
     }
 
     /// A bad print (no positive answer) is skipped: the anchor moves past it, the next good round's

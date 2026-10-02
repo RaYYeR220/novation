@@ -61,7 +61,7 @@ contract CHStorageWriter {
 ///  - time is T0 = 2026-09-23 14:00 UTC (Wednesday 10:00 EDT, REGULAR session);
 ///  - NVDA at 180 USD and SPY at 600 USD, 8-decimal feeds with a fresh round at T0, vol initialised
 ///    from the volCap prior (mark vol = volCap up to r2 truncation, e.g. SPY 0.79999999999999990;
-///    exactly volCap once the vol state is older than volStaleness, 2 days);
+///    exactly volCap once a printed round has waited unfolded for volStaleness, 2 days);
 ///  - RiskParams with the deploy defaults; this contract is its setupAdmin and setup is NOT
 ///    finalized, so tests may still add or change underlyings and globals directly;
 ///  - the clearinghouse's setup phase is also open (TestVenue added, no auction house bound), so

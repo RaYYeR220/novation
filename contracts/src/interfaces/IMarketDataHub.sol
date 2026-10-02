@@ -26,6 +26,7 @@ interface IMarketDataHub {
     function pokeVol(address u, uint80[] calldata roundIds) external;
     function syncVol(address u) external; // permissionless: pokes every round up to the feed's latest (same phase, <= 64 per call)
     function volCurrent(address u) external view returns (bool); // the vol estimate has folded in the feed's latest round
+    function volStale(address u) external view returns (bool); // markVol is at volCap: a printed round has sat unfolded for volStaleness
     function volState(address u)
         external
         view

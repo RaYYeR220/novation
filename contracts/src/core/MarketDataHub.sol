@@ -186,16 +186,17 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
     // ---- realized vol ----
 
     /// @notice The mark vol: the EWMA estimate clamped to [volFloor, volCap]. It falls back to
-    /// volCap before initVol, and when the estimate is stale: not refreshed within volStaleness
-    /// while the feed has printed a round it hasn't folded in. A feed that prints nothing (every
-    /// weekend, 48 hours and more) leaves the estimate current, so the marks don't jump to volCap
-    /// at the reopen; a round printed but not yet folded does, until anyone syncs (syncVol).
+    /// volCap before initVol, and when the estimate is stale (volStale): a round the feed printed
+    /// has waited unfolded for longer than volStaleness. A feed that prints nothing (every
+    /// weekend, 48 hours and more) leaves the estimate current, and a print nobody has folded in
+    /// yet (the first of the week, at the reopen) keeps it until it is volStaleness old, so the
+    /// marks never jump to volCap just because a round arrived before anyone synced. volCap isn't
+    /// conservative for a long-vol book (it inflates its equity), so it is kept for its purpose:
+    /// an estimate nobody has kept up with.
     function markVol(address u) external view returns (uint256 vol) {
         VolState storage v = _vol[u];
         UnderlyingParams memory p = params.underlying(u);
-        if (!v.initialized || (block.timestamp - v.lastPokeTs > p.volStaleness && !_current(v, p.feed))) {
-            return p.volCap;
-        }
+        if (!v.initialized || _stale(v, p)) return p.volCap;
         uint256 raw = F.sqrtWad(_divWad(v.r2, v.dt));
         if (raw < p.volFloor) return p.volFloor;
         if (raw > p.volCap) return p.volCap;
@@ -338,6 +339,44 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
     function volCurrent(address u) external view returns (bool) {
         VolState storage v = _vol[u];
         return v.initialized && _current(v, params.underlying(u).feed);
+    }
+
+    /// @notice Whether markVol falls back to volCap because the estimate is stale: the oldest round
+    /// the feed has printed since the stored one (round 1 of the next phase once the stored phase
+    /// has no next round) printed more than volStaleness ago, or can't be found. Anyone lifts it
+    /// with syncVol (or pokeVol, then rebaseVol, after an aggregator migration). True before
+    /// initVol.
+    function volStale(address u) external view returns (bool) {
+        VolState storage v = _vol[u];
+        return !v.initialized || _stale(v, params.underlying(u));
+    }
+
+    /// @dev Age counts from the first unfolded round's own timestamp, not from the last fold: a
+    /// feed that was silent (a weekend) and then printed is fresh at its print. After an
+    /// aggregator migration the stored phase has no next round and the age counts from round 1 of
+    /// the next phase, so the migration itself doesn't read volCap before anyone can rebase. A
+    /// feed that can't be read, or skipped a phase, has no such round and reads stale; a round
+    /// stamped in the future reads fresh. Raw reads, like _current: a misbehaving feed can't make
+    /// the margin procedure revert here.
+    function _stale(VolState storage v, UnderlyingParams memory p) private view returns (bool) {
+        if (_current(v, p.feed)) return false;
+        uint80 last = v.lastRoundId;
+        uint256 at = _printedAt(p.feed, last + 1);
+        if (at == 0) at = _printedAt(p.feed, (((last >> 64) + 1) << 64) | 1);
+        return at == 0 || (block.timestamp > at && block.timestamp - at > p.volStaleness);
+    }
+
+    /// @dev getRoundData(id).updatedAt read raw: 0 if the round doesn't exist, the call fails or it
+    /// returns fewer than five words.
+    function _printedAt(address feed, uint80 id) private view returns (uint256 at) {
+        bytes4 sel = IAggregatorV3.getRoundData.selector;
+        assembly ("memory-safe") {
+            let ptr := mload(0x40)
+            mstore(ptr, sel)
+            mstore(add(ptr, 4), id)
+            let ok := staticcall(gas(), feed, ptr, 0x24, ptr, 0xa0)
+            if and(ok, iszero(lt(returndatasize(), 0xa0))) { at := mload(add(ptr, 0x60)) }
+        }
     }
 
     function _current(VolState storage v, address feed) private view returns (bool) {

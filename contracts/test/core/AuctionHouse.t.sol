@@ -851,8 +851,9 @@ contract AuctionHouseTest is Fixture {
     /// Review PoC (A, H-1; C, F-1 PoC 1): the vol estimate went stale over the weekend (no round
     /// for 48 hours), so at the reopen every option was marked at volCap until someone folded the
     /// first print, and a liquidator could start and bid on a healthy short book in that window.
-    /// The estimate now counts as current while the hub has folded the feed's latest round, and a
-    /// liquidation syncs every underlying first: the book is valued at its real vol.
+    /// The estimate is now stale only once a printed round has waited unfolded for volStaleness,
+    /// so the reopen print keeps it; and should nobody fold for that long, a liquidation folds
+    /// every underlying first: the book is valued at its real vol.
     function test_reopenDoesNotLiquidateAtVolCap() public {
         _calmNvdaVol();
         uint256 a = _fund(alice, 280 * USDG, 0);
@@ -870,12 +871,20 @@ contract AuctionHouseTest is Fixture {
         vm.warp(SUN_1959_EDT);
         assertEq(hub.markVol(address(nvda)), 0.35e18);
 
-        // the first print of the week, at the same price, not folded yet: the view reads volCap
+        // the first print of the week, at the same price, not folded yet: still the estimate
         vm.warp(SUN_2001_EDT);
         _setPrice(address(nvda), 180e18);
+        assertFalse(hub.volCurrent(address(nvda)));
+        assertEq(hub.markVol(address(nvda)), 0.35e18);
+        assertTrue(ch.accountState(a).healthy);
+        vm.expectRevert(AuctionHouse.NotLiquidatable.selector);
+        ah.startLiquidation(a);
+
+        // nobody folds it for volStaleness (48 hours): the view falls back to volCap, a
+        // liquidation folds it in first, and then the book is healthy
+        _printUnfoldedFor48Hours(180e18);
         assertEq(hub.markVol(address(nvda)), 1.5e18);
         assertTrue(ch.accountState(a).liquidatable);
-        // a liquidation folds it in first, and then the book is healthy
         vm.expectRevert(AuctionHouse.NotLiquidatable.selector);
         ah.startLiquidation(a);
         hub.syncVol(address(nvda));
@@ -887,7 +896,9 @@ contract AuctionHouseTest is Fixture {
 
     /// Review PoC (C, F-1 PoC 2): the self-liquidation drain at the reopen. An account margined at
     /// 1.15x IM at its real vol reads deeply negative at volCap; its owner's own bidder took 100%
-    /// of it and the fund paid the bidder. Now the liquidation values it at the real vol.
+    /// of it and the fund paid the bidder. The reopen print now keeps the estimate, and where the
+    /// view does read volCap (a print left unfolded for 48 hours) the liquidation values the book
+    /// at the real vol.
     function test_reopenSelfLiquidationCantDrainFund() public {
         _calmNvdaVol();
         uint64 far = e2;
@@ -913,6 +924,8 @@ contract AuctionHouseTest is Fixture {
 
         vm.warp(SUN_2001_EDT);
         _setPrice(address(nvda), 180e18);
+        assertTrue(ch.accountState(a).healthy); // the estimate, not volCap
+        _printUnfoldedFor48Hours(180e18);
         assertLt(ch.accountState(a).equity, 0); // at volCap marks
         uint256 fund0 = usdg.balanceOf(address(insurance));
         vm.prank(att);
@@ -926,8 +939,9 @@ contract AuctionHouseTest is Fixture {
 
     /// Review PoC (A, H-1 impact B): in the stale window an underwater account bought back its
     /// far out-of-the-money shorts "at mark", the volCap mark, paying value to a colluder while the
-    /// pure-reduction rule saw equity unchanged. A trade now folds the traded underlying's vol
-    /// first, so the buyback is priced against the real mark and refused.
+    /// pure-reduction rule saw equity unchanged. The window now needs a print left unfolded for
+    /// 48 hours, and a trade folds the traded underlying's vol first, so the buyback is priced
+    /// against the real mark and refused.
     function test_reopenBuybackAtStaleMarkRefused() public {
         _calmNvdaVol();
         uint256 a = _fund(alice, 280 * USDG, 0);
@@ -940,7 +954,8 @@ contract AuctionHouseTest is Fixture {
         hub.syncVol(address(nvda));
 
         vm.warp(SUN_2001_EDT);
-        _setPrice(address(nvda), 160e18); // not folded: the view marks at volCap
+        _setPrice(address(nvda), 160e18);
+        _printUnfoldedFor48Hours(160e18); // not folded for 48 hours: the view marks at volCap
         AccountState memory pre = ch.accountState(a);
         AccountState memory post = ch.marginAfter(a, put150, 30e18, 0);
         uint256 staleMark = uint256(post.mtm - pre.mtm); // 30 puts at the volCap mark
@@ -953,6 +968,89 @@ contract AuctionHouseTest is Fixture {
         assertFalse(fair.healthy);
         uint256 fairMark = uint256(ch.marginAfter(a, put150, 30e18, 0).mtm - fair.mtm);
         assertGt(staleMark, fairMark);
+    }
+
+    /// Review PoC (A, R-1): volCap is not conservative for a long-vol book, it inflates its equity.
+    /// With the reopen print not yet folded the view used to mark NVDA at volCap, and an owner long
+    /// NVDA straddles (short SPY straddles) withdrew far more than its margin allowed at the real
+    /// vol. The reopen print now keeps the estimate: the withdrawal is capped at what the account
+    /// could take with NVDA folded in.
+    function test_reopenWithdrawCappedAtFairMargin() public {
+        uint32 nc = _list(address(nvda), e2, 180e18, true);
+        uint32 np = _list(address(nvda), e2, 180e18, false);
+        uint32 sc = _list(address(spy), e2, 600e18, true);
+        uint32 sp = _list(address(spy), e2, 600e18, false);
+        _calmVols();
+        uint256 a = _fund(alice, 400_000 * USDG, 0);
+        uint256 d = _fund(dave, 10_000_000 * USDG, 0);
+        _tradeAtMark(a, d, nc, 2_000e18);
+        _tradeAtMark(a, d, np, 2_000e18);
+        _tradeAtMark(a, d, sc, -400e18);
+        _tradeAtMark(a, d, sp, -400e18);
+
+        vm.warp(FRI_1930_EDT);
+        _setPrice(address(nvda), 180e18);
+        _setPrice(address(spy), 600e18);
+        hub.syncVol(address(nvda));
+        hub.syncVol(address(spy));
+
+        // Sunday 20:01: SPY printed and folded, NVDA printed and not folded yet
+        vm.warp(SUN_2001_EDT);
+        _setPrice(address(spy), 600e18);
+        hub.syncVol(address(spy));
+        _setPrice(address(nvda), 180e18);
+        assertFalse(hub.volCurrent(address(nvda)));
+        assertFalse(hub.volStale(address(nvda)));
+        AccountState memory stale = ch.accountState(a);
+
+        uint256 snap = vm.snapshotState();
+        hub.syncVol(address(nvda));
+        AccountState memory fair = ch.accountState(a);
+        vm.revertToState(snap);
+        uint256 fairMax = uint256(fair.equity - int256(fair.im)) / USDG_SCALE;
+        assertLe(stale.equity - int256(stale.im), fair.equity - int256(fair.im));
+
+        vm.prank(alice);
+        vm.expectPartialRevert(CHErrors.InsufficientMargin.selector);
+        ch.withdraw(a, address(usdg), fairMax + 1, alice);
+        vm.prank(alice);
+        ch.withdraw(a, address(usdg), fairMax, alice);
+        hub.syncVol(address(nvda));
+        assertTrue(ch.accountState(a).healthy);
+        assertFalse(ch.accountState(a).liquidatable);
+    }
+
+    /// @dev `qty` of `sid` between `a` (taker) and `d` at the account's mark.
+    function _tradeAtMark(uint256 a, uint256 d, uint32 sid, int256 qty) internal {
+        int256 delta = ch.marginAfter(a, sid, qty, 0).mtm - ch.accountState(a).mtm;
+        uint256 premium = uint256(delta >= 0 ? delta : -delta);
+        _trade(a, alice, d, dave, sid, qty, premium);
+    }
+
+    /// @dev The NVDA reopen print (already pushed) left unfolded for volStaleness: another print
+    /// 48 hours later keeps the feed fresh while the oldest unfolded round has aged out.
+    function _printUnfoldedFor48Hours(uint256 px) internal {
+        vm.warp(vm.getBlockTimestamp() + 2 days + 1);
+        _setPrice(address(nvda), px);
+        assertTrue(hub.volStale(address(nvda)));
+    }
+
+    /// @dev 400 flat NVDA and SPY prints five minutes apart, folded: both at their vol floor.
+    function _calmVols() internal {
+        uint256 t = vm.getBlockTimestamp();
+        for (uint256 i = 1; i <= 400; ++i) {
+            vm.warp(t + i * 5 minutes);
+            _setPrice(address(nvda), 180e18);
+            _setPrice(address(spy), 600e18);
+            if (i % 64 == 0) {
+                hub.syncVol(address(nvda));
+                hub.syncVol(address(spy));
+            }
+        }
+        hub.syncVol(address(nvda));
+        hub.syncVol(address(spy));
+        assertEq(hub.markVol(address(nvda)), 0.35e18);
+        assertEq(hub.markVol(address(spy)), 0.12e18);
     }
 
     /// @dev 400 flat NVDA prints five minutes apart, folded: the EWMA vol falls to the 35% floor.
