@@ -111,6 +111,11 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
     /// before the next.
     uint256 public constant EXIT_COOLDOWN = 1 hours;
 
+    /// @notice How long after its expiry a position whose settlement price the registry still
+    /// lacks holds deposits and exits: the 72-hour oracle fallback plus a week. Past that, the
+    /// expiry may never be provable, and the vault reopens at its mark rather than stay frozen.
+    uint256 public constant SETTLEMENT_WAIT = 72 hours + 7 days;
+
     // Settlement outcomes the roll tolerates: nothing to do yet, or a clearinghouse without
     // expiry settlement. Anything else bubbles up.
     bytes4 private constant NOT_IMPLEMENTED = bytes4(keccak256("NotImplemented()"));
@@ -762,10 +767,18 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
 
     /// @dev The account still carries a position whose series has expired: its payoff isn't in
     /// the expiry pool yet. Exits wait for settleAccount (roll does it), so an exit can't take
-    /// cash that an in-the-money short owes its buyers and leave the stayers a bigger deficit.
+    /// cash that an in-the-money short owes its buyers and leave the stayers a bigger deficit, and
+    /// so do entries. One whose settlement price the registry has (roll can settle it now) always
+    /// holds them; one still waiting for that price only until SETTLEMENT_WAIT after its expiry.
     function _holdsExpired() private view returns (bool) {
-        (uint256 live,) = ch.positionStatus(vaultId);
-        return live != ch.positionsOf(vaultId).length;
+        Position[] memory ps = ch.positionsOf(vaultId);
+        for (uint256 i = 0; i < ps.length; ++i) {
+            Series memory s = registry.series(ps[i].seriesId);
+            if (s.expiry > block.timestamp) continue;
+            (, bool settled) = registry.settlementPriceOf(s.underlying, s.expiry);
+            if (settled || block.timestamp <= uint256(s.expiry) + SETTLEMENT_WAIT) return true;
+        }
+        return false;
     }
 
     function _holdsExpiry(uint64 e) private view returns (bool) {
