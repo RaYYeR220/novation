@@ -26,7 +26,7 @@ import type { Position, Series, Underlying, Vault } from '@/lib/client/types';
 import { DEMO_TICKET } from '@/lib/demo';
 import { fmtDays, fmtExpiry, fmtNumber, fmtPct, fmtSeriesShort, fmtShock, fmtSigned } from '@/lib/format';
 import { shockRange } from '@/lib/kernel';
-import { closedFor, closedSession, untilReopen } from '@/lib/market-state';
+import { closedFor, closedSession, untilReopen, vaultNeedsVolSync } from '@/lib/market-state';
 import type { PayoffBook, PayoffLeg } from '@/lib/payoff';
 import { useDebounced } from '@/lib/use-media';
 import { OptionsChain, type ChainSeries, type Side } from './options-chain';
@@ -156,6 +156,8 @@ export function TradeView() {
   const vault = vaults.data?.find((v) => v.live && writes(v));
   // closed for the weekend or a holiday: the ticket says so rather than "no vault"
   const closedVault = vault ? undefined : vaults.data?.find((v) => writes(v) && closedSession(v.session));
+  // live: open market, but the vol is too far behind for the vault to quote; anyone can sync it
+  const syncVault = vault || closedVault || demo ? undefined : vaults.data?.find((v) => writes(v) && vaultNeedsVolSync(v));
   const closedOn = (symbol: string) => closedSession(vaults.data?.find((v) => v.underlying === symbol && closedSession(v.session))?.session);
   // a side nobody quotes (live: the vault doesn't sell or buy back this series) falls back to RFQ
   const sideQuote = series ? (side === 'buy' ? series.ask : series.bid) : undefined;
@@ -419,6 +421,7 @@ export function TradeView() {
                 }}
                 vault={vault}
                 closedVault={closedVault}
+                syncVault={syncVault}
                 grants={grants}
                 price={price}
                 now={now}

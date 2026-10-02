@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { ReactNode, Ref } from 'react';
+import { useState, type ReactNode, type Ref } from 'react';
 import { MarginMeter } from '@/components/charts/margin-meter';
 import { ScenarioStrip } from '@/components/charts/scenario-strip';
 import { RefusalNotice } from '@/components/app/refusal-card';
@@ -21,7 +21,7 @@ import { cn } from '@/lib/cn';
 import { fmtDays, fmtFee, fmtNumber, fmtSeries, fmtSeriesShort, fmtSigned } from '@/lib/format';
 import { fmtCloseEt, fmtEt } from '@/lib/nyse';
 import { perContract } from '@/lib/margin';
-import { closedFor, closedSession, untilReopen } from '@/lib/market-state';
+import { VOL_SYNC_TXS, closedFor, closedSession, untilReopen, vaultVolText } from '@/lib/market-state';
 import type { ChainSeries, Side } from './options-chain';
 
 export type { Venue } from '@/lib/client/types';
@@ -48,6 +48,8 @@ export interface TicketProps {
   vault?: Vault;
   /** The vault that writes it while closed for the weekend or a holiday. */
   closedVault?: Vault;
+  /** Live: the vault that writes it but can't quote until its vol catches up with the feed. */
+  syncVault?: Vault;
   /** Agents with a grant on this account. */
   grants: AgentGrant[];
   /** Price per contract at the venue the ticket will use. */
@@ -110,10 +112,17 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
   const viewOnly = !p.demo && act.connected && !act.checking && !act.canAct;
   const { series, quote, now } = p;
   const refusal = quote?.refusal;
-  // live: signing syncs a vol that is behind its feed first, then sends the trade
+  // live: signing syncs a vol that is behind its feed first. A vault trade is then sent; an RFQ
+  // quote was checked at the old mark, so it is checked again and signed with another click.
   const volSync = refusal?.code === 'VolNotCurrent' && !p.demo;
-  const volSyncNote = `Signing syncs the vol of ${refusal?.underlying ?? 'this underlying'} first (one more transaction, which anyone may send), then sends this trade.`;
+  const volSyncNote = `Signing syncs the vol of ${refusal?.underlying ?? 'this underlying'} first (${VOL_SYNC_TXS}, which anyone may send), ${
+    p.venue === 'rfq' ? 'then checks the quote again at the new mark: sign the fill once it shows.' : 'then sends this trade.'
+  }`;
   const fit = useFit(p.args, Boolean(refusal) && refusal?.code !== 'VolNotCurrent');
+  // an RFQ fill held back by a vol sync: say so until the ticket changes
+  const ticketKey = p.args ? `${p.args.id}:${p.args.seriesId}:${p.args.qtyDelta}:${p.args.venue}:${p.args.agent ?? ''}` : '';
+  const [resynced, setResynced] = useState<{ key: string; text: string } | undefined>();
+  const resyncNote = resynced?.key === ticketKey ? resynced.text : undefined;
   const grant = p.grants.find((g) => g.agent === p.signer);
   const qtyNum = Number(p.qty);
   const qtyOk = !p.qtyError && Number.isFinite(qtyNum) && qtyNum > 0;
@@ -162,6 +171,7 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
           : `No RFQ maker relay is answering: the what-if prices at the kernel mark, ${fmtNumber(p.price ?? 0)}, and the ticket can't be sent.`;
   const noVault = !p.vault;
   const closed = closedSession(p.closedVault?.session);
+  const syncVault = p.demo || closed ? undefined : p.syncVault;
   const signerNote = grant
     ? `${grant.label} may leave at most ${fmtNumber(grant.maxWorstLoss)} of worst-case loss (now ${fmtNumber(now?.im ?? grant.used)}) and pay at most ${fmtNumber(grant.maxPremiumPerTrade)} premium per trade.`
     : p.grants.some((g) => !g.allowed.includes(series.underlying))
@@ -192,10 +202,12 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
     if (p.venue === 'rfq' && quote?.rfq && !grant) {
       // exactly the quote shown above; if it lapsed, the ticket shows a new one before any signing
       const hash = quote.rfq.hash;
+      setResynced(undefined);
       void live.run(label, (c) => c.fillRfq(p.accountId, hash)).then((r) => {
         if (!r.ok && !r.refusal) {
           chain?.dropQuote(hash);
           void qc.invalidateQueries({ queryKey: ['whatIf'] });
+          if (r.volSynced) setResynced({ key: ticketKey, text: r.error });
         }
       });
       return;
@@ -314,10 +326,25 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
             {noVault
               ? closed
                 ? `The ${series.underlying} ${series.isCall ? 'covered-call' : 'put-write'} vault is closed for ${closedFor(closed)}: no vault quotes ${untilReopen(p.asOf)}. `
-                : `No vault writes ${series.underlying} ${series.isCall ? 'calls' : 'puts'}. `
+                : syncVault
+                  ? `The ${series.underlying} ${series.isCall ? 'covered-call' : 'put-write'} vault can't quote until its vol catches up. ${vaultVolText(series.underlying, syncVault.volBehind)} `
+                  : `No vault writes ${series.underlying} ${series.isCall ? 'calls' : 'puts'}. `
               : ''}
             {venueNote} {signerNote}
           </p>
+          {noVault && syncVault && (
+            <div>
+              <Button
+                size="sm"
+                variant="secondary"
+                loading={live.busy}
+                loadingLabel="Syncing"
+                onClick={() => void live.run(`Sync the vol of ${series.underlying}`, (c) => c.syncVol(series.underlying))}
+              >
+                Sync {series.underlying} vol
+              </Button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -410,6 +437,11 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
           >
             {label}
           </Button>
+          {resyncNote && (
+            <p role="status" data-state="vol-synced" className="text-t13 text-pretty text-navy-50">
+              {resyncNote}
+            </p>
+          )}
           <p className="text-t12 text-navy-200">
             {p.pending
               ? 'Checking the ticket again before it can be signed.'

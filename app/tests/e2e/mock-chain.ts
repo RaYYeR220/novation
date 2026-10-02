@@ -7,7 +7,8 @@
  * in both parts; the TSLA covered-call vault still holds an expired, priced series, so it waits for
  * settlement. Calls are decoded and answered with the SDK's own ABIs, so a change in the contracts'
  * interface breaks these tests. `closed` puts NVDA in a weekend or holiday session, which closes
- * its vaults.
+ * its vaults; `volBehind` leaves NVDA's vol behind its feed until a sync lands. The injected wallet
+ * hands its transactions to the mock unsigned, and the mock mines them at once.
  */
 import type { Page, Route } from '@playwright/test';
 import {
@@ -111,9 +112,30 @@ const VAULT_CFG = {
 export interface MockWorld {
   /** NVDA's session when not a regular one: its vaults are closed (isLive false, no quotes). */
   closed?: 'WEEKEND' | 'HOLIDAY';
+  /**
+   * Feed rounds NVDA's vol trails its feed until a syncVol (or syncAndRebaseVol) lands: an RFQ fill
+   * is refused VolNotCurrent(NVDA) meanwhile, and past 64 rounds the NVDA vaults are not live. The
+   * sync takes NVDA's mark vol from 50% to 10%, which moves every NVDA kernel mark.
+   */
+  volBehind?: number;
 }
+
+/** One page's mock chain: its options, and the transactions the wallet sent to it, as `contract.function`. */
+export interface MockState extends MockWorld {
+  synced: boolean;
+  sent: string[];
+  txs: Map<Hex, { from: Address; to: Address; input: Hex }>;
+}
+/** Rounds NVDA's vol is behind its feed right now. */
+const nvdaBehind = (s: MockState) => (s.volBehind && !s.synced ? s.volBehind : 0);
+const nvdaToken = () => d.tokens.NVDA!.toLowerCase();
 const SESSION_CODE = { WEEKEND: 2, HOLIDAY: 3 } as const;
 const closedNvda = (w: MockWorld, token: string) => (w.closed && symOf(token) === 'NVDA' ? SESSION_CODE[w.closed] : undefined);
+
+/** A vault on NVDA can't quote while NVDA is closed, or while its vol is more than one sync behind. */
+function quotesNothing(w: MockState, underlying: string): boolean {
+  return closedNvda(w, d.tokens[underlying]!) !== undefined || (underlying === 'NVDA' && nvdaBehind(w) > 64);
+}
 
 function vaultIndex(a: string): number {
   return d.vaults.findIndex((v) => v.address.toLowerCase() === a.toLowerCase());
@@ -209,13 +231,14 @@ const HANDLERS: Record<string, Handler> = {
   'registry.settlementPriceOf': ([, e]) => (Number(e) === E0 ? [350n * W, true] : [0n, false]),
   'registry.seriesId': () => 0,
   // kernel: simple, deterministic numbers (the real maths is tested against KernelReference in the SDK)
-  'kernel.bsQuote': ([spot, strike, , , , isCall]) => {
+  'kernel.bsQuote': ([spot, strike, , vol, , isCall]) => {
     const S = spot as bigint;
     const K = strike as bigint;
     const intrinsic = isCall ? (S > K ? S - K : 0n) : K > S ? K - S : 0n;
     const otm = isCall ? K > S : K < S;
     const delta = (otm ? W / 4n : (3n * W) / 4n) * (isCall ? 1n : -1n);
-    return [intrinsic + 2n * W, delta, 0n, 0n, 0n];
+    // time value 4 x vol: 2.00 at the 50% mark vol
+    return [intrinsic + 4n * (vol as bigint), delta, 0n, 0n, 0n];
   },
   'kernel.scenarioGrid': ([, , ps]) => Array.from({ length: 39 }, (_, i) => ((ps as unknown[]).length ? BigInt(i - 19) * W : 0n)),
   'kernel.margin': ([, , ps]) => {
@@ -262,11 +285,19 @@ const HANDLERS: Record<string, Handler> = {
 };
 
 /** Per-contract answers that depend on which token, feed or vault was called. */
-function special(kind: string, to: string, fn: string, args: readonly unknown[], w: MockWorld): { hit: boolean; value?: unknown } {
+function special(kind: string, to: string, fn: string, args: readonly unknown[], w: MockState): { hit: boolean; value?: unknown } {
   if (kind === 'hub' && (fn === 'session' || fn === 'spot')) {
     const code = closedNvda(w, args[0] as string);
     if (code !== undefined) return { hit: true, value: fn === 'session' ? code : [SPOT.NVDA, code, true] };
   }
+  if (kind === 'hub' && w.volBehind) {
+    const nvda = String(args[0]).toLowerCase() === nvdaToken();
+    if (fn === 'volCurrent') return { hit: true, value: !nvda || nvdaBehind(w) === 0 };
+    if (fn === 'markVol') return { hit: true, value: nvda && w.synced ? W / 10n : W / 2n };
+    if (fn === 'volState' && nvda)
+      return { hit: true, value: [0n, 0n, (1n << 64n) | BigInt(10 + w.volBehind - nvdaBehind(w)), 0n, BigInt(MOCK_NOW - 60), BigInt(MOCK_NOW - 30)] };
+  }
+  if (kind === 'rfq' && fn === 'fill' && nvdaBehind(w) > 0) revert('VolNotCurrent', [d.tokens.NVDA!]);
   if (kind === 'token') {
     const s = symOf(to);
     const usdg = to.toLowerCase() === d.tokens.USDG!.toLowerCase();
@@ -277,7 +308,10 @@ function special(kind: string, to: string, fn: string, args: readonly unknown[],
   }
   if (kind === 'feed') {
     const s = feedSym(to) ?? 'NVDA';
-    if (fn === 'latestRoundData') return { hit: true, value: [(1n << 64n) | 10n, SPOT[s] / 10n ** 10n, BigInt(MOCK_NOW - 60), BigInt(MOCK_NOW - 60), (1n << 64n) | 10n] };
+    if (fn === 'latestRoundData') {
+      const round = (1n << 64n) | BigInt(10 + (s === 'NVDA' ? (w.volBehind ?? 0) : 0));
+      return { hit: true, value: [round, SPOT[s] / 10n ** 10n, BigInt(MOCK_NOW - 60), BigInt(MOCK_NOW - 60), round] };
+    }
     if (fn === 'description') return { hit: true, value: `${s} / USD` };
   }
   if (kind === 'vault') {
@@ -291,7 +325,7 @@ function special(kind: string, to: string, fn: string, args: readonly unknown[],
     const owners = i === 0 && String(args[0]).toLowerCase() === MOCK_OWNER;
     const held = owners ? 10n * 10n ** 24n : 0n;
     const table: Record<string, unknown> = {
-      isLive: closedNvda(w, d.tokens[v.underlying]!) === undefined,
+      isLive: !quotesNothing(w, v.underlying),
       name: put ? `Novation Put Write ${v.underlying}` : `Novation Covered Call ${v.underlying}`,
       symbol: put ? `npw${v.underlying}` : `ncc${v.underlying}`,
       underlying: d.tokens[v.underlying]!,
@@ -358,7 +392,7 @@ function zero(p: AbiParameter): unknown {
 }
 
 /** One eth_call: the return data, or the revert data it fails with. */
-function call(to: string, data: Hex, w: MockWorld): { ok: true; data: Hex } | { ok: false; data: Hex } {
+function call(to: string, data: Hex, w: MockState): { ok: true; data: Hex } | { ok: false; data: Hex } {
   const k = kindOf(to);
   if (!k) return { ok: false, data: '0x' };
   const { functionName, args = [] } = decodeFunctionData({ abi: k.abi, data });
@@ -381,7 +415,7 @@ function call(to: string, data: Hex, w: MockWorld): { ok: true; data: Hex } | { 
 }
 
 /** viem's deployless call: the wrapper's creation code with (code, data) as constructor arguments. */
-function deployless(input: Hex, w: MockWorld): Hex {
+function deployless(input: Hex, w: MockState): Hex {
   const args = `0x${input.slice(deploylessCallViaBytecodeBytecode.length)}` as Hex;
   const [, inner] = decodeAbiParameters([{ type: 'bytes' }, { type: 'bytes' }], args);
   const { args: a = [] } = decodeFunctionData({ abi: vaultQuoteLensAbi, data: inner });
@@ -389,7 +423,7 @@ function deployless(input: Hex, w: MockWorld): Hex {
   const v = d.vaults[vaultIndex(vault)];
   const put = v?.type === 'putWrite';
   const exceeds = encodeErrorResult({ abi: novationErrorsAbi as Abi, errorName: 'ExceedsShort', args: [qty, 0n] });
-  if (v && closedNvda(w, d.tokens[v.underlying]!) !== undefined) {
+  if (v && quotesNothing(w, v.underlying)) {
     const closed = encodeErrorResult({ abi: novationErrorsAbi as Abi, errorName: 'VaultNotLive' });
     return encodeFunctionResult({ abi: vaultQuoteLensAbi, functionName: 'quotes', result: [false, ids.map(() => ({ ask: 0n, bid: 0n, askError: closed, bidError: closed }))] });
   }
@@ -425,7 +459,52 @@ function block(n: bigint) {
   };
 }
 
-function answer(req: Rpc, w: MockWorld): object {
+/** A transaction the wallet sent, mined in the latest block. */
+function minedTx(hash: Hex, t: { from: Address; to: Address; input: Hex }) {
+  return {
+    hash,
+    nonce: '0x0',
+    blockHash: block(BLOCK).hash,
+    blockNumber: numberToHex(BLOCK),
+    transactionIndex: '0x0',
+    from: t.from,
+    to: t.to,
+    value: '0x0',
+    gas: '0x30000',
+    gasPrice: '0x989680',
+    maxFeePerGas: '0x989680',
+    maxPriorityFeePerGas: '0x0',
+    input: t.input,
+    type: '0x2',
+    chainId: '0xb626',
+    accessList: [],
+    v: '0x0',
+    yParity: '0x0',
+    r: '0x1',
+    s: '0x1',
+  };
+}
+
+function minedReceipt(hash: Hex, t: { from: Address; to: Address }) {
+  return {
+    transactionHash: hash,
+    transactionIndex: '0x0',
+    blockHash: block(BLOCK).hash,
+    blockNumber: numberToHex(BLOCK),
+    from: t.from,
+    to: t.to,
+    cumulativeGasUsed: '0x5208',
+    gasUsed: '0x5208',
+    effectiveGasPrice: '0x989680',
+    contractAddress: null,
+    logs: [],
+    logsBloom: `0x${'0'.repeat(512)}`,
+    status: '0x1',
+    type: '0x2',
+  };
+}
+
+function answer(req: Rpc, w: MockState): object {
   const ok = (result: unknown) => ({ jsonrpc: '2.0', id: req.id, result });
   const fail = (data: Hex) => ({ jsonrpc: '2.0', id: req.id, error: { code: 3, message: 'execution reverted', data } });
   switch (req.method) {
@@ -441,9 +520,28 @@ function answer(req: Rpc, w: MockWorld): object {
     }
     case 'eth_getLogs':
       return ok([]);
-    case 'eth_getTransactionByHash':
-    case 'eth_getTransactionReceipt':
-      return ok(null);
+    case 'eth_getTransactionByHash': {
+      const t = w.txs.get(req.params?.[0] as Hex);
+      return ok(t ? minedTx(req.params?.[0] as Hex, t) : null);
+    }
+    case 'eth_getTransactionReceipt': {
+      const t = w.txs.get(req.params?.[0] as Hex);
+      return ok(t ? minedReceipt(req.params?.[0] as Hex, t) : null);
+    }
+    case 'eth_estimateGas':
+      return ok('0x30000');
+    case 'eth_sendTransaction': {
+      // from the injected wallet: mined at once; a vol sync on NVDA brings it up to its feed
+      const tx = (req.params?.[0] ?? {}) as { from: Address; to: Address; data?: Hex; input?: Hex };
+      const input = (tx.data ?? tx.input ?? '0x') as Hex;
+      const k = kindOf(tx.to);
+      const fn = k ? decodeFunctionData({ abi: k.abi, data: input }).functionName : 'unknown';
+      w.sent.push(`${k?.kind ?? tx.to}.${fn}`);
+      if (k?.kind === 'hub' && (fn === 'syncVol' || fn === 'syncAndRebaseVol')) w.synced = true;
+      const hash = keccak256(toHex(`mock-tx-${w.sent.length}`));
+      w.txs.set(hash, { from: tx.from, to: tx.to, input });
+      return ok(hash);
+    }
     case 'eth_call': {
       const tx = (req.params?.[0] ?? {}) as { to?: string; data?: Hex; input?: Hex };
       const data = (tx.data ?? tx.input ?? '0x') as Hex;
@@ -466,7 +564,8 @@ function answer(req: Rpc, w: MockWorld): object {
 }
 
 /** Routes the testnet RPC (and the block explorer's API) to the mock for this page. */
-export async function mockChain(page: Page, w: MockWorld = {}) {
+export async function mockChain(page: Page, world: MockWorld = {}): Promise<MockState> {
+  const w: MockState = { ...world, synced: false, sent: [], txs: new Map() };
   await page.route(
     (url) => url.hostname === RPC_HOST,
     async (route: Route) => {
@@ -479,6 +578,7 @@ export async function mockChain(page: Page, w: MockWorld = {}) {
     (url) => url.hostname === EXPLORER_HOST,
     (route) => route.fulfill({ status: 404, body: '{}' }),
   );
+  return w;
 }
 
 /** A throwaway maker key derived for these tests; it holds nothing anywhere. */
@@ -515,22 +615,35 @@ export async function mockRelay(page: Page, price = 1.75, opts: { claimedPremium
   });
 }
 
-/** An injected EIP-1193 wallet for `address` on RH testnet. It connects and reports its chain; it never signs. */
+/**
+ * An injected EIP-1193 wallet for `address` on RH testnet. It connects and reports its chain; it signs
+ * nothing, and hands each transaction to the mock chain as it is (eth_sendTransaction).
+ */
 export async function injectWallet(page: Page, address: Address) {
-  await page.addInitScript((account) => {
-    const w = window as unknown as { ethereum: unknown };
-    w.ethereum = {
-      isMetaMask: true,
-      request: async ({ method }: { method: string }) => {
-        if (method === 'eth_requestAccounts' || method === 'eth_accounts') return [account];
-        if (method === 'eth_chainId') return '0xb626';
-        if (method === 'net_version') return '46630';
-        if (method === 'wallet_requestPermissions' || method === 'wallet_getPermissions') return [{ parentCapability: 'eth_accounts' }];
-        if (method === 'wallet_switchEthereumChain') return null;
-        throw Object.assign(new Error(`test wallet: ${method} not supported`), { code: 4200 });
-      },
-      on: () => {},
-      removeListener: () => {},
-    };
-  }, address);
+  await page.addInitScript(
+    ({ account, rpc }) => {
+      const w = window as unknown as { ethereum: unknown };
+      w.ethereum = {
+        isMetaMask: true,
+        request: async ({ method, params }: { method: string; params?: unknown[] }) => {
+          if (method === 'eth_sendTransaction') {
+            const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method, params });
+            const r = await fetch(rpc, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+            const j = (await r.json()) as { result?: string; error?: { code: number; message: string } };
+            if (j.error) throw Object.assign(new Error(j.error.message), { code: j.error.code });
+            return j.result;
+          }
+          if (method === 'eth_requestAccounts' || method === 'eth_accounts') return [account];
+          if (method === 'eth_chainId') return '0xb626';
+          if (method === 'net_version') return '46630';
+          if (method === 'wallet_requestPermissions' || method === 'wallet_getPermissions') return [{ parentCapability: 'eth_accounts' }];
+          if (method === 'wallet_switchEthereumChain') return null;
+          throw Object.assign(new Error(`test wallet: ${method} not supported`), { code: 4200 });
+        },
+        on: () => {},
+        removeListener: () => {},
+      };
+    },
+    { account: address, rpc: `https://${RPC_HOST}` },
+  );
 }

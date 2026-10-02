@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { closedFor, closedSession, reopensAt, untilReopen, vaultClosedText, volStatus, volSyncText } from '@/lib/market-state';
+import {
+  VOL_SYNC_TXS,
+  closedFor,
+  closedSession,
+  reopensAt,
+  untilReopen,
+  vaultClosedText,
+  vaultNeedsVolSync,
+  vaultVolText,
+  volStatus,
+  volSyncText,
+  volSyncedText,
+} from '@/lib/market-state';
+import type { Session } from '@/lib/client/types';
 import { baseSession, fmtEt } from '@/lib/nyse';
 
 const et = (iso: string) => Date.parse(iso) / 1000;
@@ -57,5 +70,30 @@ describe('vol sync', () => {
     expect(volStatus('NVDA', 9)).toMatchObject({ ok: false, text: expect.stringMatching(/9 rounds behind.*a liquidation folds 8 at most/) });
     expect(volStatus('NVDA', 65)).toMatchObject({ ok: false, text: expect.stringMatching(/withdrawals, opening trades and liquidations are refused/) });
     expect(volStatus('NVDA', null)).toMatchObject({ ok: false, text: expect.stringMatching(/^NVDA's feed moved to a new aggregator.*syncAndRebaseVol/) });
+  });
+});
+
+describe('a vault waiting for its vol', () => {
+  const v = (session: Session, volBehind: number | null | undefined, live = false) => ({ live, session, volBehind });
+
+  it('offers a sync only while the market is open and the vol is past what the vault folds itself', () => {
+    expect(vaultNeedsVolSync(v('REGULAR', 65))).toBe(true);
+    expect(vaultNeedsVolSync(v('EXTENDED', 200))).toBe(true);
+    // a feed migration waits for syncAndRebaseVol
+    expect(vaultNeedsVolSync(v('REGULAR', null))).toBe(true);
+    // a vault folds up to 64 rounds itself, and a live one needs nothing
+    expect(vaultNeedsVolSync(v('REGULAR', 64))).toBe(false);
+    expect(vaultNeedsVolSync(v('REGULAR', 200, true))).toBe(false);
+    // closed or halted: a sync would not make it quote
+    for (const s of ['WEEKEND', 'HOLIDAY', 'HALTED'] as const) expect(vaultNeedsVolSync(v(s, 200))).toBe(false);
+    // the demo has no vol state
+    expect(vaultNeedsVolSync(v('REGULAR', undefined))).toBe(false);
+  });
+
+  it('says why, and how many transactions a sync may take', () => {
+    expect(vaultVolText('NVDA', 120)).toBe('The NVDA vol is 120 rounds behind its feed, more than one sync folds.');
+    expect(vaultVolText('NVDA', null)).toBe('The NVDA feed moved to a new aggregator, and its vol waits for syncAndRebaseVol.');
+    expect(VOL_SYNC_TXS).toBe('up to 4 transactions');
+    expect(volSyncedText('TSLA')).toBe('Vol of TSLA synced: check the updated quote and sign again.');
   });
 });
