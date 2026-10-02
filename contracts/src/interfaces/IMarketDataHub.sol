@@ -17,7 +17,7 @@ interface IMarketDataHub {
         external
         view
         returns (uint256 price);
-    /// @notice Oracle-only last resort 7 days after expiry: the last print at or before the close, proven as in settlementPrice, without the lag bound.
+    /// @notice Oracle-only last resort 7 days after expiry: the last print at or before the close, proven as in settlementPrice, without the lag bound; refused while the first post-close print is in band (the fallback applies).
     function settlementPriceLastResort(address u, uint64 expiry, uint80 roundIdHint)
         external
         view

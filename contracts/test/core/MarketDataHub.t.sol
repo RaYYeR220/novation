@@ -687,6 +687,42 @@ contract MarketDataHubTest is Test {
         assertEq(hub.settlementPriceFallback(address(token), uint64(EXPIRY), _roundId(2, 1)), 155e18);
     }
 
+    /// Review PoC (B, R-1): a stale pre-close print (600) and an in-band first post-close print (540).
+    /// The fallback settles at 540 from 72 hours on; the last resort used to also settle at 600 from
+    /// day 7, so whoever called first chose the price. It now refuses while the fallback applies.
+    function test_lastResortRefusedWhileFallbackApplies() public {
+        feed.pushRound(600e8, EXPIRY - 2 days); // (1,1) stale, in band
+        feed.pushRound(540e8, EXPIRY + 10 hours); // (1,2) first after, in band
+        vm.warp(EXPIRY + 7 days);
+        assertEq(hub.settlementPriceFallback(address(token), uint64(EXPIRY), _roundId(1, 2)), 540e18);
+        vm.expectRevert(MarketDataHub.FallbackApplies.selector);
+        hub.settlementPriceLastResort(address(token), uint64(EXPIRY), _roundId(1, 1));
+    }
+
+    /// The same across an aggregator migration: round 1 of the next phase is the first print after
+    /// the close.
+    function test_lastResortRefusedWhileFallbackAppliesAcrossPhases() public {
+        feed.pushRound(600e8, EXPIRY - 2 days); // (1,1) stale, last of phase 1
+        feed.setPhase(2);
+        feed.pushRound(540e8, EXPIRY + 10 hours); // (2,1)
+        vm.warp(EXPIRY + 7 days);
+        assertEq(hub.settlementPriceFallback(address(token), uint64(EXPIRY), _roundId(2, 1)), 540e18);
+        vm.expectRevert(MarketDataHub.FallbackApplies.selector);
+        hub.settlementPriceLastResort(address(token), uint64(EXPIRY), _roundId(1, 1));
+    }
+
+    /// With an implausible first post-close print the fallback can't settle, and the last resort
+    /// does, at the last in-band pre-close print.
+    function test_lastResortWhenFirstAfterImplausible() public {
+        feed.pushRound(600e8, EXPIRY - 2 days);
+        feed.pushRound(1e8, EXPIRY + 10 hours); // $1
+        feed.pushRound(540e8, EXPIRY + 11 hours); // later in-band prints don't count
+        vm.warp(EXPIRY + 7 days);
+        vm.expectRevert(MarketDataHub.ImplausiblePrice.selector);
+        hub.settlementPriceFallback(address(token), uint64(EXPIRY), _roundId(1, 2));
+        assertEq(hub.settlementPriceLastResort(address(token), uint64(EXPIRY), _roundId(1, 1)), 600e18);
+    }
+
     function test_fallbackRejectsImplausibleFirstAfter() public {
         feed.pushRound(150e8, EXPIRY - 2 days);
         feed.pushRound(1e8, EXPIRY + 10 hours); // $1

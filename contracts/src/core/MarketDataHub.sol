@@ -33,6 +33,7 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
     error NotInitialized();
     error NoPhaseChange();
     error PhaseNotExhausted();
+    error FallbackApplies();
 
     uint256 private constant FALLBACK_DELAY = 72 hours;
     uint256 private constant LAST_RESORT_DELAY = 7 days;
@@ -470,7 +471,9 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
     /// feed that stopped printing well before the close (and may never print again), or whose
     /// first print after a stale close is implausible, then still settles, at its last in-band
     /// pre-close print, and can't leave the expiry (every claim on it, and the accounts holding it)
-    /// frozen for good. The price must lie in the plausibility band.
+    /// frozen for good. The price must lie in the plausibility band. Refused (FallbackApplies)
+    /// while the first print after the close is in the band: then settlementPrice or the 72-hour
+    /// fallback gives the price, and the last resort never offers a second one.
     function settlementPriceLastResort(address u, uint64 expiry, uint80 hint) external view returns (uint256 price) {
         if (!NyseCalendar.isWeeklyExpiry(expiry)) revert NotExpiry();
         if (block.timestamp < uint256(expiry) + LAST_RESORT_DELAY) revert TooEarly();
@@ -479,7 +482,18 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
         (int256 answer, uint256 updatedAt) = _round(feed, hint);
         if (answer <= 0 || updatedAt == 0 || updatedAt > expiry) revert BadHint();
         _requireLastRound(feed, expiry, hint);
+        (int256 nextAnswer, uint256 nextAt) = _firstAfter(feed, hint);
+        if (nextAt != 0 && nextAnswer > 0 && _inBand(_scale(feed, nextAnswer), p)) revert FallbackApplies();
         price = _bandedPrice(feed, answer, p);
+    }
+
+    /// @dev The round after `hint` (proven the last at or before the close): the next one in its
+    /// phase, or round 1 of the next phase once a later phase is live. Zeros if there is none yet.
+    function _firstAfter(IAggregatorV3 feed, uint80 hint) private view returns (int256 answer, uint256 updatedAt) {
+        (answer, updatedAt) = _round(feed, hint + 1);
+        if (updatedAt != 0) return (answer, updatedAt);
+        (uint80 latestId,,,,) = feed.latestRoundData();
+        if ((latestId >> 64) > (hint >> 64)) return _round(feed, (((hint >> 64) + 1) << 64) | 1);
     }
 
     /// @notice Oracle-only escape hatch, 72h after expiry. firstAfter must be the first round that
