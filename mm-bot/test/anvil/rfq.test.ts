@@ -29,6 +29,9 @@ import {
   simulateDeposit,
   simulateMint,
   simulatePushRound,
+  simulateSyncVol,
+  getUnderlyingParams,
+  getVolStale,
   simulateRfqFill,
   verifyQuote,
   WAD,
@@ -303,5 +306,29 @@ d('RFQ maker on a local chain', () => {
     const r = await get(handler, '/quotes?series=99999&side=buy');
     expect(r.status).toBe(422);
     expect(((await r.json()) as { refusals: { code: string }[] }).refusals[0]!.code).toBe('UnknownSeries');
+  });
+
+  it('stops quoting while the hub reads the mark vol stale (hub.volStale), and quotes again once it is synced', async () => {
+    const m = new Maker({ ctx: L.ctx, signer: makerW.account, makerId, marketCacheMs: 0 });
+    const feed = L.ctx.deployment.feeds.NVDA as Address;
+    // the call on the later listed expiry: still quotable two days on
+    const later = (await listSeries(L.ctx, { underlying: NVDA, liveAt: (await chainNow()) + 4 * 86400 })).filter((s) => s.isCall).sort((a, b) => b.expiry - a.expiry)[0]!;
+    const px = 190n * 10n ** 8n;
+    await send(L, takerW.wallet, (await simulatePushRound(L.ctx, takerW.account, feed, px, BigInt(await chainNow()))).request);
+    // a print nobody has folded in yet is not stale: the maker quotes at the current estimate
+    expect(await getVolStale(L.ctx, NVDA)).toBe(false);
+    expect((await m.quote({ seriesId: later.id, side: 'buy', qty: WAD })).ok).toBe(true);
+    // it sits unfolded for longer than volStaleness (a new print keeps the price itself fresh)
+    const { volStaleness } = await getUnderlyingParams(L.ctx, NVDA);
+    await L.rpc('evm_increaseTime', [volStaleness + 60]);
+    await L.rpc('evm_mine');
+    await send(L, takerW.wallet, (await simulatePushRound(L.ctx, takerW.account, feed, px, BigInt(await chainNow()))).request);
+    expect(await getVolStale(L.ctx, NVDA)).toBe(true);
+    const r = await m.quote({ seriesId: later.id, side: 'buy', qty: WAD });
+    expect(r.ok ? 'quoted' : r.refusal.code).toBe('StaleVol');
+    // anyone syncs it, and quotes resume
+    await send(L, takerW.wallet, (await simulateSyncVol(L.ctx, takerW.account, NVDA)).request);
+    expect(await getVolStale(L.ctx, NVDA)).toBe(false);
+    expect((await m.quote({ seriesId: later.id, side: 'buy', qty: WAD })).ok).toBe(true);
   });
 });

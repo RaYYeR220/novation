@@ -121,7 +121,7 @@ export interface MarketView {
   maxStale: number;
   /** The hub's mark vol (WAD). */
   markVol: bigint;
-  /** The hub's vol state is older than volStaleness (markVol has fallen back to the cap). */
+  /** hub.volStale: markVol has fallen back to volCap (a printed round sat unfolded for volStaleness). */
   volStale: boolean;
   /** Annual rate (WAD, signed). */
   rate: bigint;
