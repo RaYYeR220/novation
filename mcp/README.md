@@ -137,21 +137,22 @@ The run on Robinhood Chain testnet, abridged:
 
 ```text
 > risk_budget {}
-< budget 1.53888 USDG, used 0, headroom 1.53888 USDG; premium cap 25 USDG; NVDA allowed until 2026-10-08T17:37:38Z
-> what_if_margin {"series_id":5,"qty":1}
-< PASSES: initial margin 0 -> 1.025784 USDG, budget 1.53888 USDG
-> buy_from_vault {"series_id":5,"qty":1}
-< FILLED: buy 1 NVDA 2026-10-02 255 C for 1.256553 USDG (fee 0.069068); initial margin 1.004617 of budget 1.53888 USDG; tx 0x0307e2d5...
-> buy_from_vault {"series_id":5,"qty":3}
-< REFUSED (not sent): AgentRiskBudgetExceeded: worst-case loss after the trade 4.018316 USDG > the agent's budget 1.53888 USDG. ...
-> buy_from_vault {"series_id":5,"qty":3,"send_even_if_refused":true}
-< REFUSED ON-CHAIN: AgentRiskBudgetExceeded: worst-case loss after the trade 4.018164 USDG > the agent's budget 1.53888 USDG. The transaction was mined and reverted: 0x2aa5a4ce...
-> explain_refusal {"tx_hash":"0x2aa5a4ce..."}
-< 0x2aa5a4ce... was refused on-chain: AgentRiskBudgetExceeded: worst-case loss after the trade 4.018164 USDG > the agent's budget 1.53888 USDG
+< budget 0.767935 USDG, used 0, headroom 0.767935 USDG; premium cap 25 USDG; NVDA allowed until 2026-10-09T11:18:13Z
+> what_if_margin {"series_id":129,"qty":1}
+< PASSES: initial margin 0 -> 0.51174 USDG, budget 0.767935 USDG
+> buy_from_vault {"series_id":129,"qty":1}
+< FILLED: buy 1 NVDA 2026-10-02 250 C for 0.67934 USDG (fee 0.070507); initial margin 0.509432 of budget 0.767935 USDG; tx 0xf1791085...
+> buy_from_vault {"series_id":129,"qty":3}
+< REFUSED (not sent): AgentRiskBudgetExceeded: worst-case loss after the trade 2.037482 USDG > the agent's budget 0.767935 USDG. ...
+> buy_from_vault {"series_id":129,"qty":3,"send_even_if_refused":true}
+< REFUSED ON-CHAIN: AgentRiskBudgetExceeded: worst-case loss after the trade 2.037235 USDG > the agent's budget 0.767935 USDG. The transaction was mined and reverted: 0x43941aae...
+> explain_refusal {"tx_hash":"0x43941aae..."}
+< 0x43941aae... was refused on-chain: AgentRiskBudgetExceeded: worst-case loss after the trade 2.037235 USDG > the agent's budget 0.767935 USDG
 ```
 
-- In-budget fill: [`0x0307e2d54fd130e1858ce85cc1dfd72e37bedc0434f9429abbe213f8388b36fc`](https://explorer.testnet.chain.robinhood.com/tx/0x0307e2d54fd130e1858ce85cc1dfd72e37bedc0434f9429abbe213f8388b36fc)
-- Over-budget buy, mined as a revert: [`0x2aa5a4ceaf099d14136d921b29b5bc2bce8b52f618b25e4935b04494210f1064`](https://explorer.testnet.chain.robinhood.com/tx/0x2aa5a4ceaf099d14136d921b29b5bc2bce8b52f618b25e4935b04494210f1064)
+- In-budget fill: [`0xf17910855569d9d6fed1b5ef3676ac48599e955b3dc889ee7bdc5d7d1f109542`](https://explorer.testnet.chain.robinhood.com/tx/0xf17910855569d9d6fed1b5ef3676ac48599e955b3dc889ee7bdc5d7d1f109542)
+- Over-budget buy, mined as a revert: [`0x43941aae0c18d7d004d052fd4baa72ccbb74fddd9ffe0d9e6d4dcb57407b42fe`](https://explorer.testnet.chain.robinhood.com/tx/0x43941aae0c18d7d004d052fd4baa72ccbb74fddd9ffe0d9e6d4dcb57407b42fe)
+- The same session on the previous core deployment (still on-chain): in-budget fill [`0x0307e2d5…`](https://explorer.testnet.chain.robinhood.com/tx/0x0307e2d54fd130e1858ce85cc1dfd72e37bedc0434f9429abbe213f8388b36fc), mined refusal [`0x2aa5a4ce…`](https://explorer.testnet.chain.robinhood.com/tx/0x2aa5a4ceaf099d14136d921b29b5bc2bce8b52f618b25e4935b04494210f1064)
 
 ## Tests
 

@@ -91,19 +91,21 @@ Robinhood Chain testnet, chain id 46630. The machine-readable copy is [`contract
 | Risk kernel (Stylus) | [`0xAeE1D4F45AF43a9C4d52ADa65d423b1c0e67f0fd`](https://explorer.testnet.chain.robinhood.com/address/0xAeE1D4F45AF43a9C4d52ADa65d423b1c0e67f0fd) | deployed, activated |
 | KernelReference (Solidity twin) | [`0xB7d9232c8ff46b4950d85ed639908c86C08750C6`](https://explorer.testnet.chain.robinhood.com/address/0xB7d9232c8ff46b4950d85ed639908c86C08750C6) | deployed |
 | Mock USDG, NVDA, TSLA, AAPL, SPY and their feeds | see [docs/deployments.md](docs/deployments.md) | deployed, testnet only ([MOCKS.md](MOCKS.md)) |
-| RiskParams | [`0x5Ec7F77cee13E6c246F80AAaa466992210e17F6f`](https://explorer.testnet.chain.robinhood.com/address/0x5Ec7F77cee13E6c246F80AAaa466992210e17F6f) | deployed, setup finalized |
-| MarketDataHub | [`0x2BFFfa823cFcCfd703793320883134aC009a5a51`](https://explorer.testnet.chain.robinhood.com/address/0x2BFFfa823cFcCfd703793320883134aC009a5a51) | deployed |
-| SeriesRegistry | [`0x4A8bD72CD6e2Cd743c2f103447B47cFf0B22cC77`](https://explorer.testnet.chain.robinhood.com/address/0x4A8bD72CD6e2Cd743c2f103447B47cFf0B22cC77) | deployed, 128 series listed |
-| InsuranceFund | [`0x9826E96ec14Ff888626E4c6Cf44224925671D1fF`](https://explorer.testnet.chain.robinhood.com/address/0x9826E96ec14Ff888626E4c6Cf44224925671D1fF) | deployed, funded with 100,000 mock USDG |
-| Clearinghouse (with MarginLogic, TradeLogic, SettlementLogic, AuctionHookLogic) | [`0xe799DF9b96a4809c411D3F90f67C5261a245ABB2`](https://explorer.testnet.chain.robinhood.com/address/0xe799DF9b96a4809c411D3F90f67C5261a245ABB2) | deployed, setup finalized |
-| AuctionHouse | [`0x0a7590A4C07604D738ab3DDe18306e3026a7Cf0B`](https://explorer.testnet.chain.robinhood.com/address/0x0a7590A4C07604D738ab3DDe18306e3026a7Cf0B) | deployed |
-| RfqVenue | [`0x56562573b74A6cD6ca96cfb794A63625A48edf08`](https://explorer.testnet.chain.robinhood.com/address/0x56562573b74A6cD6ca96cfb794A63625A48edf08) | deployed |
-| CoveredCallVault NVDA | [`0x5e36BbAc665244f623cf8195b7a753Ad61D8bacA`](https://explorer.testnet.chain.robinhood.com/address/0x5e36BbAc665244f623cf8195b7a753Ad61D8bacA) | deployed, seeded |
-| CoveredCallVault TSLA | [`0x684Fc5aE66267E8184704f6A3cE393f0c18B1095`](https://explorer.testnet.chain.robinhood.com/address/0x684Fc5aE66267E8184704f6A3cE393f0c18B1095) | deployed, seeded |
-| PutWriteVault NVDA | [`0x691E99fb5498570F4A0AB8a74aAAE3361c0E0a3a`](https://explorer.testnet.chain.robinhood.com/address/0x691E99fb5498570F4A0AB8a74aAAE3361c0E0a3a) | deployed, seeded |
-| TimelockController (60 s on testnet) | [`0x5eb54aa55f3e03b7F50b7aFD22F235FB0e85235F`](https://explorer.testnet.chain.robinhood.com/address/0x5eb54aa55f3e03b7F50b7aFD22F235FB0e85235F) | deployed |
+| RiskParams | [`0x113AbDCd234d00FfEA37D29A31BD1Fb2B035dcf1`](https://explorer.testnet.chain.robinhood.com/address/0x113AbDCd234d00FfEA37D29A31BD1Fb2B035dcf1) | deployed, setup finalized |
+| MarketDataHub | [`0xEcD2baaE3C13b526ffdBB8a8388609442C84d993`](https://explorer.testnet.chain.robinhood.com/address/0xEcD2baaE3C13b526ffdBB8a8388609442C84d993) | deployed |
+| SeriesRegistry | [`0x9C99381dE80518350fEaA09db17a064eD2180b7b`](https://explorer.testnet.chain.robinhood.com/address/0x9C99381dE80518350fEaA09db17a064eD2180b7b) | deployed, 128 series listed |
+| InsuranceFund | [`0x531394f5a5D0c3D9e54d258c8825Fa70Fd645429`](https://explorer.testnet.chain.robinhood.com/address/0x531394f5a5D0c3D9e54d258c8825Fa70Fd645429) | deployed, funded with 100,000 mock USDG |
+| Clearinghouse (with MarginLogic, TradeLogic, SettlementLogic, AuctionHookLogic) | [`0x0b0F4e67DcA3B846859Af452576e8E09316D1949`](https://explorer.testnet.chain.robinhood.com/address/0x0b0F4e67DcA3B846859Af452576e8E09316D1949) | deployed, setup finalized |
+| AuctionHouse | [`0x4a132D6f83d9db88092A3D1F8B5985B30fd99Ad9`](https://explorer.testnet.chain.robinhood.com/address/0x4a132D6f83d9db88092A3D1F8B5985B30fd99Ad9) | deployed |
+| RfqVenue | [`0x1aFD874fdd3914fB6958F282769dAC546993ED82`](https://explorer.testnet.chain.robinhood.com/address/0x1aFD874fdd3914fB6958F282769dAC546993ED82) | deployed |
+| CoveredCallVault NVDA | [`0xCCF205358eF9bfd97335f0D7bD5240487bB64865`](https://explorer.testnet.chain.robinhood.com/address/0xCCF205358eF9bfd97335f0D7bD5240487bB64865) | deployed, seeded |
+| CoveredCallVault TSLA | [`0xF95EAbF20EE1D9034ABa1b240D0242B75e645BD5`](https://explorer.testnet.chain.robinhood.com/address/0xF95EAbF20EE1D9034ABa1b240D0242B75e645BD5) | deployed, seeded |
+| PutWriteVault NVDA | [`0x0FEee896be42E954c2881668da9035efc5dB0947`](https://explorer.testnet.chain.robinhood.com/address/0x0FEee896be42E954c2881668da9035efc5dB0947) | deployed, seeded |
+| TimelockController (60 s on testnet) | [`0xf60F96DF709B2dD958519329b4ab488C27e178b5`](https://explorer.testnet.chain.robinhood.com/address/0xf60F96DF709B2dD958519329b4ab488C27e178b5) | deployed |
 
 The end-to-end run on this deployment (deposits, a vault buy and a vault deposit, an RFQ fill, an agent budget, a withdrawal blocked by margin and an opening blocked by a corporate action, with every transaction hash) is in [`tools/e2e/out/46630.json`](tools/e2e/out/46630.json).
+
+Previous core deployment (2026-10-01, before the contract polish), still on-chain and settling its Oct 2 positions: Clearinghouse [`0xe799…ABB2`](https://explorer.testnet.chain.robinhood.com/address/0xe799DF9b96a4809c411D3F90f67C5261a245ABB2), listed under `superseded` in [`contracts/deployments/46630.json`](contracts/deployments/46630.json). Its proofs stay valid: [agent over budget](https://explorer.testnet.chain.robinhood.com/tx/0xa411c8e1173e78c41e6c2f12611d553f54583cb1203eaf651bc9bc725e2c1b9a), [withdrawal below IM](https://explorer.testnet.chain.robinhood.com/tx/0xc947dc28bb91b5499f88ac89911507758d7447db5666720a8eb7d86dd77c3094), [corporate-action halt](https://explorer.testnet.chain.robinhood.com/tx/0x7756c29f080df6458613f129e8aa9b9dc5adadc3c098bb31edd04ecacb447c46), [MCP agent refusal](https://explorer.testnet.chain.robinhood.com/tx/0x2aa5a4ceaf099d14136d921b29b5bc2bce8b52f618b25e4935b04494210f1064), [mm-bot RFQ fill](https://explorer.testnet.chain.robinhood.com/tx/0x883c803d27356c5d1a6d368090fc845b0d8a3848539cfbb85ab7c9d62e3988c5).
 
 ## Agents
 
@@ -111,7 +113,7 @@ An owner can give an AI agent its own key with an on-chain risk budget. `grantAg
 
 [`mcp/`](mcp/README.md) is an MCP server that lets any AI agent trade through that key. It reads markets, option chains, vault quotes, what-if margin, the portfolio with its scenario grid, and the budget. It buys and sells through the vaults and fills RFQ quotes. Every trade is simulated first, so an over-budget ticket comes back as a structured refusal, for example `AgentRiskBudgetExceeded` with the worst-case loss and the budget, and nothing is sent. The server holds only the agent key and refuses to start unless the chain has a live policy for it.
 
-On testnet, an agent driving the server got a budget of 1.54 USDG (1.5x the initial margin of one NVDA call). It bought one call inside the budget ([`0x0307e2d5…`](https://explorer.testnet.chain.robinhood.com/tx/0x0307e2d54fd130e1858ce85cc1dfd72e37bedc0434f9429abbe213f8388b36fc)). A ticket for three more was refused in simulation and not sent. Sent anyway to leave proof, that ticket reverted on-chain with `AgentRiskBudgetExceeded` (worst-case loss 4.02 USDG, budget 1.54 USDG): [`0x2aa5a4ce…`](https://explorer.testnet.chain.robinhood.com/tx/0x2aa5a4ceaf099d14136d921b29b5bc2bce8b52f618b25e4935b04494210f1064). The transcript and every hash are in [`mcp/out/46630.json`](mcp/out/46630.json).
+On testnet, an agent driving the server got a budget of 0.77 USDG (1.5x the initial margin of one NVDA call). It bought one call inside the budget ([`0xf1791085…`](https://explorer.testnet.chain.robinhood.com/tx/0xf17910855569d9d6fed1b5ef3676ac48599e955b3dc889ee7bdc5d7d1f109542)). A ticket for three more was refused in simulation and not sent. Sent anyway to leave proof, that ticket reverted on-chain with `AgentRiskBudgetExceeded` (worst-case loss 2.04 USDG, budget 0.77 USDG): [`0x43941aae…`](https://explorer.testnet.chain.robinhood.com/tx/0x43941aae0c18d7d004d052fd4baa72ccbb74fddd9ffe0d9e6d4dcb57407b42fe). The transcript and every hash are in [`mcp/out/46630.json`](mcp/out/46630.json).
 
 ## Security model
 
