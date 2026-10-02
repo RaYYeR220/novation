@@ -9,6 +9,7 @@ import {Payoff} from "./Payoff.sol";
 import {AccountState} from "../../interfaces/IClearinghouse.sol";
 import {UnderlyingParams, GlobalParams} from "../../interfaces/IRiskParams.sol";
 import {FixedPointMath as F} from "../../libraries/FixedPointMath.sol";
+import {NyseCalendar} from "../../libraries/NyseCalendar.sol";
 import {
     Position,
     Series,
@@ -50,8 +51,11 @@ library MarginLogic {
 
     uint256 private constant MAX_SHOCK_RANGE = 0.9e18;
     /// @notice How long a collateral token must have been seen without a price, its feed printing
-    /// no new round meanwhile, before the socialization dust test counts it as 0 (the same 72
-    /// hours as the settlement price fallback).
+    /// no new round meanwhile, before the socialization dust test counts it as 0: 72 hours of
+    /// market time (the NYSE 24/5 window, as the auction clock counts it). Closed hours don't
+    /// count: a feed prints nothing over a weekend or holiday and a token is routinely HALTED at
+    /// the reopen until its first print, so a mark taken before a long closure must not complete
+    /// across it.
     uint256 internal constant OUTAGE_WRITE_OFF = 72 hours;
     /// @notice A feed that can't be read at all has no round to tell one outage from the next, so
     /// its outage counts as continuous only while markUnpriced sees it at least this often.
@@ -103,8 +107,9 @@ library MarginLogic {
             address t = toks[i];
             PriceOutage memory o = $.outages[t];
             uint80 round = _feedRound(d, t);
-            bool writtenOff = o.since != 0 && block.timestamp >= o.since + OUTAGE_WRITE_OFF && o.round == round
-                && (round != 0 || block.timestamp <= o.seen + OUTAGE_OBSERVE);
+            bool writtenOff = o.since != 0 && o.round == round
+                && (round != 0 || block.timestamp <= o.seen + OUTAGE_OBSERVE)
+                && NyseCalendar.tradableSeconds(o.since, block.timestamp, OUTAGE_WRITE_OFF) >= OUTAGE_WRITE_OFF;
             (bool priced, uint256 spot, Session s) = _spot(d, t, writtenOff);
             if (priced && !(writtenOff && s == Session.HALTED)) {
                 mtm += F.mulWad($.collateral[id][t].toInt256(), spot.toInt256());

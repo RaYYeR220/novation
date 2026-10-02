@@ -272,9 +272,9 @@ library SettlementLogic {
 
     /// @notice Permissionless: records that `token` has no usable price now (no price at all, or
     /// HALTED, as when its feed stops printing), with its feed's latest round. Once that record is
-    /// MarginLogic.OUTAGE_WRITE_OFF (72 hours) old and the feed still shows the same round and no
-    /// usable price, the socialization dust test counts the token as 0, so a feed that never comes
-    /// back can't freeze an expiry's claims for good. A new round restarts the clock; a usable
+    /// MarginLogic.OUTAGE_WRITE_OFF (72 hours of market time) old and the feed still shows the same
+    /// round and no usable price, the socialization dust test counts the token as 0, so a feed
+    /// that never comes back can't freeze an expiry's claims for good. A new round restarts the clock; a usable
     /// price clears the record. A feed that can't be read has no round (0): its outage stays one
     /// outage only while this is called at least every MarginLogic.OUTAGE_OBSERVE (a day), a
     /// longer gap restarts the clock. A call that changes nothing is a no-op.
