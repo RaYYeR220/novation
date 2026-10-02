@@ -64,9 +64,11 @@ library TradeLogic {
 
         // 4. pre-trade state of reducing and agent-acted sides, at the traded underlying's vol
         // synced to the feed's latest round: the "at mark" of the pure-reduction rule must not be
-        // the volCap fallback of an estimate that missed a print. If it can't be made current, no
-        // side gets that exemption.
+        // an estimate that missed a print. If it can't be made current, no side gets that
+        // exemption. Every other underlying of both sides is synced too, for their equity >= IM.
         try d.hub.syncVol(s.underlying) {} catch {}
+        CHS.syncVols(d.hub, tk.id);
+        CHS.syncVols(d.hub, mk.id);
         bool markCurrent = d.hub.volCurrent(s.underlying);
         _snapshot(d, tk);
         _snapshot(d, mk);
@@ -178,16 +180,22 @@ library TradeLogic {
     /// stock's downside as IM (with no deficit such an account takes the fast path, IM 0), more
     /// than the covered book's. Selling a last long (a protective put, say) gets no exemption.
     /// Neither exemption from equity >= IM applies unless the traded underlying's vol is current
-    /// (`markCurrent`): a mark at a stale estimate's volCap fallback is no fair price to reduce at.
+    /// (`markCurrent`): a mark at an estimate that missed a print is no fair price to reduce at.
+    /// And equity >= IM itself counts only at current vol estimates on every underlying the margin
+    /// prices (all synced in step 4): with one still behind, a side that opens reverts
+    /// VolNotCurrent, and a reducing side must pass the pure-reduction rule instead, whose pre and
+    /// post marks of the other underlyings are the same.
     function _checkMargin(Deps memory d, Side memory x, bool markCurrent) private view {
-        AccountState memory st = MarginLogic.accountState(d, x.id);
+        (AccountState memory st, address behind) = MarginLogic.accountStateChecked(d, x.id);
         x.equity = st.equity;
         x.im = st.im;
         x.lastShortClosed = x.delta > 0 && CHS.positionCount(x.id) == 0;
         bool imOk = st.im <= x.preIm || x.lastShortClosed;
         if (x.restricted && !imOk) revert CHErrors.RiskIncreaseNotAllowed(x.id, st.im, x.preIm);
-        if (st.equity >= st.im.toInt256()) return;
+        bool healthy = st.equity >= st.im.toInt256();
+        if (healthy && behind == address(0)) return;
         if (!x.opening && imOk && markCurrent && st.equity + x.feePaid.toInt256() >= x.preEquity) return;
+        if (healthy) revert CHErrors.VolNotCurrent(behind);
         revert CHErrors.InsufficientMargin(x.id, st.equity, st.im);
     }
 

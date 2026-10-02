@@ -164,7 +164,10 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
     }
 
     /// @notice Owner only; blocked while the account owes a deficit. An account with positions
-    /// must still meet initial margin afterwards. Never blocked by a pause.
+    /// must still meet initial margin afterwards, at vol estimates that have folded their feeds'
+    /// latest rounds: every underlying of the account is synced first, and an estimate that is
+    /// still behind (a phase change awaiting syncAndRebaseVol, a backlog longer than one sync)
+    /// reverts VolNotCurrent rather than price the check. Never blocked by a pause.
     function withdraw(uint256 id, address token, uint256 amount, address to) external nonReentrant {
         CHStorage storage $ = CHS.s();
         Account storage a = $.accounts[id];
@@ -179,7 +182,9 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
         else CHS.removeCollateral(id, token, wad);
 
         if (CHS.positionCount(id) != 0) {
-            AccountState memory st = MarginLogic.accountState(_deps(), id);
+            CHS.syncVols(hub, id);
+            (AccountState memory st, address behind) = MarginLogic.accountStateChecked(_deps(), id);
+            if (behind != address(0)) revert CHErrors.VolNotCurrent(behind);
             if (!st.healthy) revert CHErrors.InsufficientMargin(id, st.equity, st.im);
         }
 
@@ -354,6 +359,13 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
 
     /// @notice accountState plus, from the same pass over the book, the live positions (series not
     /// expired) and the expired ones awaiting the registry's settlement price (see positionStatus).
+    /// @notice accountState plus an underlying the margin prices whose vol estimate hasn't folded
+    /// its feed's latest round (address(0) if none): what withdraw and a trade's equity >= IM
+    /// check require to be zero.
+    function accountStateChecked(uint256 id) external view returns (AccountState memory st, address volBehind) {
+        return MarginLogic.accountStateChecked(_deps(), id);
+    }
+
     function liquidationState(uint256 id)
         external
         view
