@@ -86,6 +86,10 @@ export interface MarketStatus {
   ok: boolean;
   markVol: bigint;
   vol: VolState;
+  /** markVol is at volCap because a printed round has sat unfolded for volStaleness (hub.volStale). */
+  volStale?: boolean;
+  /** The vol has folded in the feed's latest round (hub.volCurrent); a liquidation needs it. */
+  volCurrent?: boolean;
   feed: { address: Address; description: string; decimals: number; roundId: bigint; updatedAt: number; answer: bigint };
   /** ERC-8056 scaled UI amount: shares per raw token, WAD. */
   uiMultiplier: bigint;
@@ -178,6 +182,19 @@ export async function getMarkVol(ctx: NovationContext, token: Address): Promise<
   return ctx.client.readContract({ ...h(ctx), functionName: 'markVol', args: [token] });
 }
 
+/**
+ * Whether markVol has fallen back to volCap because the estimate is stale: a round the feed printed
+ * has sat unfolded for longer than volStaleness (true before initVol). Anyone lifts it with syncVol.
+ */
+export async function getVolStale(ctx: NovationContext, token: Address): Promise<boolean> {
+  return ctx.client.readContract({ ...h(ctx), functionName: 'volStale', args: [token] });
+}
+
+/** Whether the vol estimate has folded in the feed's latest round (liquidations require it). */
+export async function getVolCurrent(ctx: NovationContext, token: Address): Promise<boolean> {
+  return ctx.client.readContract({ ...h(ctx), functionName: 'volCurrent', args: [token] });
+}
+
 export async function getVolState(ctx: NovationContext, token: Address): Promise<VolState> {
   const [r2, dt, lastRoundId, lastPrice, lastUpdatedAt, lastPokeTs] = await ctx.client.readContract({
     ...h(ctx),
@@ -206,7 +223,7 @@ export async function getMarket(ctx: NovationContext, token: Address, opts: { no
   const params = await getUnderlyingParams(ctx, token);
   const tok = { address: token, abi: mockStockTokenAbi } as const;
   const feed = { address: params.feed, abi: aggregatorAbi } as const;
-  const [session, spotR, markVol, vol, round, decimals, description, name, sym, ui, ea, paused, oraclePaused, globals, now] =
+  const [session, spotR, markVol, vol, round, decimals, description, name, sym, ui, ea, paused, oraclePaused, globals, now, volStale, volCurrent] =
     await Promise.all([
       getSession(ctx, token),
       getSpot(ctx, token).then(
@@ -226,6 +243,8 @@ export async function getMarket(ctx: NovationContext, token: Address, opts: { no
       maybe(() => c.readContract({ ...tok, functionName: 'oraclePaused' })),
       getGlobals(ctx),
       opts.now !== undefined ? Promise.resolve(opts.now) : c.getBlock().then((b) => Number(b.timestamp)),
+      maybe(() => getVolStale(ctx, token)),
+      maybe(() => getVolCurrent(ctx, token)),
     ]);
 
   const dec = decimals ?? 8;
@@ -262,6 +281,8 @@ export async function getMarket(ctx: NovationContext, token: Address, opts: { no
     ok: session !== 'HALTED',
     markVol: markVol ?? 0n,
     vol,
+    ...(volStale !== undefined ? { volStale } : {}),
+    ...(volCurrent !== undefined ? { volCurrent } : {}),
     feed: {
       address: params.feed,
       description: description ?? '',

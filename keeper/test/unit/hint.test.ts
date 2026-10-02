@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FALLBACK_DELAY, findHint, packRound, type Round, type RoundReader } from '../../src/hint';
+import { FALLBACK_DELAY, findHint, LAST_RESORT_DELAY, packRound, type Round, type RoundReader } from '../../src/hint';
 
 /** A feed like the RH proxy: rounds per phase, missing rounds read as zeros. */
 function feed(phases: Record<number, [answer: number, updatedAt: number][]>, latestPhase = Math.max(...Object.keys(phases).map(Number))): RoundReader & { reads: number } {
@@ -94,6 +94,26 @@ describe('findHint', () => {
     expect(h).toMatchObject({ kind: 'stuck' });
     const ok = await findHint(feed({ 1: [[5, E - 60], [231, E + 60]] }), E, E + FALLBACK_DELAY, opts);
     expect(ok).toMatchObject({ kind: 'ready', method: 'settleExpiryFallback', hint: packRound(1n, 2n) });
+  });
+
+  it('settles a dead feed by the last resort 7 days after the close, at its last pre-close print', async () => {
+    const dead: [number, number][] = [[230, E - LAG - 3600]];
+    expect(await findHint(feed({ 1: dead }), E, E + FALLBACK_DELAY, opts)).toMatchObject({ kind: 'wait', until: E + LAST_RESORT_DELAY });
+    expect(await findHint(feed({ 1: dead }), E, E + LAST_RESORT_DELAY, opts)).toMatchObject({
+      kind: 'ready',
+      method: 'settleExpiryLastResort',
+      proof: 'lastResort',
+      hint: packRound(1n, 1n),
+    });
+  });
+
+  it('takes the last resort when the first post-close print is implausible, and the fallback when it is in the band', async () => {
+    const implausible: [number, number][] = [[230, E - LAG - 10], [9000, E + 60]];
+    expect(await findHint(feed({ 1: implausible }), E, E + FALLBACK_DELAY, opts)).toMatchObject({ kind: 'wait', until: E + LAST_RESORT_DELAY });
+    expect(await findHint(feed({ 1: implausible }), E, E + LAST_RESORT_DELAY, opts)).toMatchObject({ kind: 'ready', method: 'settleExpiryLastResort', hint: packRound(1n, 1n) });
+    // an in-band first print: the fallback applies (the hub refuses the last resort, FallbackApplies)
+    const inBand: [number, number][] = [[230, E - LAG - 10], [231, E + 60]];
+    expect(await findHint(feed({ 1: inBand }), E, E + LAST_RESORT_DELAY, opts)).toMatchObject({ kind: 'ready', method: 'settleExpiryFallback' });
   });
 
   it('is stuck when the feed started after the close', async () => {

@@ -143,6 +143,24 @@ export const auctionHouseAbi = [
   },
   {
     "type": "function",
+    "name": "endDeficitSale",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "expiry",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "endLiquidation",
     "inputs": [
       {
@@ -561,6 +579,17 @@ export const auctionHouseAbi = [
     "type": "error",
     "name": "StillLiquidatable",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "VolNotCurrent",
+    "inputs": [
+      {
+        "name": "underlying",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
   },
   {
     "type": "error",

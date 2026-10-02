@@ -19,6 +19,7 @@ import {
   getAuctionEvents,
   getBlockTimes,
   getCashIndex,
+  getDeployment,
   getClaimable,
   getClaims,
   getDeficit,
@@ -53,6 +54,7 @@ import {
   getVaultHolding,
   getVaultQuotesSynced,
   getVaults,
+  getVolCurrent,
   listSeries,
   mulWad,
   nextWeeklyExpiry,
@@ -61,6 +63,7 @@ import {
   robinhoodChainTestnet,
   scenarioGridFor,
   simulateApprove,
+  simulateCatchUpVol,
   simulateClaimRedeemed,
   simulateClaimRedeemedCash,
   simulateCreateSubaccount,
@@ -101,6 +104,7 @@ import {
 } from '@novation/sdk';
 import { formatUnits, zeroAddress, type Address, type Hash, type Hex, type PublicClient, type WalletClient } from 'viem';
 import { sessionEventCache } from './event-cache';
+import { volSyncText } from '../market-state';
 import gasJson from '../../fixtures/gas.json';
 import type {
   AccountExpiry,
@@ -156,6 +160,8 @@ const RFQ_MIN_LIFETIME = 15;
 const RFQ_MAX_LIFETIME = 600;
 /** Relay silences and refusals are retried after this long. */
 const RFQ_RETRY_MS = 8_000;
+/** Vol catch-up transactions a write sends at most (each folds up to 64 rounds) before it retries. */
+const VOL_SYNC_STEPS = 3;
 
 /**
  * Slippage allowed on each part of an in-kind vault exit, in basis points: redeemInKind reverts
@@ -232,11 +238,28 @@ function payoff(s: Pick<SeriesInfo, 'isCall' | 'strike'>, price: bigint): bigint
   return v > 0n ? v : 0n;
 }
 
-/** An SDK refusal turned into the numbers the refusal cards read. */
-function appRefusal(
-  r: ChainRefusal,
-  c: { premium?: bigint; fee?: bigint; before?: ChainState; policy?: AgentPolicy; sell?: boolean } = {},
-): Refusal {
+/** The live deployment's symbol for a token address (the short address if it has none). */
+function symbolFor(token: string): string {
+  try {
+    return symbolOf(getDeployment(LIVE_CHAIN.id), token as Address) ?? short(token);
+  } catch {
+    return short(token);
+  }
+}
+
+type RefusalContext = { premium?: bigint; fee?: bigint; before?: ChainState; policy?: AgentPolicy; sell?: boolean; token?: Address };
+
+/**
+ * An SDK refusal turned into the numbers the refusal cards read, with the underlying it names by
+ * symbol. `token`: the underlying a VolNotCurrent without arguments (a vault's) is about.
+ */
+function appRefusal(r: ChainRefusal, c: RefusalContext = {}): Refusal {
+  const out = refusalNumbers(r, c);
+  const named = typeof r.args.underlying === 'string' ? r.args.underlying : r.code === 'VolNotCurrent' ? c.token : undefined;
+  return named ? { ...out, underlying: symbolFor(named) } : out;
+}
+
+function refusalNumbers(r: ChainRefusal, c: RefusalContext): Refusal {
   const numbers: Record<string, number> = { ...r.numbers };
   if (r.code === 'AgentRiskBudgetExceeded' && c.before) numbers.used = fromWad(c.before.im);
   if (r.code === 'AgentPremiumExceeded') {
@@ -257,6 +280,14 @@ function appRefusal(
   return { code: r.code, message: r.message, numbers };
 }
 
+/** Feed rounds the vol has not folded in; null when the feed's latest round is in a later phase (a migration). */
+function volBehind(m: MarketStatus): number | null {
+  const feed = m.feed.roundId;
+  const vol = m.vol.lastRoundId;
+  if (feed >> 64n > vol >> 64n) return null;
+  return feed > vol ? Number(feed - vol) : 0;
+}
+
 /** The refusal behind an error thrown by a write, or undefined. */
 export function refusalOf(e: unknown): Refusal | undefined {
   if (e instanceof RefusalError) return appRefusal(e.refusal);
@@ -275,6 +306,7 @@ export class ChainClient implements NovationClient {
   readonly ctx: NovationContext;
   readonly chainId = LIVE_CHAIN.id;
   private signerWallet: WalletClient | undefined;
+  private volSyncListener: ((symbol: string) => void) | undefined;
   private readonly seriesCache = new Map<number, SeriesInfo>();
   private readonly memos = new Map<string, { at: number; p: Promise<unknown> }>();
   private readonly rfqCache = new Map<string, { until: number; p: Promise<RelayAnswer> }>();
@@ -292,6 +324,11 @@ export class ChainClient implements NovationClient {
   /** The connected wallet that signs this client's writes (wagmi's wallet client), or none. */
   setWallet(w: WalletClient | undefined) {
     this.signerWallet = w;
+  }
+
+  /** Told the underlying's symbol when a write has to sync its vol first (another transaction to sign). */
+  onVolSync(listener: ((symbol: string) => void) | undefined) {
+    this.volSyncListener = listener;
   }
 
   get walletAddress(): Address | undefined {
@@ -583,7 +620,7 @@ export class ChainClient implements NovationClient {
         return undefined;
       } catch (e) {
         if (!(e instanceof RefusalError)) throw e;
-        return appRefusal(e.refusal, { premium: premiumW, fee, before, policy, sell: qty < 0n });
+        return appRefusal(e.refusal, { premium: premiumW, fee, before, policy, sell: qty < 0n, token: s.underlying });
       }
     };
     const [{ after, cashShort }, grid, simulated] = await Promise.all([
@@ -757,6 +794,7 @@ export class ChainClient implements NovationClient {
       address: v.address,
       kind: v.kind,
       underlying: m?.symbol ?? this.sym(v.underlying),
+      session: m?.session ?? 'HALTED',
       tvl: v.kind === 'coveredCall' ? assets * fromWad(spot) : assets,
       nav: fromUnits(v.assetsPerShare, v.assetDecimals),
       // a 7-day APY needs the NAV of a week ago; the chain keeps no NAV history
@@ -1148,6 +1186,7 @@ export class ChainClient implements NovationClient {
       historyFrom: Number(launch.timestamp),
       historyTo: now,
       rounds: Number(m.feed.roundId & ((1n << 64n) - 1n)),
+      volBehind: volBehind(m),
     }));
   }
 
@@ -1274,6 +1313,48 @@ export class ChainClient implements NovationClient {
     return hash;
   }
 
+  /**
+   * Brings `token`'s vol estimate up to its feed (permissionless): syncAndRebaseVol after an
+   * aggregator migration, else syncVol, until the hub reports it current or VOL_SYNC_STEPS are sent.
+   */
+  async catchUpVol(token: Address): Promise<boolean> {
+    const { account } = this.signer();
+    for (let i = 0; i < VOL_SYNC_STEPS; i++) {
+      if (await getVolCurrent(this.ctx, token)) return true;
+      this.volSyncListener?.(this.sym(token));
+      await this.send(simulateCatchUpVol(this.ctx, account, token));
+    }
+    return getVolCurrent(this.ctx, token);
+  }
+
+  /**
+   * Sends `write`; refused VolNotCurrent (by its simulation, before anything is signed), it catches
+   * that vol up and sends `write` once more. Refused again, it says the vol is syncing. `token`: the
+   * vault's underlying, for the vault's form of the refusal, which names none.
+   */
+  private async syncingVol<T>(token: Address | undefined, write: () => Promise<T>): Promise<T> {
+    const behind = (e: unknown) => {
+      const r = e instanceof RefusalError ? e.refusal : decodeRefusal(e);
+      if (r?.code !== 'VolNotCurrent') return undefined;
+      const t = typeof r.args.underlying === 'string' ? (r.args.underlying as Address) : token;
+      return t ? { r, t } : undefined;
+    };
+    try {
+      return await write();
+    } catch (e) {
+      const first = behind(e);
+      if (!first) throw e;
+      await this.catchUpVol(first.t);
+      try {
+        return await write();
+      } catch (e2) {
+        const again = behind(e2);
+        if (!again) throw e2;
+        throw new RefusalError({ ...again.r, message: volSyncText(this.sym(again.t)), args: { ...again.r.args, underlying: again.t } }, { cause: e2 });
+      }
+    }
+  }
+
   private async allow(token: Address, spender: Address, amount: bigint): Promise<void> {
     const { account } = this.signer();
     const cur = await this.ctx.client.readContract({ address: token, abi: erc20Abi, functionName: 'allowance', args: [account, spender] });
@@ -1386,7 +1467,7 @@ export class ChainClient implements NovationClient {
     await this.mustOwn(id, 'withdraw from it');
     const token = tokenOf(this.ctx.deployment, symbol);
     const raw = toUnits(amount, await this.decimals(token));
-    return this.send(simulateWithdraw(this.ctx, account, id, token, raw, account));
+    return this.syncingVol(undefined, () => this.send(simulateWithdraw(this.ctx, account, id, token, raw, account)));
   }
 
   /** Buys from the vault that sells the series, paying at most `maxPremium` USDG. */
@@ -1396,7 +1477,9 @@ export class ChainClient implements NovationClient {
     const s = await this.seriesInfo(seriesId);
     const v = await this.vaultFor(s);
     if (!v) throw new Error('No live vault sells this series.');
-    return this.send(simulateVaultBuy(this.ctx, account, v.address, seriesId, toWad(qty), toWad(Number(maxPremium.toFixed(6))), id));
+    return this.syncingVol(v.underlying, () =>
+      this.send(simulateVaultBuy(this.ctx, account, v.address, seriesId, toWad(qty), toWad(Number(maxPremium.toFixed(6))), id)),
+    );
   }
 
   /** Sells back to the vault at its bid, receiving at least `minPremium` USDG. */
@@ -1406,7 +1489,9 @@ export class ChainClient implements NovationClient {
     const s = await this.seriesInfo(seriesId);
     const v = await this.vaultFor(s);
     if (!v) throw new Error('No live vault buys this series back.');
-    return this.send(simulateVaultSellBack(this.ctx, account, v.address, seriesId, toWad(qty), toWad(Number(minPremium.toFixed(6))), id));
+    return this.syncingVol(v.underlying, () =>
+      this.send(simulateVaultSellBack(this.ctx, account, v.address, seriesId, toWad(qty), toWad(Number(minPremium.toFixed(6))), id)),
+    );
   }
 
   /**
@@ -1423,7 +1508,7 @@ export class ChainClient implements NovationClient {
       this.rfqCache.delete(shown.key);
       throw new Error('The quote expired. The ticket is asking the relay for a new one: check the price and sign again.');
     }
-    const hashOut = await this.send(simulateRfqFill(this.ctx, account, shown.quote, shown.signature, id, shown.size));
+    const hashOut = await this.syncingVol(undefined, () => this.send(simulateRfqFill(this.ctx, account, shown.quote, shown.signature, id, shown.size)));
     this.shown.delete(hash);
     this.rfqCache.delete(shown.key);
     return hashOut;
@@ -1443,7 +1528,7 @@ export class ChainClient implements NovationClient {
     if (!v) throw new Error(`unknown vault ${vault}`);
     const raw = toUnits(amount, v.assetDecimals);
     await this.allow(v.asset, v.address, raw);
-    return this.send(simulateVaultDeposit(this.ctx, account, v.address, raw, account));
+    return this.syncingVol(v.underlying, () => this.send(simulateVaultDeposit(this.ctx, account, v.address, raw, account)));
   }
 
   /**
@@ -1460,7 +1545,9 @@ export class ChainClient implements NovationClient {
     const shown = this.exits.get(key)!;
     if (shown.shares === 0n) throw new Error('That is less than one share of the vault.');
     const { minTokens, minCash } = exitMinimums(shown, EXIT_SLIPPAGE_BPS);
-    const hash = await this.send(simulateVaultRedeemInKind(this.ctx, account, v.address, shown.shares, account, account, minTokens, minCash));
+    const hash = await this.syncingVol(v.underlying, () =>
+      this.send(simulateVaultRedeemInKind(this.ctx, account, v.address, shown.shares, account, account, minTokens, minCash)),
+    );
     this.exits.delete(key);
     return hash;
   }

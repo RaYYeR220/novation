@@ -197,7 +197,7 @@ async function hintCmd(k: Keeper, flags: Record<string, string | true>) {
 }
 
 /** SeriesRegistry.settleExpiry(u, expiry, hint) as an eth_call at block time `now`: the price, or the revert. */
-async function checkOnRegistry(k: Keeper, u: Address, expiry: number, hint: bigint, method: 'settleExpiry' | 'settleExpiryFallback', now: number) {
+async function checkOnRegistry(k: Keeper, u: Address, expiry: number, hint: bigint, method: 'settleExpiry' | 'settleExpiryFallback' | 'settleExpiryLastResort', now: number) {
   const data = encodeFunctionData({ abi: seriesRegistryAbi, functionName: method, args: [u, BigInt(expiry), hint] });
   try {
     const r = await k.client.call({ to: k.ctx.deployment.registry, data, account: k.account.address, blockOverrides: { time: BigInt(now) } });

@@ -184,6 +184,35 @@ export const marketDataHubAbi = [
   },
   {
     "type": "function",
+    "name": "settlementPriceLastResort",
+    "inputs": [
+      {
+        "name": "u",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "expiry",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "hint",
+        "type": "uint80",
+        "internalType": "uint80"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "price",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "spot",
     "inputs": [
       {
@@ -213,6 +242,25 @@ export const marketDataHubAbi = [
   },
   {
     "type": "function",
+    "name": "syncAndRebaseVol",
+    "inputs": [
+      {
+        "name": "u",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "rebased",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "syncVol",
     "inputs": [
       {
@@ -223,6 +271,68 @@ export const marketDataHubAbi = [
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "syncVolUpTo",
+    "inputs": [
+      {
+        "name": "u",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "maxRounds",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "current",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "volCurrent",
+    "inputs": [
+      {
+        "name": "u",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "volStale",
+    "inputs": [
+      {
+        "name": "u",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -355,6 +465,11 @@ export const marketDataHubAbi = [
   {
     "type": "error",
     "name": "BadRoundCount",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "FallbackApplies",
     "inputs": []
   },
   {

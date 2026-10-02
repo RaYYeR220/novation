@@ -224,6 +224,35 @@ export const seriesRegistryAbi = [
   },
   {
     "type": "function",
+    "name": "settleExpiryLastResort",
+    "inputs": [
+      {
+        "name": "u",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "expiry",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "roundIdHint",
+        "type": "uint80",
+        "internalType": "uint80"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "price",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "settlementPriceOf",
     "inputs": [
       {

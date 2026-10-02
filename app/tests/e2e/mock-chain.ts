@@ -6,7 +6,8 @@
  * NVDA covered-call vault, whose exits pay 3% of their value in USDG, and a rolled redemption ready
  * in both parts; the TSLA covered-call vault still holds an expired, priced series, so it waits for
  * settlement. Calls are decoded and answered with the SDK's own ABIs, so a change in the contracts'
- * interface breaks these tests.
+ * interface breaks these tests. `closed` puts NVDA in a weekend or holiday session, which closes
+ * its vaults.
  */
 import type { Page, Route } from '@playwright/test';
 import {
@@ -105,6 +106,14 @@ const VAULT_CFG = {
   maxDelta: W / 2n,
   minNewSeriesQty: W,
 };
+
+/** Options of one page's mock chain. */
+export interface MockWorld {
+  /** NVDA's session when not a regular one: its vaults are closed (isLive false, no quotes). */
+  closed?: 'WEEKEND' | 'HOLIDAY';
+}
+const SESSION_CODE = { WEEKEND: 2, HOLIDAY: 3 } as const;
+const closedNvda = (w: MockWorld, token: string) => (w.closed && symOf(token) === 'NVDA' ? SESSION_CODE[w.closed] : undefined);
 
 function vaultIndex(a: string): number {
   return d.vaults.findIndex((v) => v.address.toLowerCase() === a.toLowerCase());
@@ -253,7 +262,11 @@ const HANDLERS: Record<string, Handler> = {
 };
 
 /** Per-contract answers that depend on which token, feed or vault was called. */
-function special(kind: string, to: string, fn: string, args: readonly unknown[]): { hit: boolean; value?: unknown } {
+function special(kind: string, to: string, fn: string, args: readonly unknown[], w: MockWorld): { hit: boolean; value?: unknown } {
+  if (kind === 'hub' && (fn === 'session' || fn === 'spot')) {
+    const code = closedNvda(w, args[0] as string);
+    if (code !== undefined) return { hit: true, value: fn === 'session' ? code : [SPOT.NVDA, code, true] };
+  }
   if (kind === 'token') {
     const s = symOf(to);
     const usdg = to.toLowerCase() === d.tokens.USDG!.toLowerCase();
@@ -278,6 +291,7 @@ function special(kind: string, to: string, fn: string, args: readonly unknown[])
     const owners = i === 0 && String(args[0]).toLowerCase() === MOCK_OWNER;
     const held = owners ? 10n * 10n ** 24n : 0n;
     const table: Record<string, unknown> = {
+      isLive: closedNvda(w, d.tokens[v.underlying]!) === undefined,
       name: put ? `Novation Put Write ${v.underlying}` : `Novation Covered Call ${v.underlying}`,
       symbol: put ? `npw${v.underlying}` : `ncc${v.underlying}`,
       underlying: d.tokens[v.underlying]!,
@@ -344,13 +358,13 @@ function zero(p: AbiParameter): unknown {
 }
 
 /** One eth_call: the return data, or the revert data it fails with. */
-function call(to: string, data: Hex): { ok: true; data: Hex } | { ok: false; data: Hex } {
+function call(to: string, data: Hex, w: MockWorld): { ok: true; data: Hex } | { ok: false; data: Hex } {
   const k = kindOf(to);
   if (!k) return { ok: false, data: '0x' };
   const { functionName, args = [] } = decodeFunctionData({ abi: k.abi, data });
   const item = k.abi.find((x) => x.type === 'function' && x.name === functionName) as { outputs: readonly AbiParameter[] };
   try {
-    const sp = special(k.kind, to, functionName, args);
+    const sp = special(k.kind, to, functionName, args, w);
     const value = sp.hit
       ? sp.value
       : HANDLERS[`${k.kind}.${functionName}`]
@@ -367,13 +381,18 @@ function call(to: string, data: Hex): { ok: true; data: Hex } | { ok: false; dat
 }
 
 /** viem's deployless call: the wrapper's creation code with (code, data) as constructor arguments. */
-function deployless(input: Hex): Hex {
+function deployless(input: Hex, w: MockWorld): Hex {
   const args = `0x${input.slice(deploylessCallViaBytecodeBytecode.length)}` as Hex;
   const [, inner] = decodeAbiParameters([{ type: 'bytes' }, { type: 'bytes' }], args);
   const { args: a = [] } = decodeFunctionData({ abi: vaultQuoteLensAbi, data: inner });
   const [, vault, ids, qty] = a as readonly [Address, Address, readonly number[], bigint];
-  const put = d.vaults[vaultIndex(vault)]?.type === 'putWrite';
+  const v = d.vaults[vaultIndex(vault)];
+  const put = v?.type === 'putWrite';
   const exceeds = encodeErrorResult({ abi: novationErrorsAbi as Abi, errorName: 'ExceedsShort', args: [qty, 0n] });
+  if (v && closedNvda(w, d.tokens[v.underlying]!) !== undefined) {
+    const closed = encodeErrorResult({ abi: novationErrorsAbi as Abi, errorName: 'VaultNotLive' });
+    return encodeFunctionResult({ abi: vaultQuoteLensAbi, functionName: 'quotes', result: [false, ids.map(() => ({ ask: 0n, bid: 0n, askError: closed, bidError: closed }))] });
+  }
   const quotes = ids.map(() => ({ ask: ((put ? 3n : 5n) * W * qty) / (2n * W), bid: 0n, askError: '0x' as Hex, bidError: exceeds }));
   return encodeFunctionResult({ abi: vaultQuoteLensAbi, functionName: 'quotes', result: [true, quotes] });
 }
@@ -406,7 +425,7 @@ function block(n: bigint) {
   };
 }
 
-function answer(req: Rpc): object {
+function answer(req: Rpc, w: MockWorld): object {
   const ok = (result: unknown) => ({ jsonrpc: '2.0', id: req.id, result });
   const fail = (data: Hex) => ({ jsonrpc: '2.0', id: req.id, error: { code: 3, message: 'execution reverted', data } });
   switch (req.method) {
@@ -428,17 +447,17 @@ function answer(req: Rpc): object {
     case 'eth_call': {
       const tx = (req.params?.[0] ?? {}) as { to?: string; data?: Hex; input?: Hex };
       const data = (tx.data ?? tx.input ?? '0x') as Hex;
-      if (!tx.to) return ok(deployless(data));
+      if (!tx.to) return ok(deployless(data, w));
       if (tx.to.toLowerCase() === MULTICALL) {
         const { args = [] } = decodeFunctionData({ abi: multicall3Abi, data });
         const calls = args[0] as readonly { target: Address; allowFailure: boolean; callData: Hex }[];
         const results = calls.map((c) => {
-          const r = call(c.target, c.callData);
+          const r = call(c.target, c.callData, w);
           return { success: r.ok, returnData: r.data };
         });
         return ok(encodeFunctionResult({ abi: multicall3Abi, functionName: 'aggregate3', result: results }));
       }
-      const r = call(tx.to, data);
+      const r = call(tx.to, data, w);
       return r.ok ? ok(r.data) : fail(r.data);
     }
     default:
@@ -447,12 +466,12 @@ function answer(req: Rpc): object {
 }
 
 /** Routes the testnet RPC (and the block explorer's API) to the mock for this page. */
-export async function mockChain(page: Page) {
+export async function mockChain(page: Page, w: MockWorld = {}) {
   await page.route(
     (url) => url.hostname === RPC_HOST,
     async (route: Route) => {
       const body = route.request().postDataJSON() as Rpc | Rpc[];
-      const out = Array.isArray(body) ? body.map(answer) : answer(body);
+      const out = Array.isArray(body) ? body.map((x) => answer(x, w)) : answer(body, w);
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(out) });
     },
   );

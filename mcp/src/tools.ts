@@ -46,6 +46,10 @@ import {
   type Refusal,
   type RfqQuote,
   type SeriesInfo,
+  getVolCurrent,
+  simulateCatchUpVol,
+  getVolState,
+  MAX_VOL_SYNC_STEPS,
 } from '@novation/sdk';
 import {
   decodeEventLog,
@@ -621,6 +625,8 @@ interface Ticket {
   limit: Record<string, number>;
   simulate: () => Promise<{ request: unknown; result: bigint }>;
   call: { address: Address; abi: Abi; functionName: string; args: readonly unknown[] };
+  /** What was done before the trade (a vol catch-up), for the result. */
+  note?: string;
 }
 
 export interface TradeResult {
@@ -747,8 +753,18 @@ async function execute(s: Session, t: Ticket, force: boolean): Promise<TradeResu
   };
 
   return s.lock(async () => {
+    let caughtUp: string | undefined;
     try {
-      await t.simulate();
+      try {
+        await t.simulate();
+      } catch (e) {
+        // a vol further behind its feed than the trade's own sync folds: catch it up
+        // (permissionless, signed by the agent key), then simulate again, once
+        if (!(e instanceof RefusalError) || e.refusal.code !== 'VolNotCurrent' || force) throw e;
+        const token = (e.refusal.args.underlying as Address | undefined) ?? t.series.underlying;
+        caughtUp = await catchUpVol(s, token);
+        await t.simulate();
+      }
     } catch (e) {
       if (!(e instanceof RefusalError)) throw e;
       const refusal = refusalView(e.refusal);
@@ -773,11 +789,59 @@ async function execute(s: Session, t: Ticket, force: boolean): Promise<TradeResu
       account: ag.account,
     } as Parameters<typeof s.n.client.estimateContractGas>[0]);
     const r = await sendWith((estimate * GAS_HEADROOM_PCT) / 100n);
-    return r.receipt.status === 'success' ? filled(r) : reverted(r);
+    const note = [t.note, caughtUp].filter(Boolean).join(' ') || undefined;
+    return r.receipt.status === 'success' ? filled(r, note) : reverted(r);
   });
 }
 
+/**
+ * Brings `token`'s vol up to its feed (syncVol, or syncAndRebaseVol after a feed migration, up to
+ * MAX_VOL_SYNC_STEPS steps of 64 rounds), signed by the agent key: what a VolNotCurrent refusal asks
+ * for. It stops as soon as a step leaves the stored round where it was, and never sends more than
+ * the session's budget of catch-up transactions (NOVATION_MAX_VOL_SYNCS) in all. Returns a note for
+ * the trade result.
+ */
+async function catchUpVol(s: Session, token: Address): Promise<string> {
+  const ag = agentOf(s);
+  const hashes: string[] = [];
+  let stalled = false;
+  for (let i = 0; i < MAX_VOL_SYNC_STEPS && s.volSyncsLeft > 0 && !(await getVolCurrent(s.n.ctx, token)); i++) {
+    const before = (await getVolState(s.n.ctx, token)).lastRoundId;
+    const sim = await simulateCatchUpVol(s.n.ctx, ag.account, token);
+    const req = sim.request as Parameters<typeof ag.wallet.writeContract>[0];
+    const gas = await s.n.client.estimateContractGas(req as Parameters<typeof s.n.client.estimateContractGas>[0]);
+    const hash = await ag.wallet.writeContract({ ...req, account: ag.account, chain: s.chain, gas: (gas * GAS_HEADROOM_PCT) / 100n } as Parameters<typeof ag.wallet.writeContract>[0]);
+    s.volSyncsLeft--;
+    const rc = await s.n.client.waitForTransactionReceipt({ hash });
+    hashes.push(hash);
+    if (rc.status !== 'success' || (await getVolState(s.n.ctx, token)).lastRoundId === before) {
+      stalled = true;
+      break;
+    }
+  }
+  const sym = symbolFor(s.n.deployment, token);
+  if (hashes.length === 0) return `The ${sym} vol is behind its feed (VolNotCurrent), and this session's vol sync budget is spent: nothing was synced.`;
+  const why = stalled ? ' A sync did not advance the vol, so the catch-up stopped.' : '';
+  return `The ${sym} vol was behind its feed (VolNotCurrent): synced it first (${hashes.join(', ')}).${why}`;
+}
+
 const DEFAULT_SLIPPAGE_BPS = 200;
+
+/**
+ * The vault's quote for one trade. A vault refuses to quote (VaultNotLive) while its vol is more
+ * than one sync behind the feed; with the market open, the agent catches the vol up first
+ * (permissionless) and asks again. Over a weekend or a holiday the vault is closed whatever the vol.
+ */
+async function vaultQuoteCaughtUp(s: Session, vault: Address, series: SeriesInfo, qty: bigint, takerBuys: boolean): Promise<{ r: QuoteRes; note?: string }> {
+  const ask = async () => (await vaultQuotes(s, vault, series.underlying, [{ seriesId: series.id, qty, takerBuys }])).results[0] as QuoteRes;
+  const r = await ask();
+  if (!('refusal' in r) || (r.refusal.code !== 'VaultNotLive' && r.refusal.code !== 'VolNotCurrent')) return { r };
+  if (await getVolCurrent(s.n.ctx, series.underlying)) return { r };
+  const spot = await getSpot(s.n.ctx, series.underlying).catch(() => null);
+  if (!spot?.ok || (spot.session !== 'REGULAR' && spot.session !== 'EXTENDED')) return { r };
+  const note = await catchUpVol(s, series.underlying);
+  return { r: await ask(), note };
+}
 
 /** No readable vault quote and no explicit limit: nothing is sent, and the caller must name its limit. */
 function noQuote(s: Session, series: SeriesInfo, qty: bigint, side: 'buy' | 'sell', refusal: Refusal): TradeResult {
@@ -803,12 +867,13 @@ export async function buyFromVault(s: Session, a: { series_id: number; qty: Num;
   const v = vaultFor(s, series);
   if (!v) throw new ToolInputError(`no vault sells ${seriesLabel(s.n.deployment, series)}; vaults sell ${vaultsList(s)}. Use fill_rfq with a maker quote.`);
   let maxPremium: bigint;
+  let note: string | undefined;
   if (a.max_premium !== undefined) maxPremium = amountOf(a.max_premium, 'max_premium');
   else {
-    const { results } = await vaultQuotes(s, v.address, series.underlying, [{ seriesId: series.id, qty, takerBuys: true }]);
-    const r = results[0] as QuoteRes;
-    if ('refusal' in r) return noQuote(s, series, qty, 'buy', r.refusal);
-    maxPremium = (r.premium * (10_000n + BigInt(a.slippage_bps ?? DEFAULT_SLIPPAGE_BPS)) + 9_999n) / 10_000n;
+    const q = await vaultQuoteCaughtUp(s, v.address, series, qty, true);
+    note = q.note;
+    if ('refusal' in q.r) return noQuote(s, series, qty, 'buy', q.r.refusal);
+    maxPremium = (q.r.premium * (10_000n + BigInt(a.slippage_bps ?? DEFAULT_SLIPPAGE_BPS)) + 9_999n) / 10_000n;
   }
   return execute(
     s,
@@ -820,6 +885,7 @@ export async function buyFromVault(s: Session, a: { series_id: number; qty: Num;
       limit: { maxPremium: num(maxPremium) },
       simulate: () => simulateVaultBuy(s.n.ctx, ag.account, v.address, series.id, qty, maxPremium, ag.accountId),
       call: { address: v.address, abi: optionVaultAbi as Abi, functionName: 'buy', args: [series.id, qty, maxPremium, ag.accountId] },
+      ...(note ? { note } : {}),
     },
     force,
   );
@@ -833,12 +899,13 @@ export async function sellToVault(s: Session, a: { series_id: number; qty: Num; 
   const v = vaultFor(s, series);
   if (!v) throw new ToolInputError(`no vault buys back ${seriesLabel(s.n.deployment, series)}; use fill_rfq with a maker quote`);
   let minPremium: bigint;
+  let note: string | undefined;
   if (a.min_premium !== undefined) minPremium = amountOf(a.min_premium, 'min_premium');
   else {
-    const { results } = await vaultQuotes(s, v.address, series.underlying, [{ seriesId: series.id, qty, takerBuys: false }]);
-    const r = results[0] as QuoteRes;
-    if ('refusal' in r) return noQuote(s, series, qty, 'sell', r.refusal);
-    minPremium = (r.premium * (10_000n - BigInt(a.slippage_bps ?? DEFAULT_SLIPPAGE_BPS))) / 10_000n;
+    const q = await vaultQuoteCaughtUp(s, v.address, series, qty, false);
+    note = q.note;
+    if ('refusal' in q.r) return noQuote(s, series, qty, 'sell', q.r.refusal);
+    minPremium = (q.r.premium * (10_000n - BigInt(a.slippage_bps ?? DEFAULT_SLIPPAGE_BPS))) / 10_000n;
   }
   return execute(
     s,
@@ -850,6 +917,7 @@ export async function sellToVault(s: Session, a: { series_id: number; qty: Num; 
       limit: { minPremium: num(minPremium) },
       simulate: () => simulateVaultSellBack(s.n.ctx, ag.account, v.address, series.id, qty, minPremium, ag.accountId),
       call: { address: v.address, abi: optionVaultAbi as Abi, functionName: 'sellBack', args: [series.id, qty, minPremium, ag.accountId] },
+      ...(note ? { note } : {}),
     },
     force,
   );

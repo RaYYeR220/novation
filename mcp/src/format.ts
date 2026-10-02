@@ -108,6 +108,10 @@ export function refusalLine(r: RefusalView): string {
       return `PremiumAboveMax: premium ${n.premium} USDG > your maximum ${n.maxPremium} USDG`;
     case 'PremiumBelowMin':
       return `PremiumBelowMin: premium ${n.premium} USDG < your minimum ${n.minPremium} USDG`;
+    case 'VolNotCurrent':
+      return `VolNotCurrent: ${r.message}`;
+    case 'TooManyClaimExpiries':
+      return `TooManyClaimExpiries: account ${n.id} would hold unpaid claims on more than 16 expiries; claim the ready ones first`;
     default:
       return `${r.code}: ${r.message}`;
   }

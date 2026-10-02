@@ -1,4 +1,4 @@
-import { aggregatorAbi, fmtCloseEt, fromWad, getGlobals, getUnderlyingParams, seriesRegistryAbi, simulateSettleExpiry, symbolOf, type Address } from '@novation/sdk';
+import { aggregatorAbi, fmtCloseEt, fromWad, getGlobals, getUnderlyingParams, simulateSettleExpiry, simulateSettleExpiryFallback, simulateSettleExpiryLastResort, symbolOf, type Address } from '@novation/sdk';
 import { findHint, type HintResult } from '../hint';
 import { chainNow, execute, feedReader, settlementOf, type Keeper } from '../keeper';
 
@@ -51,14 +51,9 @@ export async function settleExpiry(k: Keeper): Promise<void> {
     const sim =
       h.method === 'settleExpiry'
         ? () => simulateSettleExpiry(k.ctx, k.account, u, expiry, h.hint)
-        : () =>
-            k.client.simulateContract({
-              address: k.ctx.deployment.registry,
-              abi: seriesRegistryAbi,
-              functionName: 'settleExpiryFallback',
-              args: [u, BigInt(expiry), h.hint],
-              account: k.account,
-            });
+        : h.method === 'settleExpiryFallback'
+          ? () => simulateSettleExpiryFallback(k.ctx, k.account, u, expiry, h.hint)
+          : () => simulateSettleExpiryLastResort(k.ctx, k.account, u, expiry, h.hint);
     const rec = await execute(k, JOB, `${h.method} ${sym} ${expiry}`, sim, fields);
     if (rec?.status === 'success') {
       const price = await settlementOf(k, u, expiry);

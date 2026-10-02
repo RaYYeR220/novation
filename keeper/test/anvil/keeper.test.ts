@@ -16,6 +16,7 @@ import {
   getCash,
   getClaimable,
   getDeficit,
+  getDeficitSale,
   getGlobals,
   getMarkVol,
   getPool,
@@ -38,6 +39,7 @@ import {
   simulateRequestRedeem,
   simulateRfqFill,
   simulateSettleExpiry,
+  simulateStartLiquidation,
   simulateVaultBuy,
   simulateVaultSellBack,
   simulateVaultDeposit,
@@ -62,7 +64,7 @@ import {
   topUpKeeper,
   type Keeper,
 } from '../../src/index';
-import { actor, DEPLOYER_KEY, fundedAccount, local, now, nextTradable, pushRound, refreshFeeds, send, spotOf, warpTo, type Actor, type Local } from './helpers';
+import { actor, DEPLOYER_KEY, fundedAccount, local, now, nextTradable, nextWeekend, pushRound, refreshFeeds, send, spotOf, warpTo, type Actor, type Local } from './helpers';
 
 const l = local();
 const d = describe.skipIf(!l);
@@ -286,8 +288,13 @@ d('keeper on a local chain', () => {
     const shares = (await getVaultHolding(L.ctx, cc, dep.account.address)).shares;
     await send(L, dep, simulateRequestRedeem(L.ctx, dep.account.address, cc, shares / 2n, dep.account.address));
 
-    // last prints before the close: NVDA $10 above the vault call's strike
-    const settle = BigInt(demo.vaultCall!.strike) * WAD + 10n * WAD;
+    // last prints before the close: NVDA far enough above the vault call's strike that the three
+    // calls' payoff beats the premium cash the vault holds. The premiums depend on how far the
+    // expiry is when the suite runs (a day or a week of tenor), so a fixed distance would leave the
+    // vault's deficit, and the sale this test bids in, to the calendar.
+    const vaultId = (await getVault(L.ctx, cc)).vaultId;
+    const itm = ((await getCash(L.ctx, vaultId)) / 3n / WAD + 10n) * WAD;
+    const settle = BigInt(demo.vaultCall!.strike) * WAD + itm;
     await warpTo(L, E - 600);
     await refreshFeeds(L, admin, E - 600, { NVDA: answerOf(settle) });
     await warpTo(L, E + 60);
@@ -334,13 +341,12 @@ d('keeper on a local chain', () => {
     // 3. receivers claimed into cash
     expect(await getClaimable(L.ctx, demo.longId, E)).toBe(0n);
     expect(await getClaimable(L.ctx, t1Id, E)).toBe(0n);
-    expect((await getCash(L.ctx, t1Id)) - before.t1).toBe(20n * WAD);
+    expect((await getCash(L.ctx, t1Id)) - before.t1).toBe(2n * itm);
     expect(await getCash(L.ctx, demo.longId)).toBeGreaterThan(before.long);
     expect(fresh.filter((x) => x.job === 'claim' && x.msg === 'tx').length).toBe(2);
 
     // 4. the vault's calls finished in the money: its cash fell short, the fund bridged it and a
     // deficit sale of its NVDA started; the keeper bought what the deficit needed
-    const vaultId = (await getVault(L.ctx, cc)).vaultId;
     const bids = sent.filter((x) => x.label.startsWith(`bidDeficit ${vaultId}`));
     expect(bids).toHaveLength(1);
     expect((await L.client.readContract({ address: L.deployment.clearinghouse, abi: clearinghouseAbi, functionName: 'deficitOf', args: [vaultId, BigInt(E)] }))[0]).toBe(0n);
@@ -397,8 +403,15 @@ d('keeper on a local chain', () => {
     expect(await tick(k, ['roll'])).toEqual([]);
     expect(lines('roll', 'wait').at(-1)).toMatchObject({ vaultId: String(vaultId), reason: expect.stringMatching(/not payable/) });
 
-    // the taker sells half back: the queue is payable, and one roll pays it
+    // the taker sells half back: the queue is payable, but not over the weekend, when the vaults
+    // are closed; it is paid once the market opens again, by one roll
     await send(L, taker, simulateVaultSellBack(L.ctx, taker.account.address, cc, bought!, free / 2n, 0n, takerId));
+    await warpTo(L, nextWeekend(await now(L)));
+    await refreshFeeds(L, admin, await now(L));
+    expect(await tick(k, ['roll'])).toEqual([]);
+    expect(lines('roll', 'wait').at(-1)?.reason).toMatch(/weekend/);
+    await warpTo(L, nextTradable(await now(L)));
+    await refreshFeeds(L, admin, await now(L));
     const sent = await tick(k, ['roll']);
     expect(labels(sent)).toEqual([`roll vault ${vaultId}`]);
     const rc = await L.client.getTransactionReceipt({ hash: sent[0]!.hash });
@@ -446,14 +459,16 @@ d('keeper on a local chain', () => {
     await send(L, maker, simulateWithdraw(L.ctx, maker.account.address, makerId, tok('USDG'), out, maker.account.address));
     expect((await getAccountState(L.ctx, makerId)).liquidatable).toBe(false);
 
-    // NVDA jumps 20%
+    // NVDA jumps 20%, then prints nine more rounds nobody folds into the vol: more than a
+    // liquidation folds itself (8), so the keeper syncs the vol first (else VolNotCurrent)
     await pushRound(L, admin, 'NVDA', answerOf(spot) * 120n / 100n, await now(L));
+    for (let i = 0; i < 9; i++) await pushRound(L, admin, 'NVDA', answerOf(spot) * 120n / 100n, await now(L));
     expect((await getAccountState(L.ctx, makerId)).liquidatable).toBe(true);
 
     // bidding off: the auction starts, nobody bids
     k.opts.bid = false;
     const started = await tick(k, ['liquidations']);
-    expect(labels(started)).toEqual([`startLiquidation ${makerId}`]);
+    expect(labels(started)).toEqual(['syncVol NVDA', `startLiquidation ${makerId}`]);
     expect(lines('liquidation', 'skip').at(-1)?.reason).toMatch(/bidding is off/);
     // bidding on, but the exposure cap is used up
     k.opts.bid = true;
@@ -461,11 +476,14 @@ d('keeper on a local chain', () => {
     expect(await tick(k, ['liquidations'])).toEqual([]);
     expect(lines('liquidation', 'skip').at(-1)?.reason).toMatch(/exposure cap/);
     k.state.committed = 0n;
+    // the ticks above that didn't bid synced nothing; NVDA now prints nine more rounds: the bid's
+    // simulation is refused VolNotCurrent, and only then does the keeper sync, then bid
+    for (let i = 0; i < 9; i++) await pushRound(L, admin, 'NVDA', answerOf(spot) * 120n / 100n, await now(L));
 
     const sent = await tick(k, ['liquidations']);
-    expect(labels(sent)).toEqual([`bidLiquidation ${makerId}`]);
+    expect(labels(sent)).toEqual(['syncVol NVDA', `bidLiquidation ${makerId}`]);
     expect(sent.every((x) => x.status === 'success')).toBe(true);
-    const rc = await L.client.getTransactionReceipt({ hash: sent[0]!.hash });
+    const rc = await L.client.getTransactionReceipt({ hash: sent[1]!.hash });
     const [bid] = parseEventLogs({ abi: auctionHouseAbi, eventName: 'LiquidationBid', logs: rc.logs });
     expect(bid!.args.bidderId).toBe(bidder);
     expect(bid!.args.fractionWad).toBe(g.maxFractionPerBid);
@@ -475,6 +493,55 @@ d('keeper on a local chain', () => {
     const mine = await getPositions(L.ctx, bidder!);
     expect(mine.find((p) => p.seriesId === sid)?.qty).toBe(-5n * WAD);
     expect((await getAccountState(L.ctx, bidder!)).healthy).toBe(true);
+  });
+
+  it('ends a liquidation left running on an account that recovered, whoever started it', async () => {
+    const t0 = await now(L);
+    const t = nextTradable(t0);
+    if (t > t0) await warpTo(L, t);
+    await refreshFeeds(L, admin, await now(L));
+    const maker = await actor(L);
+    const taker = await actor(L);
+    const makerId = await fundedAccount(L, maker, 5_000n);
+    const takerId = await fundedAccount(L, taker, 50_000n);
+    const NVDA = tok('NVDA');
+    const [, e2] = weeklyExpiries(await now(L), 2);
+    const spot = await spotOf(L, 'NVDA');
+    const strike = toGrid(spot, 5n * WAD);
+    if ((await findSeriesId(L.ctx, NVDA, e2!, strike, true)) === 0) await send(L, admin, simulateListSeries(L.ctx, admin.account, NVDA, e2!, strike, true));
+    const sid = await findSeriesId(L.ctx, NVDA, e2!, strike, true);
+    const g = await getGlobals(L.ctx);
+    const px = await bsQuote(L.ctx, { spot, strike, tau: BigInt(e2! - (await now(L))), vol: await getMarkVol(L.ctx, NVDA), rate: g.rate, isCall: true });
+    const q: RfqQuote = { signer: maker.account.address, makerId, seriesId: sid, makerSells: true, maxQty: 10n * WAD, price: px.price, deadline: BigInt((await now(L)) + 3600), nonce: randomNonce() };
+    await send(L, taker, simulateRfqFill(L.ctx, taker.account.address, q, await signQuote(maker.account, q, getRfqDomain(L.ctx)), takerId, 10n * WAD));
+    const st = await getAccountState(L.ctx, makerId);
+    const excess = st.equity - (st.im * 102n) / 100n;
+    await send(L, maker, simulateWithdraw(L.ctx, maker.account.address, makerId, tok('USDG'), (excess < BigInt(st.cash) ? excess : st.cash) / 10n ** 12n, maker.account.address));
+
+    await pushRound(L, admin, 'NVDA', (answerOf(spot) * 120n) / 100n, await now(L));
+    // someone else starts the auction, not this keeper
+    await send(L, admin, simulateStartLiquidation(L.ctx, admin.account.address, makerId));
+    // NVDA comes back before anyone bids: the account is healthy again, its auction still runs
+    await pushRound(L, admin, 'NVDA', answerOf(spot), await now(L));
+    expect((await getAccountState(L.ctx, makerId)).liquidatable).toBe(false);
+    // a keeper process started just now (nothing in memory) finds the running auction on chain
+    // (LiquidationStarted, scanned from the deployment block) and ends it
+    const fresh = createKeeper({
+      chain: L.chain,
+      deployment: L.deployment,
+      key: deriveKeeperKey(DEPLOYER_KEY),
+      rpcUrl: L.rpcUrl,
+      client: L.client,
+      pollingInterval: 50,
+      log: createLogger({ sink: (x) => logs.push(JSON.parse(x)) }),
+      opts: { settleDelaySec: 0, confirmations: 0, bid: false, listPerTick: 1000 },
+    });
+    const ended = await tick(fresh, ['liquidations']);
+    expect(labels(ended)).toContain(`endLiquidation ${makerId}`);
+    const rc = await L.client.getTransactionReceipt({ hash: ended.find((x) => x.label === `endLiquidation ${makerId}`)!.hash });
+    expect(parseEventLogs({ abi: auctionHouseAbi, eventName: 'LiquidationEnded', logs: rc.logs })).toHaveLength(1);
+    expect(fresh.state.liquidating.has(makerId)).toBe(false);
+    expect(await tick(fresh, ['liquidations'])).toEqual([]);
   });
 
   it('applies cash that already covers a deficit (repayDeficit) before dropping the sale', async () => {
@@ -513,6 +580,9 @@ d('keeper on a local chain', () => {
     const sent = await tick(k, ['liquidations']);
     expect(labels(sent)).toContain(`repayDeficit ${makerId}`);
     expect((await getDeficit(L.ctx, makerId)).total).toBe(0n);
+    // repaid by cash, not a bid: the sale is still open until someone ends it
+    expect(labels(sent)).toContain(`endDeficitSale ${makerId} ${E}`);
+    expect((await getDeficitSale(L.ctx, makerId, E!)).active).toBe(false);
     expect(k.state.deficitSales.has(`${makerId}:${E}`)).toBe(false);
   });
 

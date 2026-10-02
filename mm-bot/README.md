@@ -74,7 +74,7 @@ Every value is range-checked when the relay starts: spreads, slopes, session add
 
 **`GET /`** returns the maker, its subaccount, the chain, the venue, the caps and how many quotes are live.
 
-Refusal codes: `Halted`, `StalePrice`, `StaleVol`, `Expired`, `NearExpiry`, `QtyTooSmall`, `SizeCap`, `InventoryCap`, `NoBid`, `MakerMargin`, `MakerCash`, `UnknownSeries`, plus three statuses:
+Refusal codes: `Halted`, `StalePrice`, `StaleVol` (the hub's `volStale`: markVol has fallen back to volCap), `VolBehind` (the vol is more than one sync behind its feed, so a fill would revert `VolNotCurrent` until someone syncs it; `scripts/fill.ts` catches it up itself), `Expired`, `NearExpiry`, `QtyTooSmall`, `SizeCap`, `InventoryCap`, `NoBid`, `MakerMargin`, `MakerCash`, `UnknownSeries`, plus three statuses:
 - `Unavailable` and `Busy` answer 503 with `Retry-After`;
 - `ClientLimit` answers 429;
 - a client over its rate limit gets 429 `RateLimited`.

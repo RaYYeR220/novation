@@ -24,6 +24,7 @@ import type { Auction, ExpiryPool, FeedStatus, HaltEpisode } from '@/lib/client/
 import { cn } from '@/lib/cn';
 import { fmtDuration, fmtExpiry, fmtNumber, fmtPct, fmtQty } from '@/lib/format';
 import { fmtCloseEt, fmtEt } from '@/lib/nyse';
+import { LIQUIDATION_VOL_ROUNDS, volStatus } from '@/lib/market-state';
 import { RefusalFeed } from './refusal-feed';
 import { LIVE_CHAIN } from '@/lib/client/chain';
 
@@ -72,6 +73,8 @@ function SessionRow({ f, demo }: { f: FeedStatus; demo: boolean }) {
           ? `Multiplier ${fmtNumber(f.uiMultiplier, 6)}, last changed ${fmtEt(f.lastMultiplierChange)}; none scheduled`
           : `Multiplier ${fmtNumber(f.uiMultiplier, 6)}, never changed; none scheduled`,
     },
+    // what a VolNotCurrent refusal is about; the demo snapshot has no vol state
+    ...(f.volBehind !== undefined ? [volStatus(f.symbol, f.volBehind)] : []),
   ];
   return (
     <li data-symbol={f.symbol} className="grid gap-s4 border-b border-navy-800 py-s5 lg:grid-cols-[180px_minmax(0,1.1fr)_minmax(0,1fr)] lg:gap-s6">
@@ -235,9 +238,14 @@ function PoolRow({ p }: { p: ExpiryPool }) {
   );
 }
 
-function AuctionRow({ a, asOf }: { a: Auction; asOf: number }) {
+function AuctionRow({ a, asOf, feeds }: { a: Auction; asOf: number; feeds: FeedStatus[] }) {
   const elapsed = asOf - a.startedAt;
   const now = discountAt(elapsed, a);
+  // a bid folds a few rounds into each vol itself; further behind, it is refused until someone syncs
+  const behind = a.underlyings.filter((u) => {
+    const b = feeds.find((f) => f.symbol === u)?.volBehind;
+    return b === null || (b !== undefined && b > LIQUIDATION_VOL_ROUNDS);
+  });
   return (
     <li data-auction={a.id} className="grid gap-s5 lg:grid-cols-[minmax(0,1fr)_minmax(320px,1.1fr)]">
       <div className="grid content-start gap-s3">
@@ -267,13 +275,23 @@ function AuctionRow({ a, asOf }: { a: Auction; asOf: number }) {
         </dl>
         <p className="text-t13 text-pretty text-navy-200">
           A bid takes up to half of the account&apos;s positions, collateral and cash and pays its share of equity less the discount. It must leave the bidder
-          above initial margin. The auction ends once the account is back above initial margin, and pauses while {a.underlyings.join(' or ')} is halted or in a
-          weekend session.{' '}
+          above initial margin. The auction ends once bids bring the account back above initial margin, or when anyone ends it after the account recovers above
+          maintenance on its own. It pauses while {a.underlyings.join(' or ')} is halted or in a weekend session. A bid that would leave either account with
+          unpaid claims on more than 16 expiries is refused until the ready ones are claimed.{' '}
           <Link href="/app/portfolio" className="rounded-[2px] text-navy-50 underline decoration-navy-400 underline-offset-4 ui-hover:decoration-cyan">
             Open the account in Portfolio
           </Link>
           .
         </p>
+        {behind.length > 0 && (
+          <p role="status" data-state="vol-behind" className="flex items-start gap-s2 text-t13 text-pretty text-navy-200">
+            <Lamp tone="loss-1" size={6} className="mt-[6px]" />
+            <span>
+              <span className="font-semibold text-navy-50">Bids wait for a vol sync.</span> The vol of {behind.join(' and ')} is more than{' '}
+              {LIQUIDATION_VOL_ROUNDS} rounds behind its feed, so a bid is refused (VolNotCurrent) until someone syncs it. Anyone may.
+            </span>
+          </p>
+        )}
       </div>
       <Panel title="Discount ramp" level={4} meta={<span className="tabular-nums">{fmtDuration(elapsed)} in</span>}>
         <DiscountRamp
@@ -441,7 +459,7 @@ export function RiskView() {
         {auctions.isPending || asOf === undefined ? (
           <Skeleton className="h-48 w-full" />
         ) : auctions.data && auctions.data.length > 0 ? (
-          <ul aria-label="Auctions">{auctions.data.map((a) => <AuctionRow key={a.id} a={a} asOf={asOf} />)}</ul>
+          <ul aria-label="Auctions">{auctions.data.map((a) => <AuctionRow key={a.id} a={a} asOf={asOf} feeds={feeds.data ?? []} />)}</ul>
         ) : (
           <p className="text-t15 text-navy-200">No auction is running. Every account is above maintenance margin.</p>
         )}

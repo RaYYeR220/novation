@@ -11,7 +11,7 @@ import {
 } from '@novation/sdk';
 import { createWalletClient, defineChain, http, type Address, type Chain, type Hex, type PublicClient, type WalletClient } from 'viem';
 import { privateKeyToAccount, type PrivateKeyAccount } from 'viem/accounts';
-import { DEFAULT_REFUSAL_GAS, type Config } from './config';
+import { DEFAULT_MAX_VOL_SYNCS, DEFAULT_REFUSAL_GAS, type Config } from './config';
 
 /** What every tool runs against: the SDK bound to one deployment, and the agent if there is one. */
 export interface Session {
@@ -27,6 +27,8 @@ export interface Session {
   seriesCache: Map<number, SeriesInfo>;
   /** Serializes the agent's transactions so concurrent tool calls never race for a nonce. */
   lock: <T>(f: () => Promise<T>) => Promise<T>;
+  /** Vol catch-up transactions the agent key may still send this session. */
+  volSyncsLeft: number;
 }
 
 export interface SessionOptions {
@@ -36,6 +38,7 @@ export interface SessionOptions {
   account?: bigint;
   refusalGas?: bigint;
   allowForcedSend?: boolean;
+  maxVolSyncs?: number;
 }
 
 function chainFor(chainId: number, rpcUrl?: string): Chain {
@@ -77,6 +80,7 @@ export function createSession(o: SessionOptions): Session {
     allowForcedSend: o.allowForcedSend ?? false,
     seriesCache: new Map(),
     lock: mutex(),
+    volSyncsLeft: o.maxVolSyncs ?? DEFAULT_MAX_VOL_SYNCS,
   };
 }
 
@@ -88,6 +92,7 @@ export function sessionFromConfig(c: Config): Session {
     account: c.account,
     refusalGas: c.refusalGas,
     allowForcedSend: c.allowForcedSend,
+    maxVolSyncs: c.maxVolSyncs,
   });
 }
 

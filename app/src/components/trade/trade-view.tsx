@@ -4,8 +4,9 @@ import { useMemo, useRef, useState } from 'react';
 import { useAccountId } from '@/components/app/account-context';
 import { PayoffChart } from '@/components/charts/payoff-chart';
 import { Button } from '@/components/ui/button';
-import { Chip } from '@/components/ui/chip';
+import { Chip, SESSION_LAMP } from '@/components/ui/chip';
 import { DataTable, type Column } from '@/components/ui/data-table';
+import { Lamp } from '@/components/ui/lamp';
 import { Panel } from '@/components/ui/panel';
 import { Segment, SegmentedControl } from '@/components/ui/segmented-control';
 import { Tab, TabList, TabPanel, Tabs } from '@/components/ui/tabs';
@@ -21,10 +22,11 @@ import {
   useWhatIf,
   type WhatIfArgs,
 } from '@/lib/client/hooks';
-import type { Position, Series, Underlying } from '@/lib/client/types';
+import type { Position, Series, Underlying, Vault } from '@/lib/client/types';
 import { DEMO_TICKET } from '@/lib/demo';
 import { fmtDays, fmtExpiry, fmtNumber, fmtPct, fmtSeriesShort, fmtShock, fmtSigned } from '@/lib/format';
 import { shockRange } from '@/lib/kernel';
+import { closedFor, closedSession, untilReopen } from '@/lib/market-state';
 import type { PayoffBook, PayoffLeg } from '@/lib/payoff';
 import { useDebounced } from '@/lib/use-media';
 import { OptionsChain, type ChainSeries, type Side } from './options-chain';
@@ -75,6 +77,22 @@ const positionColumns = (asOf?: number): Column<Held>[] => [
   { key: 'mark', header: 'Mark', numeric: true, cell: (p) => fmtNumber(p.mark) },
   { key: 'value', header: 'Value', numeric: true, cell: (p) => fmtSigned(p.qty * p.mark) },
 ];
+
+/** The underlying's vaults are closed for the weekend or a holiday: no vault quotes until it reopens. */
+function VaultsClosed({ session, symbol, asOf }: { session: ReturnType<typeof closedSession>; symbol: string; asOf?: number }) {
+  if (!session) return null;
+  return (
+    <p role="status" data-state="vault-closed" className="flex items-start gap-s2 px-s1 pb-s3 text-t13 text-pretty text-navy-200">
+      <Lamp tone={SESSION_LAMP[session].tone} state={SESSION_LAMP[session].state} size={6} className="mt-[6px]" />
+      <span>
+        <span className="font-semibold text-navy-50">
+          {symbol} vaults closed for {closedFor(session)}.
+        </span>{' '}
+        No vault quotes, sales or buy-backs {untilReopen(asOf)}. RFQ makers can still quote.
+      </span>
+    </p>
+  );
+}
 
 function bookFor(u: Underlying, positions: Held[], collateral: Record<string, number>): PayoffBook {
   return {
@@ -134,9 +152,11 @@ export function TradeView() {
   const grant = grants.find((g) => g.agent === signerPick);
   // An agent can only sign on the underlyings its grant allows; otherwise the owner signs.
   const signer = grant && series && !grant.allowed.includes(series.underlying) ? OWNER : grant ? signerPick : OWNER;
-  const vault = series
-    ? vaults.data?.find((v) => v.live && v.underlying === series.underlying && v.kind === (series.isCall ? 'coveredCall' : 'putWrite'))
-    : undefined;
+  const writes = (v: Vault) => series !== undefined && v.underlying === series.underlying && v.kind === (series.isCall ? 'coveredCall' : 'putWrite');
+  const vault = vaults.data?.find((v) => v.live && writes(v));
+  // closed for the weekend or a holiday: the ticket says so rather than "no vault"
+  const closedVault = vault ? undefined : vaults.data?.find((v) => writes(v) && closedSession(v.session));
+  const closedOn = (symbol: string) => closedSession(vaults.data?.find((v) => v.underlying === symbol && closedSession(v.session))?.session);
   // a side nobody quotes (live: the vault doesn't sell or buy back this series) falls back to RFQ
   const sideQuote = series ? (side === 'buy' ? series.ask : series.bid) : undefined;
   const venue: Venue = venuePick === 'vault' && (!vault || (sideQuote !== undefined && !Number.isFinite(sideQuote))) ? 'rfq' : venuePick;
@@ -309,6 +329,7 @@ export function TradeView() {
                   }
                 >
                   <div className="p-s3 max-sm:px-0">
+                    <VaultsClosed session={closedOn(t.symbol)} symbol={t.symbol} asOf={asOf} />
                     <OptionsChain
                       symbol={t.symbol}
                       spot={t.spot}
@@ -397,6 +418,7 @@ export function TradeView() {
                   setSheet(false);
                 }}
                 vault={vault}
+                closedVault={closedVault}
                 grants={grants}
                 price={price}
                 now={now}

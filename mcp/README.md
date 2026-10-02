@@ -32,6 +32,7 @@ Amounts are decimal USDG, quantities are contracts (one contract is one token of
 3. If the chain would refuse it, the tool returns `{ status: "refused", sent: false, refusal: { code, message, numbers } }`. Nothing is signed or sent.
 4. Otherwise it is signed locally and sent with the gas estimate plus 25% (margin-check gas moves with the block timestamp), and the tool returns `{ status: "filled", txHash, premium, fee, accountAfter, budget }`.
 5. A transaction that still reverts on-chain returns `status: "refused"` with the decoded refusal, or `status: "out_of_gas"` when it burned its gas limit: that is not a policy refusal, and the trade can be retried.
+6. When an underlying's vol is further behind its feed than a trade's own sync folds (more than 64 rounds, or a feed migration awaiting a rebase), the vault won't quote and the chain refuses the trade (`VolNotCurrent`). With the market open, the tool first catches the vol up with the agent key (`syncVol`, or `syncAndRebaseVol` after a migration; both are permissionless), then quotes or simulates again, and the result's `note` lists those transactions. The catch-up stops when a sync doesn't advance the vol, and one server session sends at most `NOVATION_MAX_VOL_SYNCS` such transactions in all (default 8; 0 turns it off). Vaults are closed over weekends and holidays whatever the vol.
 
 `send_even_if_refused` exists only when the operator starts the server with `NOVATION_ALLOW_FORCED_SEND=1`; otherwise it isn't in the schema. With it set to `true`, a refused ticket is sent anyway with a fixed gas limit (`NOVATION_REFUSAL_GAS`, default 5,000,000), so the revert is mined and anyone can verify the refusal on-chain. It costs gas and changes nothing else.
 
@@ -98,6 +99,7 @@ NOVATION_AGENT_KEY=0x... NOVATION_ACCOUNT=12 node mcp/bin/novation-mcp.mjs
 | `NOVATION_DEPLOYMENT` | Path to a `contracts/deployments/<chainId>.json`, for a local or new deployment |
 | `NOVATION_REFUSAL_GAS` | Gas limit for `send_even_if_refused`. Default 5,000,000 |
 | `NOVATION_ALLOW_FORCED_SEND` | `1` adds `send_even_if_refused` to the trading tools. Default off |
+| `NOVATION_MAX_VOL_SYNCS` | Most vol catch-up transactions the agent key sends over the session (default 8; `0` turns the catch-up off) |
 
 ### MCP client configuration
 

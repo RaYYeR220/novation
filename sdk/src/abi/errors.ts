@@ -488,6 +488,11 @@ export const novationErrorsAbi = [
   },
   {
     "type": "error",
+    "name": "FallbackApplies",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "FallbackNotAllowed",
     "inputs": []
   },
@@ -1033,6 +1038,17 @@ export const novationErrorsAbi = [
   },
   {
     "type": "error",
+    "name": "TooManyClaimExpiries",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "TooManyPositions",
     "inputs": []
   },
@@ -1096,6 +1112,17 @@ export const novationErrorsAbi = [
     "type": "error",
     "name": "VolNotCurrent",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "VolNotCurrent",
+    "inputs": [
+      {
+        "name": "underlying",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
   },
   {
     "type": "error",

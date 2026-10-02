@@ -7,14 +7,16 @@ const JOB = 'roll';
 
 /**
  * Whether the vault will be live inside its own roll, which syncs vol first: it is live now, or its
- * underlying trades and the feed has rounds (in the stored phase, at most 64) for the sync to fold.
+ * market is open (REGULAR or EXTENDED: vaults close over weekends and holidays) and the feed has
+ * rounds (in the stored phase, at most 64) for the sync to fold.
  */
 async function liveForRoll(k: Keeper, v: Address): Promise<boolean> {
   const vc = { address: v, abi: optionVaultAbi } as const;
   if (await k.client.readContract({ ...vc, functionName: 'isLive' })) return true;
   const u = await k.client.readContract({ ...vc, functionName: 'underlying' });
   const spot = await getSpot(k.ctx, u).catch(() => null);
-  if (!spot?.ok) return false;
+  // vaults are closed over weekends and holidays: a roll pays its queue only in an open session
+  if (!spot?.ok || (spot.session !== 'REGULAR' && spot.session !== 'EXTENDED')) return false;
   const [vol, p] = await Promise.all([getVolState(k.ctx, u), getUnderlyingParams(k.ctx, u)]);
   const latest = await feedReader(k, p.feed).latest();
   return phaseOf(latest.id) === phaseOf(vol.lastRoundId) && latest.id > vol.lastRoundId && latest.id - vol.lastRoundId <= 64n;
@@ -53,7 +55,7 @@ export async function roll(k: Keeper): Promise<void> {
     ]);
     if (assets === 0n) continue;
     if (!(await liveForRoll(k, v))) {
-      k.log('info', JOB, 'wait', { ...base, escrowed, reason: 'vault not live (halted, or its vol is stale with nothing to sync)' });
+      k.log('info', JOB, 'wait', { ...base, escrowed, reason: 'vault not live (closed for the weekend or a holiday, halted, or its vol is stale with nothing to sync)' });
       continue;
     }
     if (free === 0n) {

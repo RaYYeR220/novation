@@ -14,6 +14,11 @@ import {
   fromWad,
   getPositionsRaw,
   getRfqDomain,
+  getSeries,
+  getVolCurrent,
+  MAX_VOL_SYNC_STEPS,
+  RefusalError,
+  simulateCatchUpVol,
   getSpot,
   listSeries,
   simulateRfqFill,
@@ -64,7 +69,17 @@ async function main() {
 
   // the fill
   const qty = toWad(values.qty!);
-  const sim = await simulateRfqFill(ctx, taker.account, quote, signature, takerId, qty);
+  const sim = await simulateRfqFill(ctx, taker.account, quote, signature, takerId, qty).catch(async (e: unknown) => {
+    // a vol more than one sync behind its feed: catch it up (permissionless), then fill
+    if (!(e instanceof RefusalError) || e.refusal.code !== 'VolNotCurrent') throw e;
+    const token = (e.refusal.args.underlying as `0x${string}` | undefined) ?? (await getSeries(ctx, seriesId)).underlying;
+    for (let i = 0; i < MAX_VOL_SYNC_STEPS && !(await getVolCurrent(ctx, token)); i++) {
+      const c = await simulateCatchUpVol(ctx, taker.account, token);
+      const { hash } = await sendWithHeadroom(n, taker, c.request);
+      log({ msg: 'vol caught up', token, tx: hash });
+    }
+    return simulateRfqFill(ctx, taker.account, quote, signature, takerId, qty);
+  });
   const { hash, receipt } = await sendWithHeadroom(n, taker, sim.request);
   const held = (await getPositionsRaw(ctx, takerId)).find((p) => p.seriesId === seriesId)?.qty ?? 0n;
   const explorer = n.client.chain?.blockExplorers?.default.url;

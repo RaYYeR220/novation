@@ -213,6 +213,35 @@ export async function getInsurance(ctx: NovationContext): Promise<{ balance: big
   return { balance, outstanding };
 }
 
+/**
+ * accountState plus an underlying the margin prices whose vol estimate hasn't folded its feed's
+ * latest round (null if none). A withdrawal and a trade's equity >= IM check sync the account's
+ * vols first and refuse (VolNotCurrent) while one is still behind: a backlog longer than one sync
+ * (64 rounds), or an aggregator migration awaiting syncAndRebaseVol (see simulateCatchUpVol).
+ */
+export async function getAccountStateChecked(ctx: NovationContext, account: bigint | number): Promise<{ state: AccountState; volBehind: Address | null }> {
+  const [st, behind] = await ctx.client.readContract({ ...ch(ctx), functionName: 'accountStateChecked', args: [id(account)] });
+  return { state: state(st), volBehind: /^0x0{40}$/i.test(behind) ? null : behind };
+}
+
+/**
+ * accountState plus, from the same pass over the book, its live positions (series not expired) and
+ * the expired ones awaiting a settlement price: what startLiquidation and bidLiquidation check (a
+ * liquidation needs live > 0 and awaiting == 0).
+ */
+export async function getLiquidationState(
+  ctx: NovationContext,
+  account: bigint | number,
+): Promise<{ state: AccountState; live: bigint; awaiting: bigint }> {
+  const [st, live, awaiting] = await ctx.client.readContract({ ...ch(ctx), functionName: 'liquidationState', args: [id(account)] });
+  return { state: state(st), live, awaiting };
+}
+
+/** The expiries on which the account holds an unpaid claim. */
+export async function getClaimExpiries(ctx: NovationContext, account: bigint | number): Promise<number[]> {
+  return (await ctx.client.readContract({ ...ch(ctx), functionName: 'claimExpiriesOf', args: [id(account)] })).map(Number);
+}
+
 /** The liquidation auction's current discount (WAD) and whether one is running for `account`. */
 export async function getLiquidation(ctx: NovationContext, account: bigint | number): Promise<{ discount: bigint; active: boolean }> {
   const [discount, active] = await ctx.client.readContract({

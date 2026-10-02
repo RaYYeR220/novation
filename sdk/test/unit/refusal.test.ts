@@ -85,6 +85,25 @@ describe('refusal decoding', () => {
     expect(decodeRevertData(encodeErrorResult({ abi: [s], errorName: 'StillLiquidatable' }))?.code).toBe('StillLiquidatable');
   });
 
+  it('explains the settlement last resort, the claim-expiry cap and the vol catch-up refusals', () => {
+    for (const name of ['FallbackApplies', 'TooManyClaimExpiries', 'VolNotCurrent', 'TooManyUnderlyings']) {
+      expect(errors.some((x) => x.name === name), name).toBe(true);
+      expect(refusalMessage(name), name).not.toMatch(/^Reverted with/);
+    }
+    // the auction house's VolNotCurrent names the underlying; the vault's has no argument: both decode
+    const withU = errors.find((x) => x.name === 'VolNotCurrent' && x.inputs.length === 1)!;
+    const bare = errors.find((x) => x.name === 'VolNotCurrent' && x.inputs.length === 0)!;
+    expect(decodeRevertData(encodeErrorResult({ abi: [withU], errorName: 'VolNotCurrent', args: [ADDR] as never }))).toMatchObject({
+      code: 'VolNotCurrent',
+      args: { underlying: expect.stringMatching(/aa$/i) },
+    });
+    expect(decodeRevertData(encodeErrorResult({ abi: [bare], errorName: 'VolNotCurrent' }))?.code).toBe('VolNotCurrent');
+    const t = errors.find((x) => x.name === 'TooManyClaimExpiries')!;
+    expect(decodeRevertData(encodeErrorResult({ abi: [t], errorName: 'TooManyClaimExpiries', args: [42n] as never }))?.numbers).toEqual({ id: 42 });
+    const f = errors.find((x) => x.name === 'FallbackApplies')!;
+    expect(decodeRevertData(encodeErrorResult({ abi: [f], errorName: 'FallbackApplies' }))?.message).toMatch(/fallback/);
+  });
+
   it('finds the revert data anywhere in an error chain', () => {
     const e = errors.find((x) => x.name === 'AgentRiskBudgetExceeded')!;
     const data = encodeErrorResult({ abi: [e], errorName: 'AgentRiskBudgetExceeded', args: [3n, 2n * 10n ** 18n, 10n ** 18n] as never });

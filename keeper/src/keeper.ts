@@ -128,6 +128,8 @@ export interface KeeperState {
   claims: Set<string>;
   /** `${id}:${expiry}` with a deficit sale started. */
   deficitSales: Set<string>;
+  /** Accounts with a liquidation started and not ended (LiquidationStarted / LiquidationEnded). */
+  liquidating: Set<bigint>;
   /** `${underlying}:${expiry}` -> settlement price, once settled in the registry. */
   settled: Map<string, bigint>;
   /** Vault subaccount id -> vault address. */
@@ -208,6 +210,7 @@ export function createKeeper(a: {
       accounts: new Set(),
       claims: new Set(),
       deficitSales: new Set(),
+      liquidating: new Set(),
       settled: new Map(),
       vaultIds: new Map(),
       lastRoll: new Map(),
@@ -410,7 +413,8 @@ export async function settlementOf(k: Keeper, underlying: Address, expiry: numbe
 
 /**
  * Brings the state up to the chain: new series, and the events that name accounts (Traded,
- * LiquidationBid), receivers to claim for (AccountSettled with net > 0) and deficit sales. The
+ * LiquidationBid), receivers to claim for (AccountSettled with net > 0), deficit sales and running
+ * liquidations (LiquidationStarted, LiquidationEnded). The
  * scan is incremental from the last block seen (the deployment block at first), stops
  * `confirmations` blocks below the head and re-reads `scanOverlap` blocks before its cursor, so a
  * load-balanced RPC that answers getLogs from a node a few blocks behind can't make it skip a
@@ -436,11 +440,13 @@ export async function refresh(k: Keeper): Promise<void> {
   const scan = { fromBlock: from, toBlock: to };
   const ch = { address: ctx.deployment.clearinghouse, abi: clearinghouseAbi } as const;
   const ah = { address: ctx.deployment.auctionHouse, abi: auctionHouseAbi } as const;
-  const [trades, bids, settledAccts, sales] = await Promise.all([
+  const [trades, bids, settledAccts, sales, started, ended] = await Promise.all([
     getEvents(ctx, { ...ch, eventName: 'Traded', ...scan }),
     getEvents(ctx, { ...ah, eventName: 'LiquidationBid', ...scan }),
     getEvents(ctx, { ...ch, eventName: 'AccountSettled', ...scan }),
     getEvents(ctx, { ...ah, eventName: 'DeficitSaleStarted', ...scan }),
+    getEvents(ctx, { ...ah, eventName: 'LiquidationStarted', ...scan }),
+    getEvents(ctx, { ...ah, eventName: 'LiquidationEnded', ...scan }),
   ]);
   const fresh = (l: { transactionHash: Hash | null; logIndex: number | null; blockNumber: bigint | null }) => {
     const id = `${l.transactionHash}:${l.logIndex}`;
@@ -455,6 +461,12 @@ export async function refresh(k: Keeper): Promise<void> {
   for (const b of bids.filter(fresh)) if (b.args.bidderId !== undefined) state.accounts.add(b.args.bidderId);
   for (const s of settledAccts.filter(fresh)) if ((s.args.net ?? 0n) > 0n) state.claims.add(`${s.args.id}:${s.args.expiry}`);
   for (const s of sales.filter(fresh)) state.deficitSales.add(`${s.args.id}:${s.args.expiry}`);
+  // in chain order: a start then an end in the same window leaves nothing running
+  for (const e of [...started.filter(fresh), ...ended.filter(fresh)].sort((a, b) => Number((a.blockNumber ?? 0n) - (b.blockNumber ?? 0n)) || (a.logIndex ?? 0) - (b.logIndex ?? 0))) {
+    if (e.args.id === undefined) continue;
+    if (e.eventName === 'LiquidationStarted') state.liquidating.add(e.args.id);
+    else state.liquidating.delete(e.args.id);
+  }
   state.cursor = to + 1n;
   for (const [id, b] of state.seen) if (b + overlap < state.cursor) state.seen.delete(id);
 }

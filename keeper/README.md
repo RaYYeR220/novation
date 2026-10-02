@@ -87,7 +87,8 @@ Every job can run again safely: it reads the chain and sends only what is still 
      - (i) the next round printed after the close;
      - (ii) the hint is still the latest round, and now is after the close;
      - (iii) the feed changed phase after the close.
-   - If the pre-close print is older than `maxSettlementLag` or outside the plausibility band, the job waits for the 72-hour fallback. It then calls `settleExpiryFallback` with the first post-close round.
+   - If the pre-close print is older than `maxSettlementLag` or outside the plausibility band, the job waits for the 72-hour fallback. It then calls `settleExpiryFallback` with the first post-close round, if that round is in the band.
+   - If no in-band round has printed since the close (a dead feed, or an implausible first print), the job waits for the last resort, 7 days after the close. It then calls `settleExpiryLastResort` with the last pre-close round, proven last as for (i)–(iii) but without the lag bound, if that round is in the band. The hub refuses the last resort while the fallback applies (`FallbackApplies`).
    - Each decision is logged with the proof, the hint, its timestamp and the next round.
 2. **settleAccount.**
    - This job covers every account the keeper has seen trade, or take positions in an auction, that holds positions on a settled expiry.
@@ -99,12 +100,13 @@ Every job can run again safely: it reads the chain and sends only what is still 
    - A vault's claim goes through its roll.
 4. **roll.** This job rolls a vault with shares queued for redemption only when the roll would pay them. That means:
    - no deficit;
+   - an open market: vaults close over weekends and holidays, and a roll pays its queue only in a REGULAR or EXTENDED session;
    - live after the roll's own vol sync;
    - enough unlocked assets (`freeAssets`, which is net of the queue, above zero).
 
    A roll that would do nothing is never sent. After a roll it sent, the job waits `--roll-every` before rolling the same vault again. A vault whose cash already covers a deficit has it applied first with `repayDeficit`.
 5. **syncVol.**
-   - It runs before liquidations. The auction house folds at most 8 new rounds per underlying itself and refuses a liquidation over a longer backlog (`VolNotCurrent`), so the keeper catches up first.
+   - It runs before liquidations. The auction house folds at most 8 new rounds per underlying itself and refuses a liquidation over a longer backlog (`VolNotCurrent`), so the keeper catches up first. When a start or a bid of the liquidation job is refused `VolNotCurrent` anyway (only then), the job syncs that vol, up to 4 steps of 64 rounds and regardless of `--sync-vol-every` and the gas reserve, and simulates once more.
    - For each underlying where the feed has a round the hub hasn't folded in, the job calls `MarketDataHub.syncVol`, which folds up to 64 rounds per call.
    - It does nothing while an underlying is up to date, was poked within `--sync-vol-every`, or the balance is below the gas reserve.
    - When the feed has moved to a new aggregator phase, it calls `syncAndRebaseVol`, which folds what is left of the old phase (up to 64 rounds per call) and re-anchors on the new phase in one transaction, so the old aggregator can't print in between.
@@ -112,10 +114,13 @@ Every job can run again safely: it reads the chain and sends only what is still 
    - Any account below maintenance margin with a live book gets its Dutch auction started. A restart waits 6 hours per account unless a keeper bid went through since the last start. So an account nobody takes over doesn't cost a start every 30 minutes. That includes the case where the keeper can't bid, and the case where its bids keep failing in simulation.
    - Bidding is opt-in. It comes from the keeper's own subaccount (`setup`), and it is capped at 2000 USDG per bid and `--bid-cap` in total.
    - A bid goes in as soon as an auction starts, so at the start discount. It takes `maxFractionPerBid` of the book, or all of it once equity is dust. The fraction is halved while the bidder would end up below initial margin.
+   - A bid moves the account's unpaid claims to the bidder, and neither side may end up holding claims on more than 16 expiries (`TooManyClaimExpiries`). Before bidding, the job claims the ready claims of both. If blocked claims alone keep either side over the cap, it logs that and skips the bid.
+   - An auction left running on an account that has recovered is ended with `endLiquidation`, so a later fall starts a fresh ramp. That covers auctions anyone started: running auctions are tracked from `LiquidationStarted` and `LiquidationEnded`, scanned from the deployment block when the keeper starts.
    - The keeper never unwinds or hedges what it takes over. On mainnet, size `--bid-cap` with that in mind.
    - Deficit sales started by settlement get bids for the defaulter's stock collateral, sized to what the deficit still needs.
    - The discount ramps every second, so a bid can land a block later at a slightly lower price and leave a sliver of the deficit unpaid. The job pays a sliver of up to 0.01 USDG into the account and applies it with `repayDeficit`.
    - Cash that already covers a deficit, from a deposit or a claim, only counts once it is applied. The job calls `repayDeficit` before it drops the sale.
+   - A repaid sale that is still open, because it was repaid by cash rather than a bid, is ended with `endDeficitSale`, so a later deficit on the same expiry starts a fresh ramp.
    - A repay is skipped when all that is left is a sub-unit of socialized debt, which whole-unit repays can never take. It also waits 6 hours after a repay that left the debt unchanged, and a repeat repay waits while the balance is below the gas reserve.
    - Anyone may make all of these calls.
 7. **listSeries.**
@@ -158,11 +163,13 @@ The anvil suite uses the SDK's fixture: anvil, the Solidity `KernelReference` as
    - one tick settles all four underlyings, settles the accounts payers first, claims, and buys the vault's deficit-sale collateral;
    - a second tick, in which the vault's roll pays the queue;
    - a third tick with nothing to do.
-9. A vault queue that is fully locked gets no roll, and the same queue gets one roll once assets are free.
+9. A vault queue that is fully locked gets no roll. Once assets are free it still gets none over the weekend, and then exactly one roll when the market opens.
 10. A liquidation:
+   - with a feed nine rounds ahead of the vol, the start is refused `VolNotCurrent`, and the keeper syncs the vol, then starts the auction; a bid later does the same;
    - with bidding off, it is only started;
    - with the exposure cap used up, there is no bid;
    - otherwise, the bid goes in at the start discount from the keeper's subaccount.
-11. Cash deposited to cover a deficit is applied with `repayDeficit` before the sale is dropped.
+11. A liquidation someone else started, left running on an account that recovered, is ended by a keeper process started afterwards.
+12. Cash deposited to cover a deficit is applied with `repayDeficit`, then the still-open sale is ended and dropped.
 
 `tsx scripts/fork-rehearsal.ts` rehearses the next settlement against a local anvil fork of the live chain, with the deployed contracts and the real open positions. It re-prints each feed just before the close, moves the fork's clock past it, and runs the settlement jobs on the fork. Nothing reaches the real network.

@@ -4,6 +4,8 @@ import { isHex, type Hex } from 'viem';
 
 /** Gas limit for a ticket sent although the simulation refused it, so the revert is mined. */
 export const DEFAULT_REFUSAL_GAS = 5_000_000n;
+/** Vol catch-up transactions one server session may send in all (NOVATION_MAX_VOL_SYNCS). */
+export const DEFAULT_MAX_VOL_SYNCS = 8;
 export const DEFAULT_CHAIN_ID = 46630;
 
 export interface Config {
@@ -18,6 +20,8 @@ export interface Config {
   refusalGas: bigint;
   /** NOVATION_ALLOW_FORCED_SEND=1: the trading tools offer send_even_if_refused. */
   allowForcedSend: boolean;
+  /** Most vol catch-up transactions the agent key sends over the session (NOVATION_MAX_VOL_SYNCS). */
+  maxVolSyncs: number;
 }
 
 export class ConfigError extends Error {
@@ -36,6 +40,8 @@ export class ConfigError extends Error {
  *   NOVATION_DEPLOYMENT   path to a contracts/deployments/<chainId>.json (default: the recorded one).
  *   NOVATION_REFUSAL_GAS  gas limit for send_even_if_refused (default 5,000,000).
  *   NOVATION_ALLOW_FORCED_SEND  1 to offer send_even_if_refused (mines refused tickets as proof).
+ *   NOVATION_MAX_VOL_SYNCS  vol catch-up transactions the agent key may send over the session
+ *                         (default 8; 0 turns the catch-up off).
  * There is deliberately no setting for an owner key.
  */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -76,6 +82,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (forced !== undefined && !/^(0|1|true|false)$/i.test(forced)) throw new ConfigError('NOVATION_ALLOW_FORCED_SEND must be 1 or 0');
   const gas = v('NOVATION_REFUSAL_GAS');
   if (gas !== undefined && !/^\d+$/.test(gas)) throw new ConfigError('NOVATION_REFUSAL_GAS must be an integer');
+  const syncs = v('NOVATION_MAX_VOL_SYNCS');
+  if (syncs !== undefined && !/^\d+$/.test(syncs)) throw new ConfigError('NOVATION_MAX_VOL_SYNCS must be a non-negative integer');
 
   return {
     chainId,
@@ -85,5 +93,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     account: acct !== undefined ? BigInt(acct) : undefined,
     refusalGas: gas !== undefined ? BigInt(gas) : DEFAULT_REFUSAL_GAS,
     allowForcedSend: forced !== undefined && /^(1|true)$/i.test(forced),
+    maxVolSyncs: syncs !== undefined ? Number(syncs) : DEFAULT_MAX_VOL_SYNCS,
   };
 }

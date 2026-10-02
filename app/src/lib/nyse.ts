@@ -7,6 +7,7 @@ export {
   closeSec,
   closeTimestamp,
   etParts,
+  eveningTs,
   fmtCloseEt,
   fmtEt,
   isDst,
