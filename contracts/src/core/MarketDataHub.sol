@@ -368,7 +368,10 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
     /// @notice The feed's last print at or before the weekly expiry close. RH equity feeds publish
     /// no round at the Friday close, so the caller supplies a hint round and proves it is the last
     /// one at or before expiry, by any of:
-    ///  (i)   the next round in the same phase exists and printed after expiry;
+    ///  (i)   the next round in the same phase exists and printed after expiry, and if the feed has
+    ///        moved to a later phase, that phase's round 1 printed after expiry too (during an
+    ///        aggregator migration the old phase can keep printing while the new one already has
+    ///        the true last print before the close);
     ///  (ii)  the hint is still the latest round and now is strictly after expiry (any future
     ///        round must print at or after now, hence after expiry);
     ///  (iii) the feed changed phase after the close: round 1 of the next phase printed after expiry.
@@ -390,20 +393,23 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
     }
 
     function _requireLastRound(IAggregatorV3 feed, uint64 expiry, uint80 hint) private view {
+        (uint80 latestId,,,,) = feed.latestRoundData();
+        bool laterPhase = (latestId >> 64) > (hint >> 64);
+        // with a later phase live, the hint is the last print only if that phase began after expiry
+        if (laterPhase) {
+            (, uint256 firstAt) = _round(feed, (((hint >> 64) + 1) << 64) | 1);
+            if (firstAt <= expiry) revert NextRoundMissing();
+        }
         (, uint256 nextAt) = _round(feed, hint + 1);
         if (nextAt != 0) {
             if (nextAt <= expiry) revert NextRoundMissing();
             return;
         }
-        (uint80 latestId,,,,) = feed.latestRoundData();
         if (latestId == hint) {
             if (block.timestamp <= expiry) revert NextRoundMissing();
             return;
         }
-        if ((latestId >> 64) > (hint >> 64)) {
-            (, uint256 firstAt) = _round(feed, (((hint >> 64) + 1) << 64) | 1);
-            if (firstAt > expiry) return;
-        }
+        if (laterPhase) return;
         revert NextRoundMissing();
     }
 

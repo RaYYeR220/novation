@@ -558,6 +558,22 @@ contract MarketDataHubTest is Test {
         hub.settlementPrice(address(token), uint64(EXPIRY), _roundId(2, 1));
     }
 
+    /// Review PoC: during an aggregator migration the old phase can keep printing after the new
+    /// one already holds the true last print before the close. An old-phase hint whose successor
+    /// printed after the close must not prove (proof (i)) while the later phase began before it.
+    function test_settlementOldPhaseRoundRejectedDuringMigration() public {
+        feed.pushRound(170e8, EXPIRY - 2 hours); // (1,1), the old aggregator
+        feed.setPhase(2);
+        feed.pushRound(200e8, EXPIRY - 5 minutes); // (2,1), the true last print
+        feed.setPhase(1);
+        feed.pushRound(171e8, EXPIRY + 1 hours); // (1,2), the old aggregator keeps printing
+        feed.setPhase(2);
+        vm.warp(EXPIRY + 2 hours);
+        vm.expectRevert(MarketDataHub.NextRoundMissing.selector);
+        hub.settlementPrice(address(token), uint64(EXPIRY), _roundId(1, 1));
+        assertEq(hub.settlementPrice(address(token), uint64(EXPIRY), _roundId(2, 1)), 200e18);
+    }
+
     function test_settlementRejectsOldPhaseHintWithoutProof() public {
         feed.pushRound(150e8, EXPIRY - 300); // (1,1)
         feed.pushRound(151e8, EXPIRY - 100); // (1,2) real last pre-close print

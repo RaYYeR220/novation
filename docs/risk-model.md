@@ -183,7 +183,7 @@ Robinhood Chain's equity feeds publish no round at the Friday close. The settlem
 
 | Proof | Condition |
 |---|---|
-| (i) Next round | The next round in the same phase exists and was printed after the close. |
+| (i) Next round | The next round in the same phase exists and was printed after the close; if the feed has moved to a later phase, that phase's first round was printed after the close too (during an aggregator migration the old phase can keep printing while the new one holds the true last print). |
 | (ii) Latest round | The hint is still the feed's latest round and the current time is strictly after the close. Any later round must print at or after now, so after the close. Requiring strictly after closes a race with a round printed in the same second as the close. |
 | (iii) Phase change | The feed moved to a new aggregator phase after the close: the hint's phase has no further round, and round 1 of the next phase was printed after the close. |
 | (iv) Fallback | Only via `settlementPriceFallback`, and only 72 hours after the close. The caller names the first round printed after the close. It is accepted when its predecessor, the last pre-close print, is older than `maxSettlementLag` or outside the band; the predecessor is found across a phase boundary if needed. The settlement price is then the first post-close print, which must be in the band. |
