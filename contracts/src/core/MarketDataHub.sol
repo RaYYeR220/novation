@@ -331,8 +331,40 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
     function rebaseVol(address u) external nonReentrant {
         VolState storage v = _vol[u];
         if (!v.initialized) revert NotInitialized();
+        _rebase(u, v, IAggregatorV3(params.underlying(u).feed));
+    }
+
+    /// @notice Permissionless, after an aggregator migration (the feed's latest round is in a later
+    /// phase): folds what is left of the stored phase, up to 64 rounds, and if that exhausts it,
+    /// rebases onto the latest round, in one call. Separate pokeVol and rebaseVol calls race the
+    /// old aggregator while it still prints (rebaseVol reverts PhaseNotExhausted after any new
+    /// old-phase round); here nothing can print in between. Returns false when more than 64 rounds
+    /// were left (call again).
+    function syncAndRebaseVol(address u) external nonReentrant returns (bool rebased) {
+        VolState storage v = _vol[u];
+        if (!v.initialized) revert NotInitialized();
         UnderlyingParams memory p = params.underlying(u);
         IAggregatorV3 feed = IAggregatorV3(p.feed);
+        (uint80 latest,,,,) = feed.latestRoundData();
+        uint80 last = v.lastRoundId;
+        if ((latest >> 64) <= (last >> 64)) revert NoPhaseChange();
+        uint256 n;
+        while (n < 64 && _printedAt(p.feed, last + 1 + uint80(n)) != 0) {
+            ++n;
+        }
+        if (n != 0) {
+            uint80[] memory ids = new uint80[](n);
+            for (uint256 i = 0; i < n; ++i) {
+                ids[i] = last + 1 + uint80(i);
+            }
+            _fold(u, v, p, ids);
+            if (n == 64 && _printedAt(p.feed, last + 65) != 0) return false;
+        }
+        _rebase(u, v, feed);
+        return true;
+    }
+
+    function _rebase(address u, VolState storage v, IAggregatorV3 feed) private {
         (uint80 roundId, int256 answer,, uint256 updatedAt,) = feed.latestRoundData();
         uint80 oldId = v.lastRoundId;
         if ((roundId >> 64) <= (oldId >> 64)) revert NoPhaseChange();

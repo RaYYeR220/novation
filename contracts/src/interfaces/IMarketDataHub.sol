@@ -33,4 +33,5 @@ interface IMarketDataHub {
         view
         returns (uint256 r2, uint256 dt, uint80 lastRoundId, uint256 lastPrice, uint64 lastUpdatedAt, uint64 lastPokeTs);
     function rebaseVol(address u) external; // permissionless: after a Chainlink phase change, restart from the latest round (keeps r2/dt)
+    function syncAndRebaseVol(address u) external returns (bool rebased); // permissionless: fold the rest of the old phase (<= 64) and rebase, atomically
 }

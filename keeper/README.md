@@ -104,10 +104,10 @@ Every job can run again safely: it reads the chain and sends only what is still 
 
    A roll that would do nothing is never sent. After a roll it sent, the job waits `--roll-every` before rolling the same vault again. A vault whose cash already covers a deficit has it applied first with `repayDeficit`.
 5. **syncVol.**
-   - It runs before liquidations, so the margin they read is at the current vol and not the `volCap` fallback of a round printed but not folded in (the auction house also syncs every underlying of an account before it starts or takes a bid).
+   - It runs before liquidations. The auction house folds at most 8 new rounds per underlying itself and refuses a liquidation over a longer backlog (`VolNotCurrent`), so the keeper catches up first.
    - For each underlying where the feed has a round the hub hasn't folded in, the job calls `MarketDataHub.syncVol`, which folds up to 64 rounds per call.
    - It does nothing while an underlying is up to date, was poked within `--sync-vol-every`, or the balance is below the gas reserve.
-   - When the feed has moved to a new aggregator phase, it first folds what is left of the old phase with `pokeVol`, then calls `rebaseVol`.
+   - When the feed has moved to a new aggregator phase, it calls `syncAndRebaseVol`, which folds what is left of the old phase (up to 64 rounds per call) and re-anchors on the new phase in one transaction, so the old aggregator can't print in between.
 6. **liquidation.**
    - Any account below maintenance margin with a live book gets its Dutch auction started. A restart waits 6 hours per account unless a keeper bid went through since the last start. So an account nobody takes over doesn't cost a start every 30 minutes. That includes the case where the keeper can't bid, and the case where its bids keep failing in simulation.
    - Bidding is opt-in. It comes from the keeper's own subaccount (`setup`), and it is capped at 2000 USDG per bid and `--bid-cap` in total.

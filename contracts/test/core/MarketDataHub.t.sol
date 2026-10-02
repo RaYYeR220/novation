@@ -1044,6 +1044,66 @@ contract MarketDataHubTest is Test {
         assertFalse(hub.syncVolUpTo(address(token), 4)); // a phase change waits for rebaseVol
     }
 
+    /// Review (B, R-2): after an aggregator migration the old aggregator may still print. pokeVol
+    /// then rebaseVol in two transactions races it (a new old-phase round makes rebaseVol revert
+    /// PhaseNotExhausted); syncAndRebaseVol folds the rest of the old phase and rebases in one call.
+    function test_syncAndRebaseVolIsAtomic() public {
+        vm.warp(REGULAR_TS);
+        feed.pushRound(150e8, REGULAR_TS);
+        hub.initVol(address(token));
+        vm.expectRevert(MarketDataHub.NoPhaseChange.selector);
+        hub.syncAndRebaseVol(address(token));
+
+        feed.pushRound(151e8, REGULAR_TS + 10); // (1,2)
+        feed.pushRound(152e8, REGULAR_TS + 20); // (1,3)
+        feed.setPhase(2);
+        feed.pushRound(153e8, REGULAR_TS + 30); // (2,1)
+        // the race: a keeper folds phase 1, then the old aggregator prints once more
+        uint256 snap = vm.snapshotState();
+        _pokeN(2, 2);
+        feed.setPhase(1);
+        feed.pushRound(154e8, REGULAR_TS + 40); // (1,4)
+        feed.setPhase(2);
+        vm.expectRevert(MarketDataHub.PhaseNotExhausted.selector);
+        hub.rebaseVol(address(token));
+        vm.revertToState(snap);
+
+        // in one call: phase 1 folded to its end, then the anchor moves to (2,1)
+        uint256 snap2 = vm.snapshotState();
+        _pokeN(2, 2);
+        bytes memory folded = _volSnapshot();
+        vm.revertToState(snap2);
+        vm.expectEmit(true, false, false, true, address(hub));
+        emit IMarketDataHub.VolRebased(address(token), _roundId(1, 3), _roundId(2, 1));
+        assertTrue(hub.syncAndRebaseVol(address(token)));
+        (uint256 r2, uint256 dt, uint80 lastId, uint256 px, uint64 at,) = hub.volState(address(token));
+        (uint256 r2f, uint256 dtf,,,,) = abi.decode(folded, (uint256, uint256, uint80, uint256, uint64, uint64));
+        assertEq(r2, r2f);
+        assertEq(dt, dtf);
+        assertEq(lastId, _roundId(2, 1));
+        assertEq(px, 153e18);
+        assertEq(at, REGULAR_TS + 30);
+        assertTrue(hub.volCurrent(address(token)));
+    }
+
+    /// More than 64 rounds left in the old phase: one call folds 64 and doesn't rebase yet.
+    function test_syncAndRebaseVolLongTail() public {
+        vm.warp(REGULAR_TS);
+        feed.pushRound(150e8, REGULAR_TS);
+        hub.initVol(address(token));
+        for (uint64 i = 1; i <= 65; i++) {
+            feed.pushRound(150e8, REGULAR_TS + i);
+        }
+        feed.setPhase(2);
+        feed.pushRound(151e8, REGULAR_TS + 100);
+        assertFalse(hub.syncAndRebaseVol(address(token)));
+        (,, uint80 lastId,,,) = hub.volState(address(token));
+        assertEq(lastId, _roundId(1, 65));
+        assertTrue(hub.syncAndRebaseVol(address(token)));
+        (,, lastId,,,) = hub.volState(address(token));
+        assertEq(lastId, _roundId(2, 1));
+    }
+
     function test_syncVolRequiresInit() public {
         vm.expectRevert(MarketDataHub.NotInitialized.selector);
         hub.syncVol(address(token));
