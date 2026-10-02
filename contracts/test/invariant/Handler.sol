@@ -366,6 +366,7 @@ contract Handler is Test {
     // ================================================================ vaults
 
     function vaultBuy(uint256 actorSeed, bool calls, uint256 seriesSeed, uint256 qtySeed) external tracked {
+        if (!_marketOpen()) return;
         OptionVaultBase v = calls ? callVault : putVault;
         (bool ok, uint32 sid) = _offered(calls, seriesSeed);
         if (!ok) return;
@@ -386,6 +387,7 @@ contract Handler is Test {
     }
 
     function vaultSellBack(uint256 actorSeed, bool calls, uint256 seriesSeed, uint256 qtySeed) external tracked {
+        if (!_marketOpen()) return;
         OptionVaultBase v = calls ? callVault : putVault;
         uint256 a = actorSeed % N_ACTORS;
         (bool ok, uint32 sid) = _heldAgainst(v, calls, actorIds[a], seriesSeed);
@@ -405,6 +407,7 @@ contract Handler is Test {
     /// rounding in the vault's favour). The vol is synced first so the deposit's own sync can't
     /// re-mark the book in between.
     function vaultDeposit(uint256 actorSeed, bool calls, uint256 amount) external tracked {
+        if (!_marketOpen()) return;
         OptionVaultBase v = calls ? callVault : putVault;
         uint256 a = actorSeed % N_ACTORS;
         amount = calls ? _bound(amount, 0.01e18, 20e18) : _bound(amount, 1e6, 5_000e6);
@@ -423,6 +426,7 @@ contract Handler is Test {
     /// rounding) less; the holders who stay keep their share price, gaining at most that rounding
     /// and never losing more than the conversion's own few wei.
     function vaultExit(uint256 actorSeed, bool calls, uint256 amountSeed, uint8 mode) external tracked {
+        if (!_marketOpen()) return;
         // three exits in four from the covered-call vault, the one with a USDG leg
         OptionVaultBase v = calls || amountSeed % 2 == 0 ? callVault : putVault;
         (bool found, address owner) = _shareholder(v, actorSeed);
@@ -572,6 +576,15 @@ contract Handler is Test {
         ++count["syncVol"];
     }
 
+    /// @notice A bounded vol catch-up (what a liquidation runs itself): it reports whether the
+    /// estimate has folded the feed's latest round, which must agree with the hub's own view.
+    function syncVolUpTo(uint256 uSeed, uint256 rounds) external tracked {
+        address u = _us[uSeed % 2];
+        bool current = hub.syncVolUpTo(u, _bound(rounds, 1, 64));
+        if (current != hub.volCurrent(u)) _flag("liveness", "syncVolUpTo disagrees with volCurrent");
+        ++count["syncVolUpTo"];
+    }
+
     /// @notice Lists a series within 15% of spot on one of the next two weekly expiries.
     function listSeries(uint256 uSeed, bool later, uint256 strikeSeed, bool isCall) external tracked {
         if (_series.length >= MAX_SERIES || _liveCount() >= MAX_LIVE_SERIES) return;
@@ -618,6 +631,7 @@ contract Handler is Test {
 
     /// @notice Starts the liquidation of the first liquidatable account from `targetSeed` on.
     function startLiquidation(uint256 targetSeed) external tracked {
+        _syncVols();
         (bool ok, uint256 id) = _liquidatable(targetSeed);
         if (!ok) return;
         ah.startLiquidation(id);
@@ -659,6 +673,7 @@ contract Handler is Test {
     /// @notice Bids on a running liquidation, or starts one on a liquidatable account and bids on
     /// it. The bidder takes over a fraction of the book and must stay above IM.
     function bidLiquidation(uint256 targetSeed, uint256 bidderSeed, uint256 fractionSeed) external tracked {
+        _syncVols();
         (bool ok, uint256 id) = _runningLiquidation(targetSeed);
         if (!ok) {
             (ok, id) = _liquidatable(targetSeed);
@@ -669,11 +684,14 @@ contract Handler is Test {
         if (bidderId == id) (bidder, bidderId) = (liquidator, liquidatorId);
         GlobalParams memory g = params.globals();
         uint256 f = _bound(fractionSeed, 0.05e18, g.maxFractionPerBid);
-        if (ch.accountState(id).equity <= int256(uint256(g.dustEquity)) && fractionSeed % 2 == 0) f = WAD;
+        AccountState memory st = _checkLiquidationState(id);
+        if (st.equity <= int256(uint256(g.dustEquity)) && fractionSeed % 2 == 0) f = WAD;
+        bool claims = ch.claimableTotalOf(id) != 0;
         vm.prank(bidder);
         ah.bidLiquidation(id, f, bidderId, type(int256).max);
         _openers.push(bidderId);
         ++count["liquidationBid"];
+        if (claims) ++count["bidWithClaims"]; // unpaid claims paid or moved with the fraction
     }
 
     /// @notice Buys stock collateral of an account in deficit at the sale's discount, up to what
@@ -710,6 +728,22 @@ contract Handler is Test {
             try ch.socializeRemainder(id, xs[i]) {
                 ++count["socialize"];
             } catch {}
+        }
+    }
+
+    /// @notice Ends the first deficit sale, from `targetSeed` on, whose account owes nothing more for
+    /// it (repaid from its own cash rather than by a bid). Anyone may.
+    function endDeficitSale(uint256 targetSeed) external tracked {
+        uint256 n = _ids.length;
+        for (uint256 j = 0; j < n; ++j) {
+            uint256 id = _ids[(targetSeed + j) % n];
+            for (uint256 i = 0; i < _expiries.length; ++i) {
+                uint64 e = _expiries[i];
+                if (ah.saleStartedAt(id, e) == 0 || !_saleRepaid(id, e)) continue;
+                ah.endDeficitSale(id, e);
+                ++count["endDeficitSale"];
+                return;
+            }
         }
     }
 
@@ -796,6 +830,50 @@ contract Handler is Test {
             }
         }
         _repayAll();
+        _endSales();
+    }
+
+    /// @dev With every debt repaid, every deficit sale still running must end (endDeficitSale).
+    function _endSales() internal {
+        for (uint256 j = 0; j < _ids.length; ++j) {
+            for (uint256 i = 0; i < _expiries.length; ++i) {
+                uint64 e = _expiries[i];
+                if (ah.saleStartedAt(_ids[j], e) == 0) continue;
+                try ah.endDeficitSale(_ids[j], e) {
+                    ++count["endDeficitSale"];
+                } catch {
+                    _flag("liveness", "a repaid deficit sale could not be ended");
+                }
+            }
+        }
+    }
+
+    function _saleRepaid(uint256 id, uint64 e) internal view returns (bool) {
+        (, uint256 bridged, uint256 pending) = ch.deficitOf(id, e);
+        return bridged + pending + ch.socializedDebtOf(id) == 0;
+    }
+
+    /// @dev Every underlying's vol folded to the feed's latest round, as a keeper does before it
+    /// liquidates (a liquidation folds at most 8 rounds itself).
+    function _syncVols() internal {
+        hub.syncVol(_us[0]);
+        hub.syncVol(_us[1]);
+    }
+
+    /// @dev liquidationState is accountState plus positionStatus from one pass: both must agree.
+    function _checkLiquidationState(uint256 id) internal returns (AccountState memory st) {
+        (AccountState memory l, uint256 live, uint256 awaiting) = ch.liquidationState(id);
+        st = ch.accountState(id);
+        (uint256 live2, uint256 awaiting2) = ch.positionStatus(id);
+        if (
+            l.equity != st.equity || l.im != st.im || l.mm != st.mm || l.liquidatable != st.liquidatable
+                || live != live2 || awaiting != awaiting2
+        ) _flag("liveness", "liquidationState disagrees with accountState and positionStatus");
+    }
+
+    function _marketOpen() internal view returns (bool) {
+        Session sess = NyseCalendar.baseSession(_now());
+        return sess == Session.REGULAR || sess == Session.EXTENDED;
     }
 
     /// @dev Every debt can be repaid from cash: each account still in deficit is funded with what
@@ -925,6 +1003,12 @@ contract Handler is Test {
     /// @notice CHStorage.totalClaimable[e].
     function totalClaimable(uint64 e) public view returns (uint256) {
         return uint256(vm.load(address(ch), keccak256(abi.encode(uint256(e), uint256(CH_SLOT) + 16))));
+    }
+
+    /// @notice CHStorage.position[id][sid]: (index in the series list + 1) << 128 | uint128(qty).
+    function positionSlot(uint256 id, uint32 sid) public view returns (uint256) {
+        bytes32 base = keccak256(abi.encode(id, uint256(CH_SLOT) + 8));
+        return uint256(vm.load(address(ch), keccak256(abi.encode(uint256(sid), base))));
     }
 
     /// @notice CHStorage.impaired[e].
