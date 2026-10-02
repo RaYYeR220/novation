@@ -1,4 +1,5 @@
 import type { Address, Hex, PublicClient } from 'viem';
+import type { EventCache } from './events';
 
 /** MarketDataHub sessions, in enum order (Types.sol). */
 export const SESSIONS = ['REGULAR', 'EXTENDED', 'WEEKEND', 'HOLIDAY', 'HALTED'] as const;
@@ -39,6 +40,10 @@ export interface Deployment {
 export interface NovationContext {
   client: PublicClient;
   deployment: Deployment;
+  /** Scanned event ranges, so later scans fetch only new blocks (see events.getEvents). */
+  eventCache?: EventCache;
+  /** Block timestamps by number; blocks never change. */
+  blockTimes?: Map<bigint, number>;
 }
 
 export interface SeriesInfo {

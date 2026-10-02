@@ -15,7 +15,10 @@ import type { TestProject } from 'vitest/node';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const CONTRACTS = join(ROOT, 'contracts');
 const DEPLOYMENT = join(CONTRACTS, 'deployments', '31337.json');
-/** anvil's first default account (the public test mnemonic); deploys and seeds. */
+/**
+ * anvil's first default account; deploys and seeds. A PUBLIC test key (anvil's well-known mnemonic),
+ * funded only on the local anvil this file starts.
+ */
 export const ANVIL_DEPLOYER_KEY = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
 
 declare module 'vitest' {

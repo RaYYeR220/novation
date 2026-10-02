@@ -3,7 +3,10 @@ import { createPublicClient, createWalletClient, defineChain, http, type Address
 import { privateKeyToAccount, type PrivateKeyAccount } from 'viem/accounts';
 import { parseDeployment, sendRequest, type NovationContext } from '../../src/index';
 
-/** anvil's default accounts 1-3 (public test mnemonic): a taker, a maker and an agent. */
+/**
+ * anvil's default accounts 1-3: a taker, a maker and an agent. These are PUBLIC test keys (anvil's
+ * well-known "test test ... junk" mnemonic), funded only on a local anvil; they hold nothing anywhere.
+ */
 const KEYS = [
   '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d',
   '0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a',

@@ -232,6 +232,11 @@ export async function sendRequest(
   if (!account || account.type !== 'local') {
     throw new Error('sendRequest signs locally: pass a wallet client bound to a LocalAccount (viem/accounts privateKeyToAccount).');
   }
+  const simulatedFor = (request as { account?: Address | { address: Address } }).account;
+  const from = typeof simulatedFor === 'string' ? simulatedFor : simulatedFor?.address;
+  if (from && from.toLowerCase() !== account.address.toLowerCase()) {
+    throw new Error(`sendRequest: the request was simulated for ${from}, but the wallet signs as ${account.address}.`);
+  }
   const req = await withGasHeadroom(client, { ...request, account } as Parameters<WalletClient['writeContract']>[0]);
   const hash = await wallet.writeContract(req);
   const receipt = await client.waitForTransactionReceipt({ hash });

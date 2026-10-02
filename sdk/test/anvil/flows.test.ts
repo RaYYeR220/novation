@@ -148,8 +148,15 @@ d('Novation on a local chain (KernelReference kernel, repo deploy scripts)', () 
     expect(mine.cells).toEqual(grid);
     expect(mine.out.lossIM).toBe(st.im);
     expect(mine.out.worstScenario).toBe(st.worstScenario);
-    const weekend = await scenarioGridFor(L.ctx, takerId, { session: 'WEEKEND' });
-    expect(weekend.out.lossIM).toBeGreaterThan(st.im);
+    // another session's shocks, priced on any day: the weekend range is the regular one x1.75
+    const [regular, weekend] = await Promise.all([
+      scenarioGridFor(L.ctx, takerId, { session: 'REGULAR' }),
+      scenarioGridFor(L.ctx, takerId, { session: 'WEEKEND' }),
+    ]);
+    const r = regular.shockRange[0]!.range;
+    expect(weekend.shockRange[0]!.range).toBe((r * 175n) / 100n);
+    // one long call: its loss is capped at its value, so a wider shock can't lower the margin
+    expect(weekend.out.lossIM >= regular.out.lossIM).toBe(true);
   });
 
   it('signs an EIP-712 quote the RFQ venue accepts, and refuses a tampered one', async () => {
@@ -189,6 +196,12 @@ d('Novation on a local chain (KernelReference kernel, repo deploy scripts)', () 
     expect((await getQuoteFills(L.ctx, { takerId })).map((e) => e.args.qty)).toEqual([2n * WAD]);
     const held = (await getPositions(L.ctx, takerId)).find((p) => p.seriesId === put.id);
     expect(held?.qty).toBe(-2n * WAD);
+    // now short puts: the weekend gap strictly raises initial margin over regular shocks
+    const [reg, wk] = await Promise.all([
+      scenarioGridFor(L.ctx, takerId, { session: 'REGULAR' }),
+      scenarioGridFor(L.ctx, takerId, { session: 'WEEKEND' }),
+    ]);
+    expect(wk.out.lossIM).toBeGreaterThan(reg.out.lossIM);
 
     const tampered = { ...q, price: q.price + 1n };
     expect(await verifyQuote(tampered, sig, domain)).toBe(false);

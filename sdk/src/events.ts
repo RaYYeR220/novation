@@ -2,36 +2,83 @@ import type { Abi, Address, ContractEventName, GetContractEventsReturnType } fro
 import { auctionHouseAbi, clearinghouseAbi, insuranceFundAbi, optionVaultAbi, rfqVenueAbi, seriesRegistryAbi } from './abi/index';
 import type { NovationContext } from './types';
 
-/** Blocks per eth_getLogs request. Robinhood Chain makes ~4 blocks a second. */
-export const DEFAULT_LOG_CHUNK = 50_000n;
-
 export interface EventScan {
   /** Default: the deployment block. */
   fromBlock?: bigint;
   /** Default: the latest block. */
   toBlock?: bigint;
-  /** Blocks per request; halved automatically when the node refuses a range. */
+  /**
+   * Blocks per request. Default: the whole range in one request, split in half only when the node
+   * refuses it as too wide. At least 1.
+   */
   chunk?: bigint;
+  /** Where scanned ranges are kept; default the context's `eventCache`, if any. */
+  cache?: EventCache;
 }
 
-function tooWide(e: unknown): boolean {
-  const m = String((e as { details?: string; message?: string })?.details ?? (e as Error)?.message ?? e).toLowerCase();
-  return /range|too many|limit|exceed|10000|query returned more|block range/.test(m);
+/** Logs already scanned for one (contract, event, filter, start block), up to block `to`. */
+export interface CachedScan {
+  from: bigint;
+  to: bigint;
+  logs: unknown[];
 }
+
+/** Scanned ranges per (contract, event, filter): a later scan to the latest block fetches only new blocks. */
+export interface EventCache {
+  get(key: string): CachedScan | undefined;
+  set(key: string, scan: CachedScan): void;
+}
+
+/** An in-memory EventCache. */
+export function memoryEventCache(): EventCache {
+  const m = new Map<string, CachedScan>();
+  return { get: (k) => m.get(k), set: (k, v) => void m.set(k, v) };
+}
+
+const RETRIES = 4;
+
+function errorText(e: unknown): string {
+  const x = e as { details?: string; shortMessage?: string; message?: string; status?: number; cause?: unknown };
+  return [x?.status, x?.details, x?.shortMessage, x?.message, (x?.cause as { message?: string })?.message].filter(Boolean).join(' ').toLowerCase();
+}
+
+/** The node throttled the request (HTTP 429, "rate limit"): wait and retry, never shrink the range for it. */
+export function isRateLimited(e: unknown): boolean {
+  return /\b429\b|rate.?limit|too many requests|throttl|capacity exceeded/.test(errorText(e));
+}
+
+/** The node refused the block range itself (too many blocks or results in one eth_getLogs). */
+export function isRangeTooWide(e: unknown): boolean {
+  if (isRateLimited(e)) return false;
+  return /block range|range (is )?too (large|wide|big)|max(imum)? (block )?range|query returned more than|too many (results|logs|blocks)|response size|results? limit|10000 results|exceeds? (the )?(max|maximum) /.test(errorText(e));
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const lower = (a: Address | Address[]) => (Array.isArray(a) ? a.map((x) => x.toLowerCase()).sort().join(',') : a.toLowerCase());
+const argKey = (args?: Record<string, unknown>) =>
+  JSON.stringify(Object.entries(args ?? {}).filter(([, v]) => v !== undefined).sort(([a], [b]) => (a < b ? -1 : 1)), (_k, v) => (typeof v === 'bigint' ? v.toString() : v));
 
 /**
- * eth_getLogs for one event, in block chunks from the deployment block, in chain order. A chunk the
- * node refuses as too wide is split in half until it passes.
+ * eth_getLogs for one event from the deployment block, in chain order. The whole range goes in one
+ * request; a range the node refuses as too wide is split in half until it passes, and a throttled
+ * request backs off and retries. With a cache, a scan up to the latest block fetches only the
+ * blocks after the last one it saw.
  */
 export async function getEvents<const abi extends Abi, eventName extends ContractEventName<abi>>(
   ctx: NovationContext,
   q: { address: Address | Address[]; abi: abi; eventName: eventName; args?: Record<string, unknown> } & EventScan,
 ): Promise<GetContractEventsReturnType<abi, eventName>> {
+  if (q.chunk !== undefined && q.chunk < 1n) throw new RangeError('getEvents: chunk must be at least 1 block');
   const from = q.fromBlock ?? ctx.deployment.block;
+  const cache = q.cache ?? ctx.eventCache;
+  const key = `${ctx.deployment.chainId}|${lower(q.address)}|${q.eventName as string}|${argKey(q.args)}|${from}`;
   const to = q.toBlock ?? (await ctx.client.getBlockNumber());
-  let chunk = q.chunk ?? DEFAULT_LOG_CHUNK;
-  const out: unknown[] = [];
-  let start = from;
+  const hit = q.toBlock === undefined ? cache?.get(key) : undefined;
+  if (hit && hit.from === from && hit.to >= to) return hit.logs as GetContractEventsReturnType<abi, eventName>;
+  const out: unknown[] = hit && hit.from === from ? [...hit.logs] : [];
+  let start = hit && hit.from === from ? hit.to + 1n : from;
+  let chunk = q.chunk ?? to - start + 1n;
+  let tries = 0;
   while (start <= to) {
     const end = start + chunk - 1n < to ? start + chunk - 1n : to;
     try {
@@ -46,14 +93,20 @@ export async function getEvents<const abi extends Abi, eventName extends Contrac
       });
       out.push(...logs);
       start = end + 1n;
+      tries = 0;
     } catch (e) {
-      if (chunk > 1n && tooWide(e)) {
+      if (isRateLimited(e) && tries < RETRIES) {
+        await sleep(500 * 2 ** tries++);
+        continue;
+      }
+      if (chunk > 1n && isRangeTooWide(e)) {
         chunk = chunk / 2n;
         continue;
       }
       throw e;
     }
   }
+  if (cache && q.toBlock === undefined) cache.set(key, { from, to, logs: out });
   return out as GetContractEventsReturnType<abi, eventName>;
 }
 
@@ -154,8 +207,8 @@ export async function getAuctionEvents(ctx: NovationContext, scan: EventScan = {
   return { started, bids, ended, saleStarted, saleBids, saleEnded };
 }
 
-/** Block timestamps (unix seconds), fetched once per block. */
-export async function getBlockTimes(ctx: NovationContext, blocks: bigint[], cache = new Map<bigint, number>()): Promise<Map<bigint, number>> {
+/** Block timestamps (unix seconds), fetched once per block; the context's `blockTimes` is the default cache. */
+export async function getBlockTimes(ctx: NovationContext, blocks: bigint[], cache = ctx.blockTimes ?? new Map<bigint, number>()): Promise<Map<bigint, number>> {
   const missing = [...new Set(blocks)].filter((b) => !cache.has(b));
   const got = await Promise.all(missing.map((b) => ctx.client.getBlock({ blockNumber: b })));
   got.forEach((b) => cache.set(b.number, Number(b.timestamp)));

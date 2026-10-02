@@ -15,9 +15,8 @@ import {
   type RfqQuote,
 } from '../../src/index';
 
-// a throwaway key used only by this test; it holds nothing on any chain
-const KEY = '0x4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318';
-const maker = privateKeyToAccount(KEY);
+// a throwaway key derived for this test; it holds nothing on any chain
+const maker = privateKeyToAccount(keccak256(toHex('novation-test-maker')));
 const RFQ = getDeployment(46630).rfq;
 
 const quote: RfqQuote = {

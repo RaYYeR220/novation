@@ -3,7 +3,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { createWalletClient, getAddress, http, type PublicClient } from 'viem';
+import { createWalletClient, getAddress, http, keccak256, toHex, type PublicClient } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 import {
   baseSession,
   createNovation,
@@ -31,6 +32,9 @@ import {
   wadToToken,
   WAD,
   GAS_HEADROOM_PERCENT,
+  isRangeTooWide,
+  isRateLimited,
+  memoryEventCache,
   padGas,
   sendRequest,
   type UnderlyingParams,
@@ -181,6 +185,79 @@ describe('events', () => {
     const ctx = { client, deployment: getDeployment(46630) };
     await expect(getEvents(ctx, { address: ctx.deployment.clearinghouse, abi: clearinghouseAbi, eventName: 'Traded', fromBlock: 0n })).rejects.toThrow('connection reset');
   });
+
+  it('asks for the whole range first', async () => {
+    const calls: [bigint, bigint][] = [];
+    const client = {
+      getBlockNumber: async () => 1_000_000n,
+      getContractEvents: async ({ fromBlock, toBlock }: { fromBlock: bigint; toBlock: bigint }) => {
+        calls.push([fromBlock, toBlock]);
+        return [];
+      },
+    } as unknown as PublicClient;
+    const ctx = { client, deployment: { ...getDeployment(46630), block: 10n } };
+    await getEvents(ctx, { address: ctx.deployment.clearinghouse, abi: clearinghouseAbi, eventName: 'Traded' });
+    expect(calls).toEqual([[10n, 1_000_000n]]);
+  });
+
+  it('backs off on a rate limit instead of shrinking the range', async () => {
+    vi.useFakeTimers();
+    const calls: [bigint, bigint][] = [];
+    let n = 0;
+    const client = {
+      getBlockNumber: async () => 99n,
+      getContractEvents: async ({ fromBlock, toBlock }: { fromBlock: bigint; toBlock: bigint }) => {
+        calls.push([fromBlock, toBlock]);
+        if (n++ < 2) throw Object.assign(new Error('HTTP request failed. Status: 429. Details: rate limit exceeded'), { status: 429 });
+        return [{ blockNumber: fromBlock }];
+      },
+    } as unknown as PublicClient;
+    const ctx = { client, deployment: { ...getDeployment(46630), block: 0n } };
+    const p = getEvents(ctx, { address: ctx.deployment.clearinghouse, abi: clearinghouseAbi, eventName: 'Traded' });
+    await vi.runAllTimersAsync();
+    const logs = await p;
+    vi.useRealTimers();
+    expect(calls).toEqual([
+      [0n, 99n],
+      [0n, 99n],
+      [0n, 99n],
+    ]);
+    expect(logs).toHaveLength(1);
+    expect(isRateLimited(new Error('rate limit exceeded'))).toBe(true);
+    expect(isRangeTooWide(new Error('rate limit exceeded'))).toBe(false);
+    expect(isRangeTooWide(new Error('query returned more than 10000 results'))).toBe(true);
+  });
+
+  it('refuses a chunk under one block', async () => {
+    const ctx = { client: { getBlockNumber: async () => 9n } as unknown as PublicClient, deployment: getDeployment(46630) };
+    await expect(getEvents(ctx, { address: ctx.deployment.clearinghouse, abi: clearinghouseAbi, eventName: 'Traded', chunk: 0n })).rejects.toThrow(RangeError);
+  });
+
+  it('with a cache, fetches only the blocks after the last scan', async () => {
+    const calls: [bigint, bigint][] = [];
+    let head = 100n;
+    const client = {
+      getBlockNumber: async () => head,
+      getContractEvents: async ({ fromBlock, toBlock }: { fromBlock: bigint; toBlock: bigint }) => {
+        calls.push([fromBlock, toBlock]);
+        return [{ blockNumber: toBlock }];
+      },
+    } as unknown as PublicClient;
+    const ctx = { client, deployment: { ...getDeployment(46630), block: 0n }, eventCache: memoryEventCache() };
+    const q = { address: ctx.deployment.clearinghouse, abi: clearinghouseAbi, eventName: 'Traded' as const };
+    expect(await getEvents(ctx, q)).toHaveLength(1);
+    expect(await getEvents(ctx, q)).toHaveLength(1);
+    head = 150n;
+    const third = await getEvents(ctx, q);
+    expect(third.map((l) => l.blockNumber)).toEqual([100n, 150n]);
+    expect(calls).toEqual([
+      [0n, 100n],
+      [101n, 150n],
+    ]);
+    // another filter is another scan
+    await getEvents(ctx, { ...q, args: { takerId: 4n } });
+    expect(calls.at(-1)).toEqual([0n, 150n]);
+  });
 });
 
 describe('sendRequest', () => {
@@ -188,6 +265,13 @@ describe('sendRequest', () => {
     const wallet = createWalletClient({ account: '0x00000000000000000000000000000000000000aa', chain: robinhoodChainTestnet, transport: http('http://127.0.0.1:1') });
     const client = {} as PublicClient;
     await expect(sendRequest(wallet, client, undefined, {} as never)).rejects.toThrow(/LocalAccount/);
+  });
+
+  it('refuses a request simulated for another account', async () => {
+    const account = privateKeyToAccount(keccak256(toHex('novation-test-signer')));
+    const wallet = createWalletClient({ account, chain: robinhoodChainTestnet, transport: http('http://127.0.0.1:1') });
+    const request = { account: '0x00000000000000000000000000000000000000aa' } as never;
+    await expect(sendRequest(wallet, {} as PublicClient, undefined, request)).rejects.toThrow(/simulated for/);
   });
 });
 

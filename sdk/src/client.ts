@@ -43,11 +43,19 @@ export interface Novation {
 }
 
 /**
- * Binds the SDK to a client and a deployment. Pass a viem public client, or a chain id (and an
+ * Binds the SDK to a client and a deployment, with an event cache and a block-time cache. Pass a viem public client, or a chain id (and an
  * optional RPC URL) for one built with batching on. The deployment defaults to the one recorded in
  * contracts/deployments for the chain.
  */
-export function createNovation(opts: { client?: PublicClient; chainId?: number; chain?: Chain; rpcUrl?: string; deployment?: Deployment }): Novation {
+export function createNovation(opts: {
+  client?: PublicClient;
+  chainId?: number;
+  chain?: Chain;
+  rpcUrl?: string;
+  deployment?: Deployment;
+  /** Where event scans keep what they have seen (default: in memory, for this instance). */
+  eventCache?: events.EventCache;
+}): Novation {
   const chainId = opts.chainId ?? opts.chain?.id ?? opts.client?.chain?.id ?? opts.deployment?.chainId;
   if (chainId === undefined) throw new Error('createNovation: pass a client with a chain, a chainId or a deployment');
   const deployment = opts.deployment ?? getDeployment(chainId);
@@ -57,7 +65,7 @@ export function createNovation(opts: { client?: PublicClient; chainId?: number; 
     if (!chain) throw new Error(`createNovation: no chain definition for ${chainId}; pass a client`);
     client = createNovationClient({ chain, rpcUrl: opts.rpcUrl });
   }
-  const ctx: NovationContext = { client, deployment };
+  const ctx: NovationContext = { client, deployment, eventCache: opts.eventCache ?? events.memoryEventCache(), blockTimes: new Map() };
   return {
     ctx,
     deployment,
