@@ -41,7 +41,7 @@ const MCP_TOOLS = [
   ['explain_refusal', 'turn a reverted transaction into the rule and numbers that refused it'],
 ] as const;
 
-function GrantRow({ g, asOf, onRevoke }: { g: AgentGrant; asOf: number; onRevoke: () => void }) {
+function GrantRow({ g, asOf, onRevoke, canRevoke = true }: { g: AgentGrant; asOf: number; onRevoke: () => void; canRevoke?: boolean }) {
   const expired = g.expiresAt <= asOf;
   return (
     <li
@@ -86,7 +86,7 @@ function GrantRow({ g, asOf, onRevoke }: { g: AgentGrant; asOf: number; onRevoke
         </div>
       </dl>
       <div className="lg:justify-self-end">
-        <Button variant="secondary" size="sm" onClick={onRevoke}>
+        <Button variant="secondary" size="sm" onClick={onRevoke} disabled={!canRevoke}>
           Revoke {g.label}
         </Button>
       </div>
@@ -135,7 +135,7 @@ function McpSnippet({ config = MCP_CONFIG }: { config?: string }) {
 }
 
 export function AgentsView() {
-  const { id, label } = useAccountId();
+  const { id, label, owned } = useAccountId();
   const agents = useAgents(id);
   const account = useSubaccount(id);
   const underlyings = useUnderlyings();
@@ -167,7 +167,7 @@ export function AgentsView() {
           title={`Agents on account ${id}`}
           dek="A grant lets a bot trade for this account inside a risk budget: after every trade it signs, the account's worst-case loss (its initial margin) must stay within the budget, and the premium within the per-trade cap. It caps risk, not spending."
           aside={
-            <Button variant="primary" lamp onClick={() => setGranting(true)} disabled={!account.data || asOf === undefined}>
+            <Button variant="primary" lamp onClick={() => setGranting(true)} disabled={!account.data || asOf === undefined || (!demo && !owned.includes(id))}>
               Grant an agent
             </Button>
           }
@@ -181,7 +181,7 @@ export function AgentsView() {
         ) : (
           <ul aria-label="Grants">
             {grants.map((g) => (
-              <GrantRow key={g.agent} g={g} asOf={asOf} onRevoke={() => setRevoking(g)} />
+              <GrantRow key={g.agent} g={g} asOf={asOf} onRevoke={() => setRevoking(g)} canRevoke={demo || owned.includes(id)} />
             ))}
           </ul>
         )}

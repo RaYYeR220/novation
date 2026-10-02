@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { open } from './helpers';
-import { MOCK_ACCOUNT, MOCK_MAKER_ID, MOCK_OWNER, injectWallet, mockChain, mockRelay } from './mock-chain';
+import { MOCK_ACCOUNT, MOCK_AGENT, MOCK_MAKER_ID, MOCK_OWNER, injectWallet, mockChain, mockRelay } from './mock-chain';
 
 async function connect(page: Page) {
   await page.getByRole('button', { name: 'Connect wallet' }).click();
@@ -115,6 +115,18 @@ test.describe('live mode on a mocked RPC', () => {
     await page.getByRole('button', { name: 'Buy NVDA 245 call at ask 2.50' }).click();
     await expect(page.getByText(`View only: this wallet neither owns account ${MOCK_ACCOUNT}`, { exact: false })).toBeVisible();
     await expect(page.getByRole('button', { name: /^Buy 1 NVDA/ })).toBeDisabled();
+  });
+
+  test('an agent of the account may not fund it or manage its grants', async ({ page }) => {
+    // any owner can name any wallet its agent; that must never open a deposit into its account
+    await injectWallet(page, MOCK_AGENT);
+    await open(page, `/app/portfolio?data=live&account=${MOCK_ACCOUNT}`);
+    await connect(page);
+    await expect(page.getByText('Agent of this account: only its owner can deposit or withdraw')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Deposit', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Withdraw', exact: true })).toHaveCount(0);
+    await page.getByRole('navigation', { name: 'App sections' }).first().getByRole('link', { name: 'Agents' }).click();
+    await expect(page.getByRole('button', { name: 'Grant an agent' })).toBeDisabled();
   });
 
   test("the owner's wallet may deposit and withdraw", async ({ page }) => {

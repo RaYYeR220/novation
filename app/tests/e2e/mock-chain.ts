@@ -55,6 +55,8 @@ const BLOCK = d.block + 70_000n;
 const E1 = 1790971200; // Fri Oct 2, 16:00 ET
 export const MOCK_OWNER = '0x4108064852c95135844be338fc8bcbdf91c41acf' as Address;
 export const MOCK_ACCOUNT = 4;
+/** Holds a live agent grant on MOCK_ACCOUNT (granted without asking it, as any owner can). */
+export const MOCK_AGENT = '0x00000000000000000000000000000000000a9e47' as Address;
 
 const SYMS = ['NVDA', 'TSLA', 'AAPL', 'SPY'] as const;
 type Sym = (typeof SYMS)[number];
@@ -229,7 +231,7 @@ const HANDLERS: Record<string, Handler> = {
   'ch.openInterest': ([sid]) => (Number(sid) === 1 ? W : 0n),
   'ch.cashIndex': () => W,
   'ch.underlyingsOf': () => [d.tokens.NVDA!],
-  'ch.isAuthorized': ([id, actor]) => Number(id) === MOCK_ACCOUNT && (actor as string).toLowerCase() === MOCK_OWNER,
+  'ch.isAuthorized': ([id, actor]) => Number(id) === MOCK_ACCOUNT && [MOCK_OWNER, MOCK_AGENT].includes((actor as string).toLowerCase() as Address),
   // InsuranceFund
   'insurance.balanceWad': () => 100_000n * W,
   'insurance.outstandingWad': () => 0n,

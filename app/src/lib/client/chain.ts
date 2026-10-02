@@ -135,7 +135,13 @@ export const RFQ_URL = process.env.NEXT_PUBLIC_RFQ_URL || '/api/rfq';
  * it: max(band x mark, RFQ_MIN_OFF_MARK) per contract, where band = max(NEXT_PUBLIC_RFQ_BAND (default
  * 0.2), 2 x the vault spread). The venue has no max-premium of its own, so this is the only guard.
  */
-export const RFQ_BAND = Number(process.env.NEXT_PUBLIC_RFQ_BAND) > 0 ? Number(process.env.NEXT_PUBLIC_RFQ_BAND) : 0.2;
+export const RFQ_BAND = rfqBand(process.env.NEXT_PUBLIC_RFQ_BAND);
+
+/** NEXT_PUBLIC_RFQ_BAND as a fraction in (0, 1]: a mistyped `20` means 100%, not 2000%; anything else 0.2. */
+export function rfqBand(raw: string | undefined): number {
+  const b = Number(raw);
+  return Number.isFinite(b) && b > 0 ? Math.min(b, 1) : 0.2;
+}
 const RFQ_MIN_OFF_MARK = 5n * 10n ** 16n; // 0.05 USDG per contract
 /** A quote must outlive the click by this much, and expire within RFQ_MAX_LIFETIME. */
 const RFQ_MIN_LIFETIME = 15;
@@ -1208,6 +1214,7 @@ export class ChainClient implements NovationClient {
 
   async grantAgent(id: number, grant: NewGrant): Promise<string> {
     const { account } = this.signer();
+    await this.mustOwn(id, 'grant agents on it');
     const ms = await this.markets();
     const mask = ms.filter((m) => grant.allowed.includes(m.symbol)).reduce((a, m) => a | (1n << BigInt(m.index)), 0n);
     return this.send(
@@ -1222,6 +1229,7 @@ export class ChainClient implements NovationClient {
 
   async revokeAgent(id: number, agent: string): Promise<string> {
     const { account } = this.signer();
+    await this.mustOwn(id, 'revoke its agents');
     return this.send(simulateRevokeAgent(this.ctx, account, id, agent as Address));
   }
 
@@ -1233,6 +1241,26 @@ export class ChainClient implements NovationClient {
 
   private async mustAct(id: number): Promise<void> {
     if (!(await this.canAct(id))) throw new Error(`Account ${id} is view only: this wallet neither owns it nor holds a live agent grant on it.`);
+  }
+
+  /** True when the connected wallet is the account's owner (an agent grant doesn't count). */
+  async owns(id: number): Promise<boolean> {
+    const w = this.walletAddress;
+    return Boolean(w && id > 0 && (await getOwnerOf(this.ctx, id)).toLowerCase() === w.toLowerCase());
+  }
+
+  /**
+   * Owner-only actions. An owner can name any address as its agent without that address agreeing,
+   * so an agent role must never unlock moving the wallet's own funds into the account.
+   */
+  private async mustOwn(id: number, what: string): Promise<void> {
+    if (await this.owns(id)) return;
+    const agent = await this.canAct(id);
+    throw new Error(
+      agent
+        ? `Only the owner of account ${id} can ${what}. This wallet is one of its agents, which lets it trade for the account, never fund it.`
+        : `Only the owner of account ${id} can ${what}, and this wallet doesn't own it.`,
+    );
   }
 
   /** The subaccounts a wallet owns, oldest first. */
@@ -1276,7 +1304,7 @@ export class ChainClient implements NovationClient {
   /** USDG into cash, or a stock token into collateral. `amount` in token units. */
   async deposit(id: number, symbol: string, amount: number): Promise<Hash> {
     const { account } = this.signer();
-    await this.mustAct(id);
+    await this.mustOwn(id, 'deposit into it from this app');
     const token = tokenOf(this.ctx.deployment, symbol);
     const raw = toUnits(amount, await this.decimals(token));
     await this.allow(token, this.ctx.deployment.clearinghouse, raw);
@@ -1285,7 +1313,7 @@ export class ChainClient implements NovationClient {
 
   async withdraw(id: number, symbol: string, amount: number): Promise<Hash> {
     const { account } = this.signer();
-    await this.mustAct(id);
+    await this.mustOwn(id, 'withdraw from it');
     const token = tokenOf(this.ctx.deployment, symbol);
     const raw = toUnits(amount, await this.decimals(token));
     return this.send(simulateWithdraw(this.ctx, account, id, token, raw, account));
