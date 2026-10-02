@@ -126,12 +126,13 @@ export function lazySource(init: () => Promise<QuoteSource>): QuoteSource {
 /**
  * The relay handler from the environment, for mounting in a framework:
  *
- *   // app/src/app/api/rfq/[[...path]]/route.ts
  *   const handler = createRfqHandlerFromEnv(process.env, { basePath: '/api/rfq' });
  *   export { handler as GET, handler as POST, handler as OPTIONS };
  *
- * The key, pricing and limits are checked here, so a bad setting throws when the route loads;
- * the chain is first read on the first request. MM_CORS sets Access-Control-Allow-Origin.
+ * The key, pricing and limits are checked here, so a bad setting (or no key) throws at this call;
+ * the chain is first read on the first request. The app's route (app/src/app/api/rfq/[[...path]]/
+ * route.ts) makes this call on its first request and answers 503 until it succeeds, so a build
+ * without the variables still works. MM_CORS sets Access-Control-Allow-Origin.
  */
 export function createRfqHandlerFromEnv(env: Env = process.env, opts: Omit<RfqHandlerConfig, 'maker'> = {}) {
   makerKeyFromEnv(env);

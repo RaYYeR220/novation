@@ -77,7 +77,9 @@ The script checks that the two return byte-identical results and prints `eth_est
 | RfqVenue, CoveredCallVault, PutWriteVault | Implemented and tested, deployed on RH testnet |
 | AuctionHouse (liquidations, deficit sales) | Implemented and tested, deployed on RH testnet |
 | MCP server for agents (`mcp/`) | Implemented and tested, run live on RH testnet |
-| Keeper, TypeScript SDK, indexer, web app | In development |
+| TypeScript SDK (`sdk/`) | Implemented and tested on a local chain and against RH testnet |
+| RFQ market maker and relay (`mm-bot/`) | Implemented and tested, quotes filled on RH testnet; the web app serves the relay at `/api/rfq` |
+| Keeper, indexer, web app | In development |
 | Robinhood Chain mainnet deployment | Planned |
 
 ## Contracts and addresses
@@ -204,7 +206,7 @@ pnpm install
 pnpm --filter @novation/app dev
 ```
 
-The RFQ market maker in `mm-bot/` prices, margin-checks and signs quotes over HTTP: `pnpm --filter @novation/mm-bot start` (setup and endpoints in [mm-bot/README.md](mm-bot/README.md)).
+The RFQ market maker in `mm-bot/` prices, margin-checks and signs quotes over HTTP: `pnpm --filter @novation/mm-bot start` (setup and endpoints in [mm-bot/README.md](mm-bot/README.md)). The web app also serves it at `/api/rfq` once the maker's server-only variables are set; without them that route answers 503.
 
 ## License
 

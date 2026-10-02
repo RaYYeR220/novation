@@ -85,6 +85,7 @@ A malformed request gets 400. When the chain can't be read, the client only sees
 
 The relay is public, so every quote costs the maker something: a signature, RPC reads, a `marginAfter` call and some inventory room until it expires.
 - **Rate limit.** Each client gets a token bucket: 10 requests at once, 30 a minute. A client is identified by `x-real-ip`, else the first `x-forwarded-for` hop. The standalone server sets `x-real-ip` from the socket, and Vercel sets it at its edge; behind another proxy, pass `clientId`.
+- **Whose IP.** The limit trusts the platform's headers. On Vercel that is sound: its edge sets `x-real-ip` and `x-forwarded-for` and overwrites what a client sends. Self-hosted (`next start`, or the relay behind your own load balancer), run it behind a trusted proxy that overwrites both headers; otherwise a caller can rotate them for a fresh bucket on every request (the global caps on live quotes and on the queue still hold). The standalone server behind a proxy sees only the proxy's address, so pass a `clientId` that reads the proxy's header. IPv6 clients are keyed per full address, not per /64 prefix, so one host can use several buckets.
 - **Live quotes per client.** A client holds at most 6 live quotes (`MM_MAX_PER_CLIENT`), and the maker at most 100 (`MM_MAX_OUTSTANDING`).
 - **Queue bound.** Quotes are made one at a time. When more than 32 requests are waiting, new ones get 503 `Busy`.
 - **Unknown series.** A series id the registry doesn't know is remembered for 60 s, so random ids don't reach the RPC each time.
@@ -127,17 +128,9 @@ Each quote carries a random 256-bit nonce and expires after its TTL: by default 
 
 ## Mounting in Next.js
 
-```ts
-// app/src/app/api/rfq/[[...path]]/route.ts  (optional catch-all: /api/rfq itself matches too)
-import { createRfqHandlerFromEnv } from '@novation/mm-bot';
+The app mounts the relay at `/api/rfq` in [`app/src/app/api/rfq/[[...path]]/route.ts`](../app/src/app/api/rfq/[[...path]]/route.ts) (an optional catch-all, so `/api/rfq` itself matches too). It calls `createRfqHandlerFromEnv(process.env, { basePath: '/api/rfq' })` on the first request rather than when the module loads, because that call checks the key and settings and throws without them: `next build` and preview deployments without the variables still build. Until they are set, every request answers 503 `RelayNotConfigured`, and the cause goes to the server log only. Once built, the handler is kept for the life of the instance, so its limits and live quotes carry over between requests.
 
-const handler = createRfqHandlerFromEnv(process.env, { basePath: '/api/rfq' });
-export { handler as GET, handler as POST, handler as OPTIONS };
-export const runtime = 'nodejs';
-export const dynamic = 'force-dynamic';
-```
-
-The app adds `"@novation/mm-bot": "workspace:*"` to its dependencies and lists `@novation/mm-bot` and `@novation/sdk` in `transpilePackages` in `next.config.ts`, since both packages ship TypeScript source. The route needs `MM_MAKER_PRIVATE_KEY`, `MM_MAKER_ID` and `MM_RPC_URL` (or `RH_TESTNET_RPC`) as server-only variables, never `NEXT_PUBLIC_*`, plus any of the pricing and limit variables. Settings are checked when the route loads; the chain is first read on the first request. On Vercel the abuse limits are per instance (see above). `createRfqHandler({ maker })` takes a `Maker` you build yourself instead.
+The app lists `@novation/mm-bot` in its dependencies, and `@novation/mm-bot` and `@novation/sdk` in `transpilePackages` in `next.config.ts`, since both packages ship TypeScript source. The route needs `MM_MAKER_PRIVATE_KEY`, `MM_MAKER_ID` and `MM_RPC_URL` (or `RH_TESTNET_RPC`) as server-only variables, never `NEXT_PUBLIC_*`, plus any of the pricing and limit variables. The chain is first read on the first request. On Vercel the abuse limits are per instance (see above). `createRfqHandler({ maker })` takes a `Maker` you build yourself instead.
 
 ## Tests
 

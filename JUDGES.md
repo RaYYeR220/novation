@@ -85,7 +85,7 @@ Robinhood Chain testnet, chain id 46630. Full list: [docs/deployments.md](docs/d
 
 ## What is not done yet
 
-- The keeper, the TypeScript SDK and the indexer are in development; the web app is in progress in `app/`.
+- The keeper and the indexer are in development; the web app is in progress in `app/`.
 - Nothing is on Robinhood Chain mainnet yet, and testnet uses mock tokens and mirrored feeds ([MOCKS.md](MOCKS.md)).
 - The code is internally reviewed and not externally audited.
 
