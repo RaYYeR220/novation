@@ -18,6 +18,7 @@ import {
   simulateMarkUnpriced,
   simulateVaultRedeemInKind,
   simulateVaultRoll,
+  tradableSeconds,
   explainTx,
   expiriesOf,
   fromWad,
@@ -370,7 +371,9 @@ d('Novation on a local chain (KernelReference kernel, repo deploy scripts)', () 
     await send(L, maker!.wallet, (await simulateMarkUnpriced(L.ctx, me, TSLA)).request);
     const marked = await getPriceOutage(L.ctx, TSLA);
     expect(marked).not.toBeNull();
-    expect(marked!.writeOffAt - marked!.since).toBe(72 * 3600);
+    // 72 hours of market time: closed hours don't count
+    expect(tradableSeconds(marked!.since, marked!.writeOffAt)).toBe(72 * 3600);
+    expect(marked!.writeOffAt - marked!.since).toBeGreaterThanOrEqual(72 * 3600);
     // a good print again: marking clears the record
     await send(L, maker!.wallet, (await simulatePushRound(L.ctx, me, feed, 440n * 10n ** 8n, await now())).request);
     await send(L, maker!.wallet, (await simulateMarkUnpriced(L.ctx, me, TSLA)).request);

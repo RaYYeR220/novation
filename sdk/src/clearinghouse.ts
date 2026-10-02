@@ -1,5 +1,6 @@
 import type { Address } from 'viem';
 import { auctionHouseAbi, clearinghouseAbi, insuranceFundAbi } from './abi/index';
+import { addTradableSeconds } from './calendar';
 import { getGlobals, type GlobalParams } from './hub';
 import { getSeries } from './registry';
 import type { AccountState, AgentPolicy, NovationContext, PositionInfo, SeriesInfo } from './types';
@@ -146,18 +147,23 @@ export async function getSocializedDebt(ctx: NovationContext, account: bigint | 
   return ctx.client.readContract({ ...ch(ctx), functionName: 'socializedDebtOf', args: [id(account)] });
 }
 
-/** How long a collateral token must stay marked without a price (and without a new feed round) before socialization counts it as 0. */
+/**
+ * How long a collateral token must stay marked without a usable price (and without a new feed round)
+ * before socialization counts it as 0: seconds of market time (the 24/5 window, see tradableSeconds).
+ */
 export const PRICE_OUTAGE_WRITE_OFF = 72 * 3600;
 
 /**
- * The clearinghouse's record of a collateral token without a price (Clearinghouse.priceOutageOf),
- * or null when it isn't marked. `writeOffAt` is when socializeRemainder may count the token as 0,
- * provided its feed has printed no new round by then (a new round restarts the clock).
+ * The clearinghouse's record of a collateral token without a usable price (Clearinghouse.priceOutageOf),
+ * or null when it isn't marked. `writeOffAt` is when socializeRemainder may count the token as 0:
+ * 72 hours of market time after `since` (closed hours don't count), provided its feed prints no new
+ * round by then (a new round restarts the clock) and, for a feed that can't be read at all, someone
+ * marks it at least once a day.
  */
 export async function getPriceOutage(ctx: NovationContext, token: Address): Promise<{ since: number; round: bigint; writeOffAt: number } | null> {
   const [since, round] = await ctx.client.readContract({ ...ch(ctx), functionName: 'priceOutageOf', args: [token] });
   if (since === 0n) return null;
-  return { since: Number(since), round, writeOffAt: Number(since) + PRICE_OUTAGE_WRITE_OFF };
+  return { since: Number(since), round, writeOffAt: addTradableSeconds(Number(since), PRICE_OUTAGE_WRITE_OFF) };
 }
 
 export async function getCashIndex(ctx: NovationContext): Promise<bigint> {

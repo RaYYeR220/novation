@@ -100,6 +100,52 @@ export function baseSession(ts: number): Exclude<Session, 'HALTED'> {
   return wd === 0 || wd === 6 ? 'WEEKEND' : 'HOLIDAY';
 }
 
+/** 20:00 ET on ET day `day`: where the 24/5 window opens or closes. */
+export function eveningTs(day: number): number {
+  const base = day * DAY + SEC_EXTENDED_END;
+  const cand = base + 4 * 3600;
+  return isDst(cand) ? cand : base + 5 * 3600;
+}
+
+/**
+ * Seconds of [from, to) inside the 24/5 window, where baseSession is REGULAR or EXTENDED, counted up
+ * to `cap`: NyseCalendar.tradableSeconds, the market-time clock of the auction discounts and of the
+ * price-outage write-off. The window opens and closes only at 20:00 ET: from 20:00 ET the day before
+ * ET day d until 20:00 ET on d it is open iff d is a trading day.
+ */
+export function tradableSeconds(from: number, to: number, cap = Number.POSITIVE_INFINITY): number {
+  if (to <= from) return 0;
+  let { day } = etParts(from);
+  if (from >= eveningTs(day)) day++;
+  let acc = 0;
+  while (from < to && acc < cap) {
+    const end = Math.min(eveningTs(day), to);
+    if (isTradingDay(day)) acc += end - from;
+    from = end;
+    day++;
+  }
+  return acc > cap ? cap : acc;
+}
+
+/** The first moment at which `seconds` of 24/5 market time have passed since `from` (tradableSeconds' inverse). */
+export function addTradableSeconds(from: number, seconds: number): number {
+  let { day } = etParts(from);
+  if (from >= eveningTs(day)) day++;
+  let t = from;
+  let left = seconds;
+  // a closed stretch is at most a long weekend, so this takes a few steps per trading day
+  for (let i = 0; i < 4000; i++) {
+    const end = eveningTs(day);
+    if (isTradingDay(day)) {
+      if (end - t >= left) return t + left;
+      left -= end - t;
+    }
+    t = end;
+    day++;
+  }
+  throw new RangeError('addTradableSeconds: span too long');
+}
+
 /** The close of the last trading day of its Monday-Friday week. */
 export function isWeeklyExpiry(ts: number): boolean {
   const { day, sec, weekday: wd } = etParts(ts);

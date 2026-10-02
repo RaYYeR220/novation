@@ -7,11 +7,13 @@ import { createWalletClient, getAddress, http, keccak256, toHex, type PublicClie
 import { privateKeyToAccount } from 'viem/accounts';
 import {
   baseSession,
+  addTradableSeconds,
   assertSimulatedFor,
   createNovation,
   DEPLOYED_CHAIN_IDS,
   exitMinimums,
   simulatedAccountOf,
+  tradableSeconds,
   fromWad,
   getDeployment,
   getEvents,
@@ -125,6 +127,43 @@ describe('calendar', () => {
     expect(isWeeklyExpiry(1790366400)).toBe(true);
     expect(isWeeklyExpiry(1775160000)).toBe(true); // Good Friday 2026: Thursday close
     expect(nextWeeklyExpiry(1790344800)).toBe(1790366400);
+  });
+});
+
+describe('market time', () => {
+  const at = (y: number, m: number, d: number, h: number, min = 0) => Date.UTC(y, m - 1, d, h, min) / 1000;
+
+  it('counts the 24/5 window only, like NyseCalendar.tradableSeconds', () => {
+    // Fri Sep 25 2026 19:00 ET to Mon 00:00 ET: an hour on Friday, then Sunday 20:00 ET onwards
+    expect(tradableSeconds(at(2026, 9, 25, 23), at(2026, 9, 28, 4))).toBe(5 * 3600);
+    // the whole weekend is closed
+    expect(tradableSeconds(at(2026, 9, 26, 12), at(2026, 9, 27, 23))).toBe(0);
+    // Thanksgiving: the window closes Wed 20:00 ET and reopens Thu 20:00 ET
+    expect(tradableSeconds(at(2026, 11, 25, 12), at(2026, 11, 27, 12))).toBe(48 * 3600 - 24 * 3600);
+    expect(tradableSeconds(at(2026, 9, 28, 12), at(2026, 10, 2, 12), 3600)).toBe(3600);
+    expect(tradableSeconds(10, 5)).toBe(0);
+  });
+
+  it('agrees with the calendar sessions minute by minute, holidays and DST included', () => {
+    for (const [from, to] of [
+      [at(2026, 10, 30, 13, 7), at(2026, 11, 3, 2, 41)], // the November DST change
+      [at(2026, 11, 24, 21, 30), at(2026, 11, 30, 3, 0)], // Thanksgiving
+      [at(2026, 12, 23, 17, 0), at(2026, 12, 28, 18, 0)], // Christmas
+    ] as const) {
+      let open = 0;
+      for (let t = from; t < to; t += 60) if (['REGULAR', 'EXTENDED'].includes(baseSession(t))) open += 60;
+      expect(tradableSeconds(from, to)).toBe(open);
+    }
+  });
+
+  it('adds market time: the inverse of tradableSeconds', () => {
+    for (const from of [at(2026, 9, 25, 23), at(2026, 9, 26, 12), at(2026, 11, 25, 12), at(2026, 12, 31, 19, 59)]) {
+      const t = addTradableSeconds(from, 72 * 3600);
+      expect(tradableSeconds(from, t)).toBe(72 * 3600);
+      expect(tradableSeconds(from, t - 1)).toBe(72 * 3600 - 1);
+    }
+    // started on a Saturday: the clock waits for the Sunday 20:00 ET open
+    expect(addTradableSeconds(at(2026, 9, 26, 12), 60)).toBe(at(2026, 9, 28, 0, 1));
   });
 });
 
