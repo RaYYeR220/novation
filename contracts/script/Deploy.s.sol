@@ -30,9 +30,11 @@ import {IRiskKernel} from "../src/interfaces/IRiskKernel.sol";
 /// whether the TSLA covered-call and NVDA put-write vaults are deployed next to the NVDA
 /// covered-call vault. Each can be overridden from the env.
 ///
-/// Env: DEPLOYER_PRIVATE_KEY; optional GUARDIAN, TREASURY (default: the deployer),
-/// TIMELOCK_MIN_DELAY (seconds), VAULT_MIN_NEW_SERIES_QTY and VAULT_MAX_TRADE_QTY (WAD contracts)
-/// and DEPLOY_ALL_VAULTS (bool).
+/// Env: DEPLOYER_PRIVATE_KEY; GUARDIAN, the pause guardian and the timelock's proposer, canceller
+/// and executor (default: the deployer; off testnet it must be another key, see
+/// tools/deploy/role_keys.py); optional TREASURY (default: the deployer), TIMELOCK_MIN_DELAY
+/// (seconds), VAULT_MIN_NEW_SERIES_QTY and VAULT_MAX_TRADE_QTY (WAD contracts) and
+/// DEPLOY_ALL_VAULTS (bool).
 /// Run: forge script script/Deploy.s.sol --rpc-url $RH_TESTNET_RPC --broadcast --slow
 contract Deploy is Script {
     uint256 internal constant RH_TESTNET = 46630;
@@ -74,6 +76,8 @@ contract Deploy is Script {
         address deployer = vm.addr(pk);
         address guardian = vm.envOr("GUARDIAN", deployer);
         address treasury = vm.envOr("TREASURY", deployer);
+        // off testnet the guardian (also the timelock's proposer and executor) must not be the deployer
+        require(block.chainid == RH_TESTNET || guardian != deployer, "set GUARDIAN to a key other than the deployer");
         ChainConfig memory cc = _chainConfig();
         address usdg = vm.parseJsonAddress(dep, ".tokens.USDG");
         IRiskKernel kernel = IRiskKernel(vm.parseJsonAddress(dep, ".kernel.address"));
@@ -120,7 +124,7 @@ contract Deploy is Script {
         s.params.finalizeSetup();
         vm.stopBroadcast();
 
-        _record(path, s, guardian);
+        _record(path, s, guardian, treasury);
     }
 
     // ---------------------------------------------------------------- per-chain settings
@@ -188,7 +192,7 @@ contract Deploy is Script {
             maxStaleRegular: 93600,
             maxStaleExtended: 93600,
             maxStaleClosed: 345600,
-            volStaleness: 172800,
+            volStaleness: 345600,
             minPrice: minPrices[i],
             maxPrice: maxPrices[i]
         });
@@ -215,9 +219,10 @@ contract Deploy is Script {
 
     /// @dev The linked libraries and the deploy block (block.number is the L1 block on Arbitrum)
     /// are added from the broadcast by tools/deploy/record_libraries.py.
-    function _record(string memory path, Stack memory s, address guardian) internal {
+    function _record(string memory path, Stack memory s, address guardian, address treasury) internal {
         _set(path, "timelock", address(s.timelock));
         _set(path, "guardian", guardian);
+        _set(path, "treasury", treasury);
         _set(path, "riskParams", address(s.params));
         _set(path, "hub", address(s.hub));
         _set(path, "registry", address(s.registry));

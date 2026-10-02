@@ -6,27 +6,35 @@ Without --send a step only simulates (eth_call / eth_estimateGas) and prints wha
 nothing is signed. With --send it signs and sends, and appends every hash to
 tools/e2e/out/<chainId>.json. Run the steps in this order (each needs the previous ones on chain):
 
-  fund-keys      deployer -> throwaway maker and agent keys: gas money (--maker-eth, --agent-eth)
+  fund-keys      deployer -> throwaway maker and agent keys: gas money (--maker-eth, --agent-eth),
+                 and the guardian key if --guardian-eth is set (only pause-proof needs it)
   setup          subaccounts U (user) and G (agent-run) for the deployer, K for the maker key;
                  USDG approval and deposits (--u-usdg, --g-usdg, --k-usdg)
   vault-deposit  the deployer deposits --nvda NVDA into the NVDA covered-call vault (ERC-4626)
   rfq            the maker key signs an RFQ quote, the deployer fills it: U sells --qty puts on the
-                 later expiry (spot -5%) to K
+                 first expiry at least a day out (spot -5%) to K
   agent          grantAgent(G, agent key, risk budget = half the IM of one --qty call); the agent's
-                 vault buy is refused on chain with AgentRiskBudgetExceeded
+                 buy is refused on chain with AgentRiskBudgetExceeded. --via vault (default) buys from
+                 the vault; --via rfq fills a quote the maker key signs (K sells the calls), which
+                 also works in the WEEKEND/HOLIDAY sessions, when the vaults are closed
   vault-sale     the deployer buys --qty calls on the first expiry (spot +5%) from the vault for U
   withdraw-im    a USDG withdrawal 0.01 past U's margin room is refused with InsufficientMargin
   snapshot       accountState of U, G and the vault with the session and block (run it on Friday
                  in the regular session and again on Saturday for the weekend widening)
-  pause-proof    optional: guardian pauseOpening, an opening RFQ fill refused with
-                 OpeningNotAllowed, unpauseOpening (the gate a HALTED underlying uses)
+  pause-proof    optional: the guardian key pauses opening, an opening RFQ fill is refused with
+                 OpeningNotAllowed, the guardian unpauses (the gate a HALTED underlying uses)
   halt-proof     only while an underlying really reads HALTED (e.g. an ERC-8056 multiplier
                  window): an opening RFQ fill on it is refused with OpeningNotAllowed
   settle         after the first expiry: settleExpiry with the last round at or before it,
                  settleAccount for every account holding that expiry, claim what is claimable
   status         balances, accounts and series (read only)
 
-Keys: DEPLOYER_PRIVATE_KEY from the env or .env. The maker and agent keys are generated once and
+The vaults are closed in the WEEKEND and HOLIDAY sessions (Fri 20:00 ET to Sun 20:00 ET): vault-deposit,
+vault-sale and agent --via vault only work in REGULAR/EXTENDED. The weekend set is setup, rfq,
+agent --via rfq, withdraw-im, snapshot, pause-proof and settle.
+
+Keys: DEPLOYER_PRIVATE_KEY from the env or .env. The guardian key is derived from it
+(tools/deploy/role_keys.py). The maker and agent keys are generated once and
 kept in E2E_KEYS_FILE (default: <temp>/novation-mainnet-keys.json), never in the repo, and never
 printed. Reverts are confirmed by eth_call before sending and again by eth_call of the mined tx at
 block-1 (the public RPC has no debug_traceTransaction and keeps only recent state, so the replay
@@ -48,6 +56,9 @@ from eth_utils import keccak  # noqa: E402
 from web3 import Web3  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+sys.path.insert(0, os.path.join(ROOT, "tools", "deploy"))
+from role_keys import role_account  # noqa: E402
+
 W = 10**18
 EXPLORERS = {4663: "https://robinhoodchain.blockscout.com", 46630: "https://explorer.testnet.chain.robinhood.com"}
 SESSIONS = ["REGULAR", "EXTENDED", "WEEKEND", "HOLIDAY", "HALTED"]
@@ -115,6 +126,7 @@ class Ctx:
         self.dep = json.load(open(os.path.join(ROOT, "contracts", "deployments", f"{self.cid}.json")))
         self.user = Account.from_key(os.environ["DEPLOYER_PRIVATE_KEY"])
         self.maker, self.agent = self._keys()
+        self.guardian = role_account("guardian")
         self.out_path = os.path.join(ROOT, "tools", "e2e", "out", f"{self.cid}.json")
         self.out = json.load(open(self.out_path)) if os.path.exists(self.out_path) else {
             "chainId": self.cid, "kernel": self.dep["kernel"]["address"], "clearinghouse": self.dep["clearinghouse"],
@@ -224,11 +236,12 @@ class Ctx:
         theirs = self.ch.functions.subaccountsOf(self.maker.address).call()
         return (mine[0] if mine else None, mine[1] if len(mine) > 1 else None, theirs[0] if theirs else None)
 
-    def expiries(self):
+    def expiries(self, min_left=0):
+        """All series, and the NVDA expiries at least `min_left` seconds away."""
         n = self.reg.functions.seriesCount().call()
         series = [(i, self.reg.functions.series(i).call()) for i in range(1, n + 1)]
         now = self.w3.eth.get_block("latest")["timestamp"]
-        live = sorted({s[1] for _, s in series if s[0] == self.N and s[1] > now})
+        live = sorted({s[1] for _, s in series if s[0] == self.N and s[1] > now + min_left})
         return series, live
 
     def pick(self, expiry, call, pct):
@@ -277,11 +290,12 @@ def step_status(x, a):
 
 
 def step_fund_keys(x, a):
-    for who, eth in ((x.maker, a.maker_eth), (x.agent, a.agent_eth)):
+    for name, who, eth in (("maker", x.maker, a.maker_eth), ("agent", x.agent, a.agent_eth),
+                           ("guardian", x.guardian, a.guardian_eth)):
         have = x.w3.eth.get_balance(who.address)
         want = int(eth * W)
         if have < want:
-            x.send(x.user, to=who.address, value=want - have, label=f"fund {'maker' if who is x.maker else 'agent'} key gas")
+            x.send(x.user, to=who.address, value=want - have, label=f"fund {name} key gas")
 
 
 def step_setup(x, a):
@@ -296,12 +310,16 @@ def step_setup(x, a):
         print("(dry-run: deposits need the subaccounts above on chain)")
         return
     U, G, K = x.accounts()
-    total = int((a.u_usdg + a.g_usdg + a.k_usdg) * 1e6)
-    if x.usdg.functions.allowance(x.user.address, x.ch.address).call() < total:
-        x.send(x.user, x.usdg.functions.approve(x.ch.address, 2**256 - 1), label="approve USDG to the clearinghouse")
+    # top each account up to its target (cash counts; rerunning setup never deposits twice)
+    need = []
     for nm, id_, amt in (("U", U, a.u_usdg), ("G", G, a.g_usdg), ("K", K, a.k_usdg)):
-        if amt > 0:
-            x.send(x.user, x.ch.functions.deposit(id_, x.usdg.address, int(amt * 1e6)), label=f"deposit {amt} USDG into {nm}")
+        short = int(amt * 1e6) - x.ch.functions.cashOf(id_).call() // 10**12
+        if short > 0:
+            need.append((nm, id_, short))
+    if need and x.usdg.functions.allowance(x.user.address, x.ch.address).call() < sum(n[2] for n in need):
+        x.send(x.user, x.usdg.functions.approve(x.ch.address, 2**256 - 1), label="approve USDG to the clearinghouse")
+    for nm, id_, short in need:
+        x.send(x.user, x.ch.functions.deposit(id_, x.usdg.address, short), label=f"deposit {short / 1e6} USDG into {nm}")
     x.out.update({"U": U, "G": G, "K": K})
     x.save()
 
@@ -317,8 +335,8 @@ def step_vault_deposit(x, a):
 
 def step_rfq(x, a):
     U, G, K = x.accounts()
-    _, live = x.expiries()
-    e = live[-1]
+    _, live = x.expiries(86400)
+    e = live[0]  # the first expiry at least a day out: held through the weekend, settled with the vault sale
     sid, s = x.pick(e, False, 5)
     spot = x.hub.functions.spot(x.N).call()[0]
     vol = x.hub.functions.markVol(x.N).call()
@@ -334,10 +352,19 @@ def step_rfq(x, a):
 
 def step_agent(x, a):
     U, G, K = x.accounts()
-    x.sync()
-    _, live = x.expiries()
+    _, live = x.expiries(86400)
     sid, s = x.pick(live[0], True, 5)
-    prem = x.vault.functions.quote(sid, x.qty, True).call()
+    if a.via == "rfq":
+        spot = x.hub.functions.spot(x.N).call()[0]
+        vol = x.hub.functions.markVol(x.N).call()
+        px = int(bs(spot / W, s[3] / W, x.tau(s[1]), vol / W, True) * 1.02 * 1e6) * 10**12
+        now = x.w3.eth.get_block("latest")["timestamp"]
+        q = (x.maker.address, K, sid, True, x.qty, px, now + 3600, int(time.time()) + 11)
+        sig = Account.unsafe_sign_hash(x.rfq.functions.hashQuote(q).call(), x.maker.key).signature
+        prem = x.qty * px // W + 1
+    else:
+        x.sync()
+        prem = x.vault.functions.quote(sid, x.qty, True).call()
     im1 = x.ch.functions.marginAfter(G, sid, x.qty, -prem).call()[5]
     budget = im1 // 2
     idx = x.params.functions.underlying(x.N).call()[1]
@@ -348,18 +375,24 @@ def step_agent(x, a):
                label=f"grantAgent G -> agent key (risk budget {budget / W:.4f} USD, half the IM of one buy)")
         if not x.send_mode:
             return
-    buy = x.vault.functions.buy(sid, x.qty, prem * 102 // 100, G)
-    owner_buy = x.vault.functions.buy(sid, x.qty, prem * 102 // 100, G)  # the owner isn't budget-limited
-    x.send(x.agent, buy, gas=a.revert_gas, label=f"agent buys {x.qty / W} NVDA {s[3] / W:g} calls for G (over budget)",
-           expect_revert="AgentRiskBudgetExceeded(uint256,uint256,uint256)", twin=(x.user, owner_buy))
-    x.out["agent"] = {"subaccount": G, "seriesId": sid, "maxWorstLoss": budget, "imAfterOneBuy": im1}
+    if a.via == "rfq":
+        buy = x.rfq.functions.fill(q, sig, G, x.qty)  # the owner isn't budget-limited: same call as the twin
+        where = "from the maker key via RFQ"
+    else:
+        buy = x.vault.functions.buy(sid, x.qty, prem * 102 // 100, G)
+        where = "from the vault"
+    x.send(x.agent, buy, gas=a.revert_gas,
+           label=f"agent buys {x.qty / W} NVDA {s[3] / W:g} calls for G {where} (over budget)",
+           expect_revert="AgentRiskBudgetExceeded(uint256,uint256,uint256)", twin=(x.user, buy))
+    x.out.setdefault("agentRefusals", []).append(
+        {"via": a.via, "subaccount": G, "seriesId": sid, "maxWorstLoss": budget, "imAfterOneBuy": im1})
     x.save()
 
 
 def step_vault_sale(x, a):
     U, G, K = x.accounts()
     x.sync()
-    _, live = x.expiries()
+    _, live = x.expiries(86400)
     sid, s = x.pick(live[0], True, 5)
     prem = x.vault.functions.quote(sid, x.qty, True).call()
     x.send(x.user, x.vault.functions.buy(sid, x.qty, prem * 102 // 100, U),
@@ -420,12 +453,12 @@ def step_pause_proof(x, a):
         fill.call({"from": x.user.address})
         print("[dry-run] the fill passes while opening is not paused; with --send: pause, refused fill, unpause")
         return
-    x.send(x.user, x.params.functions.pauseOpening(), label="guardian pauseOpening")
+    x.send(x.guardian, x.params.functions.pauseOpening(), label="guardian pauseOpening")
     try:
         x.send(x.user, fill, gas=gas, label="opening RFQ fill while opening is paused",
                expect_revert="OpeningNotAllowed(uint256)")
     finally:
-        x.send(x.user, x.params.functions.unpauseOpening(), label="guardian unpauseOpening")
+        x.send(x.guardian, x.params.functions.unpauseOpening(), label="guardian unpauseOpening")
 
 
 def step_halt_proof(x, a):
@@ -479,10 +512,12 @@ def main():
     ap.add_argument("--qty", type=float, default=0.01, help="contracts per trade (>= minTradeQty)")
     ap.add_argument("--nvda", type=float, default=0.01, help="NVDA for the vault deposit")
     ap.add_argument("--u-usdg", type=float, default=1.5)
-    ap.add_argument("--g-usdg", type=float, default=0.2)
-    ap.add_argument("--k-usdg", type=float, default=0.2)
+    ap.add_argument("--g-usdg", type=float, default=0.35)
+    ap.add_argument("--k-usdg", type=float, default=0.25)
     ap.add_argument("--maker-eth", type=float, default=0.00001)
     ap.add_argument("--agent-eth", type=float, default=0.00012)
+    ap.add_argument("--guardian-eth", type=float, default=0.0, help="fund the guardian key (pause-proof only)")
+    ap.add_argument("--via", choices=("vault", "rfq"), default="vault", help="agent: where the refused buy goes")
     ap.add_argument("--revert-gas", type=int,
                     help="gas limit for a tx expected to revert (default: 1.3x the estimate of the same path "
                          "succeeding; the sender must hold limit x 2 x base fee)")
