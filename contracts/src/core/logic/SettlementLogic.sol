@@ -207,7 +207,7 @@ library SettlementLogic {
     /// than globals.dustEquity at spot (dust stays on the account). While any of its collateral
     /// can't be priced, the call reverts with the hub's error: a socialization can't be undone, so
     /// it waits for a price that may show the collateral covers the debt (the deficit sale sells
-    /// it then). The wait is bounded: a token marked without a price for 72 hours, its feed
+    /// it then). The wait is bounded: a token marked without a usable price for 72 hours, its feed
     /// printing nothing new, counts as 0 (markUnpriced). Any cash that reached the account repays
     /// the deficit first.
     ///
@@ -270,15 +270,16 @@ library SettlementLogic {
         if (bridged != 0) d.insurance.notifyWrittenOff(bridged);
     }
 
-    /// @notice Permissionless: records that `token` has no price now, with its feed's latest
-    /// round. Once that record is MarginLogic.OUTAGE_WRITE_OFF (72 hours) old and the feed still
-    /// shows the same round and no price, the socialization dust test counts the token as 0, so a
-    /// feed that never comes back can't freeze an expiry's claims for good. A new round restarts
-    /// the clock; a price clears the record. A call that changes nothing is a no-op.
+    /// @notice Permissionless: records that `token` has no usable price now (no price at all, or
+    /// HALTED, as when its feed stops printing), with its feed's latest round. Once that record is
+    /// MarginLogic.OUTAGE_WRITE_OFF (72 hours) old and the feed still shows the same round and no
+    /// usable price, the socialization dust test counts the token as 0, so a feed that never comes
+    /// back can't freeze an expiry's claims for good. A new round restarts the clock; a usable
+    /// price clears the record. A call that changes nothing is a no-op.
     function markUnpriced(Deps memory d, address token) external {
-        (bool priced, uint80 round) = MarginLogic.priceStatus(d, token);
+        (bool usable, uint80 round) = MarginLogic.priceStatus(d, token);
         PriceOutage storage o = CHS.s().outages[token];
-        if (priced) {
+        if (usable) {
             if (o.since == 0) return;
             delete CHS.s().outages[token];
             emit PriceOutageMarked(token, 0, round);

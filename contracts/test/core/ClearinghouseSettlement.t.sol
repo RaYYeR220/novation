@@ -10,7 +10,7 @@ import {MarketDataHub} from "../../src/core/MarketDataHub.sol";
 import {IInsuranceFund} from "../../src/interfaces/IInsuranceFund.sol";
 import {GlobalParams} from "../../src/interfaces/IRiskParams.sol";
 import {NyseCalendar} from "../../src/libraries/NyseCalendar.sol";
-import {Position} from "../../src/types/Types.sol";
+import {Position, Session} from "../../src/types/Types.sol";
 
 /// @notice Expiry settlement through the per-expiry pool: payers pay in, receivers claim once the
 /// pool is complete, deficits are bridged by the InsuranceFund or wait for auction proceeds, and an
@@ -1124,6 +1124,50 @@ contract ClearinghouseSettlementTest is Fixture {
         // had the price come back, the mark would have been cleared
         vm.revertToState(snap);
         _setPrice(address(spy), 600e18);
+        ch.markUnpriced(address(spy));
+        (since,) = ch.priceOutageOf(address(spy));
+        assertEq(since, 0);
+    }
+
+    /// A feed that just stops printing still prices the token (stale only halts it): it can be
+    /// marked too, and after 72 hours at the same round the halted collateral counts as 0, so it
+    /// can't hold the socialization (and every claim of the expiry) forever.
+    function test_staleFeedCollateralWrittenOffAfter72Hours() public {
+        (uint256 v, uint256 b) = _nakedShortSold();
+        _deposit(alice, v, address(spy), 1e18); // 600 USD of SPY, far above dust
+        _defaultAt300(v, b);
+        vm.expectRevert(abi.encodeWithSelector(CHErrors.AccountNotEmpty.selector, v));
+        ch.socializeRemainder(v, e);
+
+        // SPY prints nothing more: still priced, but HALTED once stale
+        uint256 t1 = vm.getBlockTimestamp() + 2 days;
+        vm.warp(t1);
+        (uint256 px, Session s, bool ok) = hub.spot(address(spy));
+        assertEq(px, 600e18);
+        assertEq(uint8(s), uint8(Session.HALTED));
+        assertFalse(ok);
+        ch.markUnpriced(address(spy));
+        (uint256 since,) = ch.priceOutageOf(address(spy));
+        assertEq(since, t1);
+
+        vm.warp(t1 + 72 hours - 1);
+        vm.expectRevert(abi.encodeWithSelector(CHErrors.AccountNotEmpty.selector, v));
+        ch.socializeRemainder(v, e);
+        uint256 snap = vm.snapshotState();
+        vm.warp(t1 + 72 hours);
+        ch.socializeRemainder(v, e); // the halted SPY counts as 0
+        assertEq(_pending(e), 0);
+        assertEq(ch.collateralOf(v, address(spy)), 1e18);
+        ch.claim(b, e);
+        _assertSolvent();
+
+        // a fresh print gives a usable price back: the collateral counts again, and anyone can
+        // clear the mark
+        vm.revertToState(snap);
+        vm.warp(t1 + 72 hours);
+        _setPrice(address(spy), 600e18);
+        vm.expectRevert(abi.encodeWithSelector(CHErrors.AccountNotEmpty.selector, v));
+        ch.socializeRemainder(v, e);
         ch.markUnpriced(address(spy));
         (since,) = ch.priceOutageOf(address(spy));
         assertEq(since, 0);

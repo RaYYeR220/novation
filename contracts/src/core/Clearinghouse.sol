@@ -249,9 +249,10 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
         SettlementLogic.socializeRemainder(_deps(), id, expiry);
     }
 
-    /// @notice Permissionless: records that a collateral token has no price, or clears the record
-    /// once it has one. After 72 hours without a price or a new feed round, the socialization dust
-    /// test counts the token as 0 (see SettlementLogic.markUnpriced).
+    /// @notice Permissionless: records that a collateral token has no usable price (none, or
+    /// HALTED, as when its feed stops printing), or clears the record once it has one. After 72
+    /// hours without a usable price or a new feed round, the socialization dust test counts the
+    /// token as 0 (see SettlementLogic.markUnpriced).
     function markUnpriced(address token) external nonReentrant {
         SettlementLogic.markUnpriced(_deps(), token);
     }
