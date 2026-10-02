@@ -81,6 +81,9 @@ contract ClearinghouseInvariantTest is Fixture {
         _target(Handler.vaultRequestRedeem.selector, 1);
         _target(Handler.vaultRoll.selector, 1);
         _target(Handler.syncVol.selector, 1);
+        _target(Handler.syncVolUpTo.selector, 1);
+        _target(Handler.migrateFeed.selector, 1);
+        _target(Handler.syncAndRebaseVol.selector, 1);
         _target(Handler.listSeries.selector, 1);
         _target(Handler.settleExpiry.selector, 1);
         _target(Handler.settleAccounts.selector, 1);
@@ -93,6 +96,7 @@ contract ClearinghouseInvariantTest is Fixture {
         _target(Handler.bidDeficit.selector, 2);
         _target(Handler.socializeIfEligible.selector, 1);
         _target(Handler.repayDeficit.selector, 1);
+        _target(Handler.endDeficitSale.selector, 1);
         targetContract(address(handler));
         targetSelector(FuzzSelector({addr: address(handler), selectors: _selectors}));
     }
@@ -121,7 +125,7 @@ contract ClearinghouseInvariantTest is Fixture {
 
     /// @notice The handler reads three CHStorage fields straight from storage; their slots must
     /// match what the clearinghouse's own getters report.
-    function test_storageReadsMatchGetters() public view {
+    function test_storageReadsMatchGetters() public {
         uint256[] memory ids = handler.ids();
         uint256 norm;
         for (uint256 i = 0; i < ids.length; ++i) {
@@ -135,6 +139,13 @@ contract ClearinghouseInvariantTest is Fixture {
         assertEq(xs.length, 2);
         assertEq(handler.totalClaimable(xs[0]), 0);
         assertFalse(handler.impaired(xs[0]));
+
+        // a position, through the handler: its packed slot is (index + 1) << 128 | uint128(qty)
+        handler.tradeViaVenue(0, 1, 0, 100, 1e18, true);
+        uint256 holder = handler.actorIds(0);
+        Position[] memory ps = ch.positionsOf(holder);
+        assertEq(ps.length, 1);
+        assertEq(handler.positionSlot(holder, ps[0].seriesId), 1 << 128 | uint256(uint128(ps[0].qty)), "position slot");
     }
 
     // ================================================================ 1-8: core
@@ -343,6 +354,77 @@ contract ClearinghouseInvariantTest is Fixture {
         }
     }
 
+    /// An account's underlying list is exactly the set of underlyings it holds collateral in or a
+    /// position on (expired ones included until settled), without duplicates, at most
+    /// MAX_UNDERLYINGS.
+    function invariant_underlyingListMatchesBook() public view {
+        uint256[] memory ids = handler.ids();
+        address[2] memory us = handler.underlyings();
+        for (uint256 i = 0; i < ids.length; ++i) {
+            address[] memory list = ch.underlyingsOf(ids[i]);
+            assertLe(list.length, MAX_UNDERLYINGS, "underlying list over the cap");
+            Position[] memory ps = ch.positionsOf(ids[i]);
+            uint256 expected;
+            for (uint256 k = 0; k < 2; ++k) {
+                bool held = ch.collateralOf(ids[i], us[k]) != 0;
+                for (uint256 j = 0; j < ps.length && !held; ++j) {
+                    held = registry.series(ps[j].seriesId).underlying == us[k];
+                }
+                uint256 seen;
+                for (uint256 j = 0; j < list.length; ++j) {
+                    if (list[j] == us[k]) ++seen;
+                }
+                assertEq(seen, held ? 1 : 0, "underlying list != underlyings held");
+                if (held) ++expected;
+            }
+            assertEq(list.length, expected, "underlying list holds something else");
+        }
+    }
+
+    /// The packed position index agrees with positionsOf: each listed position's slot holds its
+    /// place in the list and its quantity, no series is listed twice, and every series the account
+    /// doesn't list has an empty slot.
+    function invariant_positionIndexMatchesList() public view {
+        uint256[] memory ids = handler.ids();
+        uint32 n = registry.seriesCount();
+        for (uint256 i = 0; i < ids.length; ++i) {
+            Position[] memory ps = ch.positionsOf(ids[i]);
+            bool[] memory listed = new bool[](n + 1);
+            for (uint256 j = 0; j < ps.length; ++j) {
+                uint32 sid = ps[j].seriesId;
+                assertFalse(listed[sid], "series listed twice");
+                listed[sid] = true;
+                uint256 slot = handler.positionSlot(ids[i], sid);
+                assertEq(slot >> 128, j + 1, "slot index != place in the list");
+                assertEq(int256(int128(uint128(slot))), int256(ps[j].qty), "slot qty != listed qty");
+            }
+            for (uint32 sid = 1; sid <= n; ++sid) {
+                if (!listed[sid]) assertEq(handler.positionSlot(ids[i], sid), 0, "slot of an unlisted series");
+            }
+        }
+    }
+
+    /// An account's claim-expiry list is exactly the set of expiries it holds an unpaid claim on,
+    /// without duplicates.
+    function invariant_claimExpiriesMatchClaims() public view {
+        uint256[] memory ids = handler.ids();
+        uint64[] memory xs = handler.expiries();
+        for (uint256 i = 0; i < ids.length; ++i) {
+            uint64[] memory list = ch.claimExpiriesOf(ids[i]);
+            uint256 expected;
+            for (uint256 x = 0; x < xs.length; ++x) {
+                uint256 seen;
+                for (uint256 j = 0; j < list.length; ++j) {
+                    if (list[j] == xs[x]) ++seen;
+                }
+                bool owed = ch.claimable(ids[i], xs[x]) != 0;
+                assertEq(seen, owed ? 1 : 0, "claim-expiry list != expiries with a claim");
+                if (owed) ++expected;
+            }
+            assertEq(list.length, expected, "claim-expiry list holds something else");
+        }
+    }
+
     /// No account holds more than MAX_POSITIONS positions or MAX_UNDERLYINGS underlyings, and no
     /// position is below the minimum trade size.
     function invariant_positionLimits() public view {
@@ -406,6 +488,9 @@ contract ClearinghouseInvariantTest is Fixture {
         invariant_deficitBookkeeping();
         invariant_claimBookkeeping();
         invariant_positionLimits();
+        invariant_underlyingListMatchesBook();
+        invariant_positionIndexMatchesList();
+        invariant_claimExpiriesMatchClaims();
         invariant_vaultSharePriceStableOnEntryExit();
         invariant_settlementNeverBlocked();
         if (vm.envOr("INVARIANT_SUMMARY", false)) _summary();
@@ -450,7 +535,7 @@ contract ClearinghouseInvariantTest is Fixture {
     /// and run with -vv; the last run's log holds the totals). The running totals live in
     /// environment variables of the forge process, the only state that survives between runs.
     function _summary() internal {
-        string[33] memory ops = [
+        string[39] memory ops = [
             "deposit",
             "withdraw",
             "withdrawToMargin",
@@ -477,13 +562,19 @@ contract ClearinghouseInvariantTest is Fixture {
             "claim",
             "liquidationStart",
             "liquidationBid",
+            "bidWithClaims",
             "liquidationEnd",
             "deficitBid",
             "socialize",
             "repayDeficit",
             "repayAtEnd",
             "markUnpriced",
-            "markPriced"
+            "markPriced",
+            "syncVolUpTo",
+            "endDeficitSale",
+            "volNotCurrent",
+            "migrateFeed",
+            "syncAndRebaseVol"
         ];
         for (uint256 i = 0; i < ops.length; ++i) {
             console2.log(ops[i], _accumulate(ops[i], handler.count(bytes32(bytes(ops[i])))));
