@@ -18,7 +18,11 @@ library AuctionHookLogic {
     ///    position below minTradeQty (see _lot); the receiver must not end up with one either;
     ///  - each collateral token: floor(amount * f);
     ///  - cash: floor(cashNorm * f) of index-scaled norm, so the cash index doesn't round it.
-    /// Unpaid settlement claims and the deficit stay with `fromId`.
+    ///  - each unpaid settlement claim: floor(claim * f), so the receiver holds its share of what
+    ///    the account is owed along with its share of the book (a bid is priced on equity, and
+    ///    equity counts unpaid claims at face; a claim left behind would let a bid take liabilities
+    ///    the claims cover while the InsuranceFund pays the bidder for them).
+    /// The deficit stays with `fromId`.
     /// Every position moves on every transfer (no window an owner could arrange its book around);
     /// at the 256-position cap a 50% transfer costs about 16.5M gas, see AuctionHouse.
     function transferFraction(Deps memory d, uint256 fromId, uint256 toId, uint256 f) external {
@@ -55,6 +59,22 @@ library AuctionHookLogic {
         uint256 n = from.cashNorm * f / WAD;
         from.cashNorm -= n;
         $.accounts[toId].cashNorm += n;
+
+        // unpaid claims: copy first, a claim that moves whole leaves the list
+        uint64[] memory es = $.claimExpiries[fromId];
+        for (uint256 i = 0; i < es.length; ++i) {
+            uint64 e = es[i];
+            uint256 c = $.claimable[fromId][e];
+            uint256 m = c * f / WAD;
+            if (m == 0) continue;
+            $.claimable[fromId][e] = c - m;
+            if (c == m) CHS.dropExpiry($.claimExpiries[fromId], e);
+            uint256 t = $.claimable[toId][e];
+            if (t == 0) $.claimExpiries[toId].push(e);
+            $.claimable[toId][e] = t + m;
+            $.claimableTotal[fromId] -= m;
+            $.claimableTotal[toId] += m;
+        }
     }
 
     function transferCash(uint256 fromId, uint256 toId, uint256 wad) external {

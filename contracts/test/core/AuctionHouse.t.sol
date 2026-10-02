@@ -15,11 +15,15 @@ import {NyseCalendar} from "../../src/libraries/NyseCalendar.sol";
 import {Position, Session} from "../../src/types/Types.sol";
 import {console2} from "forge-std/console2.sol";
 
-/// @notice Test-only. Etched over the clearinghouse for one call to set an account's total of
-/// unpaid claims (no per-expiry claim, no pool).
+/// @notice Test-only. Etched over the clearinghouse for one call to give an account an unpaid
+/// claim on an expiry (the claim books only: no pool behind it).
 contract SettlementSeeder {
-    function setClaimableTotal(uint256 id, uint256 wad) external {
-        CHS.s().claimableTotal[id] = wad;
+    function setClaim(uint256 id, uint64 expiry, uint256 wad) external {
+        CHStorage storage $ = CHS.s();
+        if ($.claimable[id][expiry] == 0) $.claimExpiries[id].push(expiry);
+        $.claimable[id][expiry] += wad;
+        $.claimableTotal[id] += wad;
+        $.totalClaimable[expiry] += wad;
     }
 }
 
@@ -708,47 +712,140 @@ contract AuctionHouseTest is Fixture {
         ah.startLiquidation(dead);
     }
 
-    /// Unpaid settlement claims count in equity but stay with the account (a claim belongs to its
-    /// expiry pool entry, transferFraction doesn't move it): the bidder pays only for the rest.
-    function test_claimsStayWithAccount() public {
+    /// Unpaid settlement claims count in equity and move with the fraction: the bidder pays for
+    /// its share of them and holds that share afterwards.
+    function test_claimsMoveWithTheFraction() public {
         uint256 a = _liquidatable();
         uint256 c = _fund(carol, 10_000 * USDG, 0);
-        _cheatClaimableTotal(a, 20e18);
+        _cheatClaim(a, e1, 20e18 + 1);
         AccountState memory st = ch.accountState(a);
         assertTrue(st.liquidatable);
         ah.startLiquidation(a);
 
-        int256 transferable = st.equity + int256(st.deficit) - 20e18;
-        assertGt(transferable, 0);
-        uint256 pay = F.mulWadUp(F.mulWadUp(0.5e18, uint256(transferable)), 0.98e18);
+        int256 value = st.equity + int256(st.deficit); // the claim included
+        uint256 pay = F.mulWadUp(F.mulWadUp(0.5e18, uint256(value)), 0.98e18);
         vm.prank(carol);
         assertEq(ah.bidLiquidation(a, 0.5e18, c, int256(pay)), int256(pay));
-        assertEq(ch.claimableTotalOf(a), 20e18);
-        assertEq(ch.claimableTotalOf(c), 0);
+        assertEq(ch.claimable(c, e1), 10e18); // floor(claim * f)
+        assertEq(ch.claimable(a, e1), 10e18 + 1);
+        assertEq(ch.claimableTotalOf(a), 10e18 + 1);
+        assertEq(ch.claimableTotalOf(c), 10e18);
+        assertEq(ch.claimExpiriesOf(c).length, 1);
+        assertEq(ch.claimExpiriesOf(a).length, 1);
     }
 
-    /// A book worth less than nothing next to a claim: the fund only covers what the claim doesn't.
-    function test_claimsReduceInsuranceBonus() public {
+    /// A book worth less than nothing even with its claim: the fund covers the rest of the loss of
+    /// the bidder's fraction plus the discount on maintenance, and the claim's share moves.
+    function test_claimsCountInTheBook() public {
         (uint256 a,) = _shortPuts(520 * USDG);
         usdg.mint(address(insurance), 1_000 * USDG);
         _setPrice(address(nvda), 90e18);
         uint256 c = _fund(carol, 10_000 * USDG, 0);
-        _cheatClaimableTotal(a, 300e18);
+        _cheatClaim(a, e1, 100e18);
         AccountState memory st = ch.accountState(a);
         assertTrue(st.liquidatable);
         ah.startLiquidation(a);
 
-        int256 transferable = st.equity + int256(st.deficit) - 300e18;
-        assertLt(transferable, 0);
-        int256 net = transferable + 300e18; // book plus claim
-        uint256 shortfall = net < 0 ? uint256(-net) : 0;
-        uint256 bonus = _mw(0.5e18, shortfall + _mw(0.02e18, st.mm));
+        int256 value = st.equity + int256(st.deficit); // the claim included
+        assertLt(value, 0);
+        uint256 bonus = _mw(0.5e18, uint256(-value) + _mw(0.02e18, st.mm));
         int256 paid = -int256(bonus / USDG_SCALE * USDG_SCALE);
         vm.prank(carol);
         assertEq(ah.bidLiquidation(a, 0.5e18, c, 0), paid);
-        assertEq(ch.claimableTotalOf(a), 300e18);
-        // never more than the uncovered shortfall plus the discount on maintenance margin
-        assertLe(uint256(-paid), _mw(0.5e18, uint256(-transferable) + _mw(0.02e18, st.mm)));
+        assertEq(ch.claimableTotalOf(a), 50e18);
+        assertEq(ch.claimableTotalOf(c), 50e18);
+    }
+
+    /// Review PoC: an owner holds an unpaid claim, writes puts against it, takes its cash out and
+    /// lets the account be liquidated by its own bidder. With the claim left behind, the fund paid
+    /// the bidder a discount on a book the claim covered. Now the claim moves with the fraction:
+    /// the book is solvent, the bidder pays for it and the fund pays nothing.
+    function test_claimBackedBookCantDrainFund() public {
+        address att = _user("att");
+        uint256 a = _fund(att, 100 * USDG, 0);
+        uint256 l = _fund(att, 10_000 * USDG, 0);
+        uint256 b = _fund(att, 10_000 * USDG, 0);
+        usdg.mint(address(insurance), 10_000 * USDG);
+        uint32 c180 = _list(address(nvda), e1, 180e18, true);
+        _trade(a, att, l, att, c180, 10e18, 20e18); // A long 10 e1 calls
+        vm.warp(e1 + 60);
+        _settleExpiry(address(nvda), e1, 260e18);
+        _setPrice(address(nvda), 180e18);
+        ch.settleAccount(a, e1);
+        ch.settleAccount(l, e1);
+        assertEq(ch.claimable(a, e1), 800e18); // never collected
+
+        // A writes puts against the claim and withdraws its cash
+        _trade(l, att, a, att, put170, 10e18, 1e18);
+        uint256 cashUnits = ch.cashOf(a) / USDG_SCALE;
+        vm.prank(att);
+        ch.withdraw(a, address(usdg), cashUnits, att);
+        assertTrue(ch.accountState(a).healthy);
+
+        _setPrice(address(nvda), 130e18);
+        assertTrue(ch.accountState(a).liquidatable);
+        int256 before = _attackerTotal(att, a, l, b);
+        uint256 fund0 = usdg.balanceOf(address(insurance));
+        ah.startLiquidation(a);
+        vm.warp(vm.getBlockTimestamp() + 1800); // the full discount
+        _setPrice(address(nvda), 130e18);
+        vm.prank(att);
+        int256 paid = ah.bidLiquidation(a, 0.5e18, b, type(int256).max);
+
+        assertGt(paid, 0); // the bidder pays for a solvent book
+        assertGe(usdg.balanceOf(address(insurance)), fund0); // the fund pays nothing (a penalty in)
+        assertEq(ch.claimable(b, e1), 400e18);
+        assertLe(_attackerTotal(att, a, l, b), before);
+        ch.claim(a, e1);
+        ch.claim(b, e1);
+        assertGe(usdg.balanceOf(address(insurance)), fund0);
+        assertEq(ch.claimExpiriesOf(a).length, 0);
+        assertEq(ch.claimExpiriesOf(b).length, 0);
+    }
+
+    /// The one-transaction variant at a Friday close: settle the expiry, turn the account's
+    /// payoff into a claim (its pool isn't ready yet, so nobody can claim it), start the auction
+    /// and bid at once. The claim moves with the bid all the same.
+    function test_claimBackedBookAtTheCloseCantDrainFund() public {
+        address att = _user("att");
+        uint256 a = _fund(att, 2_000 * USDG, 0);
+        uint256 l = _fund(att, 10_000 * USDG, 0);
+        uint256 b = _fund(att, 10_000 * USDG, 0);
+        usdg.mint(address(insurance), 10_000 * USDG);
+        uint32 c180 = _list(address(nvda), e1, 180e18, true);
+        _trade(a, att, l, att, c180, 10e18, 20e18);
+        _trade(l, att, a, att, put170, 10e18, 1e18); // margined by A's cash before the close
+
+        // at the close, in one go: settle, turn A's payoff into a claim, take the cash out
+        vm.warp(e1 + 1);
+        _settleExpiry(address(nvda), e1, 260e18);
+        _setPrice(address(nvda), 260e18);
+        ch.settleAccount(a, e1); // L's short is still open: the claim can't be paid out yet
+        vm.expectRevert(CHErrors.PoolNotReady.selector);
+        ch.claim(a, e1);
+        uint256 cashUnits = ch.cashOf(a) / USDG_SCALE;
+        vm.prank(att);
+        ch.withdraw(a, address(usdg), cashUnits, att);
+        uint256 px = 130e18; // a drop that makes A liquidatable
+        _setPrice(address(nvda), px);
+        while (!ch.accountState(a).liquidatable) {
+            px -= 5e18;
+            _setPrice(address(nvda), px);
+        }
+        uint256 fund0 = usdg.balanceOf(address(insurance));
+        int256 before = _attackerTotal(att, a, l, b);
+        ah.startLiquidation(a);
+        vm.prank(att);
+        ah.bidLiquidation(a, 0.5e18, b, type(int256).max);
+        assertGe(usdg.balanceOf(address(insurance)), fund0);
+        assertEq(ch.claimable(b, e1), ch.claimable(a, e1));
+        assertLe(_attackerTotal(att, a, l, b), before);
+    }
+
+    /// @dev What `att` holds: the three accounts' equity and its wallet's USDG.
+    function _attackerTotal(address att, uint256 a, uint256 l, uint256 b) internal view returns (int256) {
+        return ch.accountState(a).equity + ch.accountState(l).equity + ch.accountState(b).equity
+            + int256(usdg.balanceOf(att) * USDG_SCALE);
     }
 
     /// Gas of a 50% bid on an account at the 256-position cap, end to end (gate, book check, three
@@ -1388,11 +1485,11 @@ contract AuctionHouseTest is Fixture {
         assertGe(spy.balanceOf(address(ch)), sp, "spy backing");
     }
 
-    /// @dev Sets only claimableTotal (no per-expiry claim, no pool): what a liquidation reads.
-    function _cheatClaimableTotal(uint256 id, uint256 wad) internal {
+    /// @dev Gives `id` an unpaid claim of `wad` on `expiry` (claim books only, no pool behind it).
+    function _cheatClaim(uint256 id, uint64 expiry, uint256 wad) internal {
         bytes memory code = address(ch).code;
         vm.etch(address(ch), address(seeder).code);
-        SettlementSeeder(address(ch)).setClaimableTotal(id, wad);
+        SettlementSeeder(address(ch)).setClaim(id, expiry, wad);
         vm.etch(address(ch), code);
     }
 

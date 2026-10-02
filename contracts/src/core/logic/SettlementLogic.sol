@@ -84,6 +84,7 @@ library SettlementLogic {
         // 4. net receiver: a claim on the pool
         if (net >= 0) {
             uint256 amt = uint256(net);
+            if (amt != 0 && $.claimable[id][expiry] == 0) $.claimExpiries[id].push(expiry);
             $.claimable[id][expiry] += amt;
             $.totalClaimable[expiry] += amt;
             $.claimableTotal[id] += amt; // keeps counting in the account's equity until claimed
@@ -140,6 +141,7 @@ library SettlementLogic {
         // the claim leaves the account's equity at face; only `pay` comes back as cash, so an
         // impaired payout realizes the difference as a loss
         $.claimable[id][expiry] = 0;
+        CHS.dropExpiry($.claimExpiries[id], expiry);
         $.totalClaimable[expiry] -= amt;
         $.claimableTotal[id] -= amt;
         $.pool[expiry] = poolWad - pay;

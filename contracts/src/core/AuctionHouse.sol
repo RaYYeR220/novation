@@ -16,12 +16,12 @@ import {Session, WAD} from "../types/Types.sol";
 /// Liquidation. Anyone starts one on an account below maintenance margin. For auctionDuration
 /// the discount ramps linearly from startDiscount to maxDiscount; after that the auction is over
 /// and anyone may start a new one if the account is still liquidatable. A bid takes over a
-/// fraction of the account's book (positions, collateral, cash). If the book is worth something,
-/// the bidder pays for its share less the discount and the account pays a penalty to the
-/// InsuranceFund; if not, the fund pays the bidder to take it. The bidder must meet initial margin
-/// afterwards, and the account must not be left riskier (initial margin may not rise). The
-/// auction ends once the account is healthy again or has no positions left. A bid moves its
-/// fraction of every position.
+/// fraction of the account's book (positions, collateral, cash and unpaid settlement claims). If
+/// the book is worth something, the bidder pays for its share less the discount and the account
+/// pays a penalty to the InsuranceFund; if not, the fund pays the bidder to take it. The bidder
+/// must meet initial margin afterwards, and the account must not be left riskier (initial margin
+/// may not rise). The auction ends once the account is healthy again or has no positions left. A
+/// bid moves its fraction of every position.
 ///
 /// Gas: a 50% bid on an account at the 256-position cap (bidder receiving all 256) measures
 /// 23,221,375 gas outside the kernel: transferFraction 16.50M, three margin procedures 4.13M
@@ -134,7 +134,7 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
             revert FractionTooLarge();
         }
 
-        (int256 value, uint256 claims) = _transferableEquity(st, id);
+        int256 value = _transferableEquity(st);
         ch.transferFraction(id, bidderId, fractionWad);
         AccountState memory moved = ch.accountState(id);
         // a bid must not leave the account riskier (e.g. take its hedges whole and few liabilities)
@@ -154,11 +154,10 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
             _settle(id, bidderId, paidWad);
             ch.chargePenalty(id, _mulWad(g.liquidationPenalty, _mulWad(fractionWad, uint256(value))));
         } else {
-            // the book is worth nothing or less: the fund pays the bidder to take its fraction, for
-            // the part of the loss the account's own claims don't cover, plus the discount on
-            // maintenance; the lot difference stays between the account and the bidder
-            int256 net = value + claims.toInt256();
-            uint256 shortfall = net < 0 ? uint256(-net) : 0;
+            // the book, its unpaid claims included, is worth nothing or less: the fund pays the
+            // bidder to take its fraction of the loss, plus the discount on maintenance; the lot
+            // difference stays between the account and the bidder
+            uint256 shortfall = uint256(-value);
             _settle(id, bidderId, extra);
             uint256 bonus = _mulWad(fractionWad, shortfall + _mulWad(d, st.mm));
             paidWad = extra - ch.insurancePay(bidderId, bonus).toInt256();
@@ -255,16 +254,12 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
 
     // ================================================================ internal
 
-    /// @dev What a takeover can move: equity before the deficit (it stays with the account, and a
-    /// payment into the account goes towards it) and without unpaid settlement claims (they stay
-    /// with the account too). Returns that value and the claims.
-    function _transferableEquity(AccountState memory st, uint256 id)
-        internal
-        view
-        returns (int256 value, uint256 claims)
-    {
-        claims = ch.claimableTotalOf(id);
-        value = st.equity + st.deficit.toInt256() - claims.toInt256();
+    /// @dev What a takeover moves: equity before the deficit (the deficit stays with the account,
+    /// and a payment into the account goes towards it). Unpaid settlement claims count at face in
+    /// equity and move with the fraction (transferFraction), so the price and the transfer agree:
+    /// a book whose claims cover its losses is solvent and the fund pays nothing for it.
+    function _transferableEquity(AccountState memory st) internal pure returns (int256) {
+        return st.equity + st.deficit.toInt256();
     }
 
     /// @dev A positive amount goes from the bidder to the account, a negative one the other way.

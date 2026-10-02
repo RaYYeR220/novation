@@ -391,6 +391,11 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
         return CHS.s().deficitExpiries[id];
     }
 
+    /// @notice The expiries on which the account holds an unpaid claim (see claim).
+    function claimExpiriesOf(uint256 id) external view returns (uint64[] memory) {
+        return CHS.s().claimExpiries[id];
+    }
+
     /// @return total the account's deficit over all expiries
     /// @return bridged the part of the `expiry` deficit owed to the InsuranceFund
     /// @return pendingForExpiry the part of the `expiry` deficit owed to that expiry's pool

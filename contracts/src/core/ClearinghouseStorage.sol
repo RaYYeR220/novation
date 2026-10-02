@@ -61,6 +61,7 @@ struct CHStorage {
     mapping(uint256 => uint256) socializedDebt;
     mapping(uint256 => uint64[]) deficitExpiries; // expiries where defPending or defBridged > 0
     mapping(address => PriceOutage) outages; // collateral tokens without a price, see markUnpriced
+    mapping(uint256 => uint64[]) claimExpiries; // expiries where claimable[id][E] > 0
 }
 
 /// @notice Dependencies handed to the logic libraries, built by the Clearinghouse from its
@@ -141,6 +142,20 @@ library CHS {
     function s() internal pure returns (CHStorage storage $) {
         assembly ("memory-safe") {
             $.slot := SLOT
+        }
+    }
+
+    // ---------------------------------------------------------------- expiry lists
+
+    /// @notice Removes `e` from an unordered expiry list (swap and pop); absent is a no-op.
+    function dropExpiry(uint64[] storage xs, uint64 e) internal {
+        uint256 n = xs.length;
+        for (uint256 i = 0; i < n; ++i) {
+            if (xs[i] == e) {
+                xs[i] = xs[n - 1];
+                xs.pop();
+                return;
+            }
         }
     }
 
