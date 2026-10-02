@@ -62,7 +62,12 @@ library TradeLogic {
         _gate($, tk, up.enabled, closedToOpening);
         _gate($, mk, up.enabled, closedToOpening);
 
-        // 4. pre-trade state of reducing and agent-acted sides
+        // 4. pre-trade state of reducing and agent-acted sides, at the traded underlying's vol
+        // synced to the feed's latest round: the "at mark" of the pure-reduction rule must not be
+        // the volCap fallback of an estimate that missed a print. If it can't be made current, no
+        // side gets that exemption.
+        try d.hub.syncVol(s.underlying) {} catch {}
+        bool markCurrent = d.hub.volCurrent(s.underlying);
         _snapshot(d, tk);
         _snapshot(d, mk);
 
@@ -87,8 +92,8 @@ library TradeLogic {
         tk.feePaid = fee;
 
         // 7. post-trade margin on both sides
-        _checkMargin(d, tk);
-        _checkMargin(d, mk);
+        _checkMargin(d, tk, markCurrent);
+        _checkMargin(d, mk, markCurrent);
 
         // 8. agent risk budgets
         _checkBudget($, tk, t.premium);
@@ -173,7 +178,9 @@ library TradeLogic {
     /// couldn't close its last covered call: the margin procedure then counts the remaining
     /// stock's downside as IM (with no deficit such an account takes the fast path, IM 0), more
     /// than the covered book's. Selling a last long (a protective put, say) gets no exemption.
-    function _checkMargin(Deps memory d, Side memory x) private view {
+    /// Neither exemption from equity >= IM applies unless the traded underlying's vol is current
+    /// (`markCurrent`): a mark at a stale estimate's volCap fallback is no fair price to reduce at.
+    function _checkMargin(Deps memory d, Side memory x, bool markCurrent) private view {
         AccountState memory st = MarginLogic.accountState(d, x.id);
         x.equity = st.equity;
         x.im = st.im;
@@ -181,7 +188,7 @@ library TradeLogic {
         bool imOk = st.im <= x.preIm || x.lastShortClosed;
         if (x.restricted && !imOk) revert CHErrors.RiskIncreaseNotAllowed(x.id, st.im, x.preIm);
         if (st.equity >= st.im.toInt256()) return;
-        if (!x.opening && imOk && st.equity + x.feePaid.toInt256() >= x.preEquity) return;
+        if (!x.opening && imOk && markCurrent && st.equity + x.feePaid.toInt256() >= x.preEquity) return;
         revert CHErrors.InsufficientMargin(x.id, st.equity, st.im);
     }
 

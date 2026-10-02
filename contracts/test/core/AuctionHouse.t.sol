@@ -842,6 +842,131 @@ contract AuctionHouseTest is Fixture {
         assertLe(_attackerTotal(att, a, l, b), before);
     }
 
+    // ================================================================ vol at the weekly reopen
+
+    uint256 constant FRI_1930_EDT = 1_790_379_000; // 2026-09-25 19:30 EDT: the week's last print
+    uint256 constant SUN_1959_EDT = 1_790_553_540; // 2026-09-27 19:59 EDT: still the weekend
+    uint256 constant SUN_2001_EDT = 1_790_553_660; // 2026-09-27 20:01 EDT: just after the reopen
+
+    /// Review PoC (A, H-1; C, F-1 PoC 1): the vol estimate went stale over the weekend (no round
+    /// for 48 hours), so at the reopen every option was marked at volCap until someone folded the
+    /// first print, and a liquidator could start and bid on a healthy short book in that window.
+    /// The estimate now counts as current while the hub has folded the feed's latest round, and a
+    /// liquidation syncs every underlying first: the book is valued at its real vol.
+    function test_reopenDoesNotLiquidateAtVolCap() public {
+        _calmNvdaVol();
+        uint256 a = _fund(alice, 280 * USDG, 0);
+        uint256 b = _fund(bob, 10_000 * USDG, 0);
+        _trade(a, alice, b, bob, put170, -10e18, 5e18);
+        uint256 c = _fund(carol, 10_000 * USDG, 0);
+
+        vm.warp(FRI_1930_EDT);
+        _setPrice(address(nvda), 180e18);
+        hub.syncVol(address(nvda));
+        AccountState memory fri = ch.accountState(a);
+        assertGe(fri.equity, 2 * int256(fri.im));
+
+        // Sunday before the reopen: 48 hours without a round, the estimate is still current
+        vm.warp(SUN_1959_EDT);
+        assertEq(hub.markVol(address(nvda)), 0.35e18);
+
+        // the first print of the week, at the same price, not folded yet: the view reads volCap
+        vm.warp(SUN_2001_EDT);
+        _setPrice(address(nvda), 180e18);
+        assertEq(hub.markVol(address(nvda)), 1.5e18);
+        assertTrue(ch.accountState(a).liquidatable);
+        // a liquidation folds it in first, and then the book is healthy
+        vm.expectRevert(AuctionHouse.NotLiquidatable.selector);
+        ah.startLiquidation(a);
+        hub.syncVol(address(nvda));
+        assertTrue(ch.accountState(a).healthy);
+        vm.prank(carol);
+        vm.expectRevert(AuctionHouse.AuctionNotActive.selector);
+        ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
+    }
+
+    /// Review PoC (C, F-1 PoC 2): the self-liquidation drain at the reopen. An account margined at
+    /// 1.15x IM at its real vol reads deeply negative at volCap; its owner's own bidder took 100%
+    /// of it and the fund paid the bidder. Now the liquidation values it at the real vol.
+    function test_reopenSelfLiquidationCantDrainFund() public {
+        _calmNvdaVol();
+        uint64 far = e2;
+        for (uint256 i; i < 3; ++i) {
+            far = uint64(NyseCalendar.nextWeeklyExpiry(far));
+        }
+        uint32 put125 = _list(address(nvda), far, 125e18, false);
+        address att = _user("att");
+        uint256 a = _fund(att, 3_000 * USDG, 0);
+        uint256 cc = _fund(att, 10_000 * USDG, 0);
+        uint256 b = _fund(att, 10_000 * USDG, 0);
+        usdg.mint(address(insurance), 5_000 * USDG);
+        _trade(a, att, cc, att, put125, -100e18, 50e18);
+        AccountState memory st = ch.accountState(a);
+        uint256 keep = uint256(st.equity - int256(st.im * 115 / 100)) / USDG_SCALE;
+        vm.prank(att);
+        ch.withdraw(a, address(usdg), keep, att);
+
+        vm.warp(FRI_1930_EDT);
+        _setPrice(address(nvda), 180e18);
+        hub.syncVol(address(nvda));
+        assertTrue(ch.accountState(a).healthy);
+
+        vm.warp(SUN_2001_EDT);
+        _setPrice(address(nvda), 180e18);
+        assertLt(ch.accountState(a).equity, 0); // at volCap marks
+        uint256 fund0 = usdg.balanceOf(address(insurance));
+        vm.prank(att);
+        vm.expectRevert(AuctionHouse.NotLiquidatable.selector);
+        ah.startLiquidation(a);
+        assertEq(usdg.balanceOf(address(insurance)), fund0);
+        hub.syncVol(address(nvda)); // the reverted call's sync is undone with it
+        assertTrue(ch.accountState(a).healthy);
+        b;
+    }
+
+    /// Review PoC (A, H-1 impact B): in the stale window an underwater account bought back its
+    /// far out-of-the-money shorts "at mark", the volCap mark, paying value to a colluder while the
+    /// pure-reduction rule saw equity unchanged. A trade now folds the traded underlying's vol
+    /// first, so the buyback is priced against the real mark and refused.
+    function test_reopenBuybackAtStaleMarkRefused() public {
+        _calmNvdaVol();
+        uint256 a = _fund(alice, 280 * USDG, 0);
+        uint256 d = _fund(dave, 10_000 * USDG, 0);
+        _trade(a, alice, d, dave, put170, -10e18, 5e18);
+        _trade(a, alice, d, dave, put150, -30e18, 3e18);
+
+        vm.warp(FRI_1930_EDT);
+        _setPrice(address(nvda), 160e18);
+        hub.syncVol(address(nvda));
+
+        vm.warp(SUN_2001_EDT);
+        _setPrice(address(nvda), 160e18); // not folded: the view marks at volCap
+        AccountState memory pre = ch.accountState(a);
+        AccountState memory post = ch.marginAfter(a, put150, 30e18, 0);
+        uint256 staleMark = uint256(post.mtm - pre.mtm); // 30 puts at the volCap mark
+        vm.expectPartialRevert(CHErrors.InsufficientMargin.selector);
+        _trade(a, alice, d, dave, put150, 30e18, staleMark);
+
+        // at the real mark alice is underwater: the stale price would have handed dave the gap
+        hub.syncVol(address(nvda));
+        AccountState memory fair = ch.accountState(a);
+        assertFalse(fair.healthy);
+        uint256 fairMark = uint256(ch.marginAfter(a, put150, 30e18, 0).mtm - fair.mtm);
+        assertGt(staleMark, fairMark);
+    }
+
+    /// @dev 400 flat NVDA prints five minutes apart, folded: the EWMA vol falls to the 35% floor.
+    function _calmNvdaVol() internal {
+        uint256 t = vm.getBlockTimestamp();
+        for (uint256 i = 1; i <= 400; ++i) {
+            vm.warp(t + i * 5 minutes);
+            _setPrice(address(nvda), 180e18);
+            if (i % 64 == 0) hub.syncVol(address(nvda));
+        }
+        hub.syncVol(address(nvda));
+        assertEq(hub.markVol(address(nvda)), 0.35e18);
+    }
+
     /// @dev What `att` holds: the three accounts' equity and its wallet's USDG.
     function _attackerTotal(address att, uint256 a, uint256 l, uint256 b) internal view returns (int256) {
         return ch.accountState(a).equity + ch.accountState(l).equity + ch.accountState(b).equity

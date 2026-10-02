@@ -184,10 +184,15 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
 
     // ---- realized vol ----
 
+    /// @notice The mark vol: the EWMA estimate clamped to [volFloor, volCap]. It falls back to
+    /// volCap before initVol, and when the estimate is stale: not refreshed within volStaleness
+    /// while the feed has printed a round it hasn't folded in. A feed that prints nothing (every
+    /// weekend, 48 hours and more) leaves the estimate current, so the marks don't jump to volCap
+    /// at the reopen; a round printed but not yet folded does, until anyone syncs (syncVol).
     function markVol(address u) external view returns (uint256 vol) {
         VolState storage v = _vol[u];
         UnderlyingParams memory p = params.underlying(u);
-        if (!v.initialized || block.timestamp - v.lastPokeTs > p.volStaleness) {
+        if (!v.initialized || (block.timestamp - v.lastPokeTs > p.volStaleness && !_current(v, p.feed))) {
             return p.volCap;
         }
         uint256 raw = F.sqrtWad(_divWad(v.r2, v.dt));
@@ -254,7 +259,11 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
         (uint256[] memory prices, uint256[] memory dts, uint80 lastId, uint256 lastAt) =
             _collect(IAggregatorV3(p.feed), v.lastRoundId, v.lastUpdatedAt, ids);
         uint256 m = prices.length;
-        if (m == 0) return;
+        if (m == 0) {
+            // only bad prints: the anchor moves past them, the estimate stays
+            if (lastId != v.lastRoundId) v.lastRoundId = lastId;
+            return;
+        }
 
         (uint256 r2, uint256 dt) = kernel.ewmaUpdate(v.r2, v.dt, v.lastPrice, prices, dts, p.lambda);
 
@@ -285,10 +294,13 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
             if ((id >> 64) == (startId >> 64) && id <= startId) continue;
             if ((id >> 64) != (prevId >> 64) || uint64(id) != uint64(prevId) + 1) revert NonConsecutiveRound();
             (int256 answer, uint256 updatedAt) = _round(feed, id);
-            if (answer <= 0 || updatedAt < prevAt) revert InvalidRound();
+            if (updatedAt == 0) revert InvalidRound(); // not printed (yet): the anchor can't pass it
+            prevId = id;
+            // a bad print (no positive answer, or stamped before its predecessor) is skipped: the
+            // next good round's return and time span cover it, and the estimate never sticks on it
+            if (answer <= 0 || updatedAt < prevAt) continue;
             prices[m] = uint256(answer) * mul;
             dts[m] = updatedAt - prevAt;
-            prevId = id;
             prevAt = updatedAt;
             ++m;
         }
@@ -318,6 +330,27 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
         v.lastUpdatedAt = uint64(updatedAt);
 
         emit VolRebased(u, oldId, roundId);
+    }
+
+    /// @notice Whether the vol estimate has folded in the feed's latest round (false before
+    /// initVol, after a phase change until rebaseVol, and while the feed can't be read).
+    function volCurrent(address u) external view returns (bool) {
+        VolState storage v = _vol[u];
+        return v.initialized && _current(v, params.underlying(u).feed);
+    }
+
+    function _current(VolState storage v, address feed) private view returns (bool) {
+        bytes4 sel = IAggregatorV3.latestRoundData.selector;
+        bool ok;
+        uint256 id;
+        assembly ("memory-safe") {
+            let ptr := mload(0x40)
+            mstore(ptr, sel)
+            ok := staticcall(gas(), feed, ptr, 4, ptr, 0xa0)
+            if lt(returndatasize(), 0xa0) { ok := 0 }
+            id := mload(ptr)
+        }
+        return ok && id == v.lastRoundId;
     }
 
     /// @dev lastPrice is in WAD (feed answer scaled to 18 decimals)

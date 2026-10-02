@@ -537,6 +537,10 @@ contract ClearinghouseAccountsTest is Fixture {
         _assertMatchesDirect(id, order, _nums(NVDA_SHOCK_EXTENDED, SPY_SHOCK_EXTENDED));
 
         vm.warp(SAT);
+        // prints the vol hasn't folded in yet: past volStaleness the marks use exactly volCap, which
+        // the golden shock ranges assume
+        _setPrice(address(nvda), 180e18);
+        _setPrice(address(spy), 600e18);
         assertEq(uint256(hub.session(address(nvda))), uint256(Session.WEEKEND));
         assertEq(uint256(hub.session(address(spy))), uint256(Session.WEEKEND));
         uint256 imWeekend = _assertMatchesDirect(id, order, _nums(NVDA_SHOCK_WEEKEND, SPY_SHOCK_WEEKEND)).im;

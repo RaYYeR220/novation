@@ -165,7 +165,8 @@ The gaps are kept. A return across a weekend or a holiday enters with its real �
 The estimator also fails closed:
 
 - A new underlying starts from the prior `(volCap² × 1 day, 1 day)`, so it reads `volCap` (to within integer rounding) until real rounds accumulate.
-- If nobody pokes it for `volStaleness` (48 hours), mark volatility falls back to `volCap`.
+- If the feed has printed a round the estimate hasn't folded in and nobody has poked it for `volStaleness` (48 hours), mark volatility falls back to `volCap`. A feed that prints nothing (every weekend, 48 hours and more) leaves the estimate current, so the marks don't jump at the reopen. Liquidations sync every underlying of the account first and need a current estimate; a trade syncs the traded underlying first and allows the pure-reduction exemption only at a current estimate.
+- A bad print (no positive answer, or stamped before its predecessor) is skipped: the next good round's return and time span cover it.
 - Rounds must be consecutive in the feed's current phase. Ids that are already processed are skipped, so a front-running poke can't make a keeper's batch revert. After a Chainlink phase change, `rebaseVol` moves the anchor to the new phase once the old one is exhausted.
 
 Per-underlying floors and caps are set at listing; the test suite uses 35% to 150% for NVDA and 12% to 80% for SPY.

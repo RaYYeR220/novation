@@ -37,9 +37,11 @@ import {Session, WAD} from "../types/Types.sol";
 ///
 /// No fire sales without live prices: every bid (and the start of a liquidation) needs a REGULAR
 /// or EXTENDED session and a usable price for every underlying involved, so auctions pause over
-/// weekends, holidays, halts and oracle outages, including a collateral-only token's. Nor on
-/// a book the registry hasn't priced yet: a liquidation needs a live (unexpired) position and
-/// waits while any expired series of the account awaits its settlement price.
+/// weekends, holidays, halts and oracle outages, including a collateral-only token's. Every
+/// underlying's vol is synced to the feed's latest round first (and must be current), so a book
+/// isn't valued at the volCap fallback of an estimate that missed the first print of the week.
+/// Nor on a book the registry hasn't priced yet: a liquidation needs a live (unexpired) position
+/// and waits while any expired series of the account awaits its settlement price.
 ///
 /// The discount clock counts market time only: the seconds inside the NYSE 24/5 window (REGULAR or
 /// EXTENDED by the calendar), not weekends or holidays. An auction that runs into a closed session
@@ -73,6 +75,7 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
     error ExceedsDeficit();
     error BidRaisesRisk(uint256 imAfter, uint256 imBefore);
     error StillLiquidatable();
+    error VolNotCurrent(address underlying);
 
     /// @dev Settlement differences this small are rounding of the marks (a few wei per position),
     /// not lots: they are dropped so that an account without cash can still be taken over.
@@ -181,6 +184,10 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
     /// session: it only reads margin.
     function endLiquidation(uint256 id) external nonReentrant {
         if (liquidationStartedAt[id] == 0) revert AuctionNotActive();
+        address[] memory us = ch.underlyingsOf(id);
+        for (uint256 i = 0; i < us.length; ++i) {
+            try hub.syncVol(us[i]) {} catch {}
+        }
         if (ch.accountState(id).liquidatable) revert StillLiquidatable();
         delete liquidationStartedAt[id];
         emit LiquidationEnded(id);
@@ -283,10 +290,18 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
         if (live == 0 || awaiting != 0) revert NotLiquidatable();
     }
 
-    function _requireAccountTradable(uint256 id) private view {
+    /// @dev Every underlying of the account trades (see _requireTradable) and its vol estimate has
+    /// folded in the feed's latest round: each one is synced first (permissionless; a failure
+    /// leaves it behind and the call reverts VolNotCurrent). The marks a liquidation is priced at
+    /// are then the current ones, not the volCap fallback of an estimate that missed the first
+    /// print after a closure.
+    function _requireAccountTradable(uint256 id) private {
         address[] memory us = ch.underlyingsOf(id);
         for (uint256 i = 0; i < us.length; ++i) {
-            _requireTradable(us[i]);
+            address u = us[i];
+            _requireTradable(u);
+            try hub.syncVol(u) {} catch {}
+            if (!hub.volCurrent(u)) revert VolNotCurrent(u);
         }
     }
 

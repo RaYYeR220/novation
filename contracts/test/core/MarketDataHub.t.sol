@@ -986,8 +986,59 @@ contract MarketDataHubTest is Test {
         assertLt(v, 1.5e18);
         assertGt(v, 0.35e18);
 
-        vm.warp(block.timestamp + 3601); // past volStaleness
+        // past volStaleness with nothing new printed (a weekend): the estimate is still current
+        uint256 t = REGULAR_TS + 3600 * 64 + 3601;
+        vm.warp(t);
+        assertTrue(hub.volCurrent(address(token)));
+        assertEq(hub.markVol(address(token)), v);
+
+        // a round printed but not folded in: stale, so volCap until anyone syncs
+        feed.pushRound(150e8, t);
+        assertFalse(hub.volCurrent(address(token)));
         assertEq(hub.markVol(address(token)), 1.5e18);
+        hub.syncVol(address(token));
+        assertTrue(hub.volCurrent(address(token)));
+        assertLt(hub.markVol(address(token)), 1.5e18);
+    }
+
+    /// A bad print (no positive answer) is skipped: the anchor moves past it, the next good round's
+    /// return spans it, and the estimate never sticks on it.
+    function test_badRoundIsSkipped() public {
+        vm.warp(REGULAR_TS);
+        feed.pushRound(150e8, REGULAR_TS);
+        hub.initVol(address(token));
+        (uint256 r2a, uint256 dta,,,,) = hub.volState(address(token));
+        feed.pushRound(0, REGULAR_TS + 60);
+        hub.syncVol(address(token)); // only the bad print: the anchor moves, nothing else
+        (uint256 r2b, uint256 dtb, uint80 last,, uint64 at,) = hub.volState(address(token));
+        assertEq(last, _roundId(1, 2));
+        assertEq(r2b, r2a);
+        assertEq(dtb, dta);
+        assertEq(at, REGULAR_TS);
+        assertTrue(hub.volCurrent(address(token)));
+
+        feed.pushRound(-5, REGULAR_TS + 120);
+        feed.pushRound(160e8, REGULAR_TS + 180);
+        hub.syncVol(address(token));
+        (,, last,,,) = hub.volState(address(token));
+        assertEq(last, _roundId(1, 4));
+        // the same as folding the good round alone, its time span counted from the last good one
+        (uint256 r2, uint256 dt) = _ewmaOne(r2a, dta, 150e18, 160e18, 180);
+        (r2b, dtb,,,,) = hub.volState(address(token));
+        assertEq(r2b, r2);
+        assertEq(dtb, dt);
+    }
+
+    function _ewmaOne(uint256 r2, uint256 dt, uint256 p0, uint256 p1, uint256 span)
+        internal
+        view
+        returns (uint256, uint256)
+    {
+        uint256[] memory ps = new uint256[](1);
+        uint256[] memory ds = new uint256[](1);
+        ps[0] = p1;
+        ds[0] = span;
+        return kernel.ewmaUpdate(r2, dt, p0, ps, ds, 0.97e18);
     }
 
     function test_markVolClampsToFloor() public {

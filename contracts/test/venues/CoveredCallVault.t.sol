@@ -722,16 +722,15 @@ contract CoveredCallVaultTest is VaultFixture {
         assertEq(vault.maxWithdraw(alice), 0);
     }
 
-    /// A feed round the vol can't fold in (here a zero answer) stops every priced vault operation,
-    /// but holders can still queue their exit.
+    /// A feed round without a price (here a zero answer) stops every priced vault operation, but
+    /// holders can still queue their exit.
     function test_requestRedeemNotBlockedByBadRound() public {
         _vaultDeposit(vault, alice, 10e18);
         _cooldown();
         _setPrice(address(nvda), 0);
-        vm.expectRevert(MarketDataHub.InvalidRound.selector);
-        hub.syncVol(address(nvda));
+        hub.syncVol(address(nvda)); // the bad print is skipped
         vm.prank(alice);
-        vm.expectRevert(MarketDataHub.InvalidRound.selector);
+        vm.expectRevert(OptionVaultBase.VaultNotLive.selector);
         vault.withdraw(1e18, alice, alice);
 
         vm.prank(alice);
