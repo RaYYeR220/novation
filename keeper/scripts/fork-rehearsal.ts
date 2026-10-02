@@ -41,7 +41,12 @@ async function main() {
   const key: Hex = keeperKeyFromEnv(chainId);
 
   const port = await freePort();
-  const anvil = spawn('anvil', ['--fork-url', upstream, '--port', String(port), '--silent', '--no-rate-limit'], { stdio: 'ignore' });
+  // gentle with the upstream RPC (it rate-limits): anvil throttles and retries its state reads
+  const anvil = spawn(
+    'anvil',
+    ['--fork-url', upstream, '--port', String(port), '--silent', '--compute-units-per-second', '100', '--retries', '10', '--fork-retry-backoff', '2000'],
+    { stdio: 'ignore' },
+  );
   const rpcUrl = `http://127.0.0.1:${port}`;
   const rpc = async (method: string, params: unknown[] = []) => {
     const r = await fetch(rpcUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) });
