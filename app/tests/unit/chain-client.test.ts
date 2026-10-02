@@ -43,6 +43,30 @@ describe('ChainClient: who may move funds', () => {
   });
 });
 
+describe('ChainClient: sending', () => {
+  it('refuses to send once the wallet signs as another account than the one simulated for', async () => {
+    const simulated: unknown[] = [];
+    const pub = {
+      ...client(),
+      simulateContract: async (args: { account: string }) => {
+        simulated.push(args.account);
+        return { request: { ...args }, result: undefined };
+      },
+    } as unknown as PublicClient;
+    const c = new ChainClient({ client: pub });
+    c.setWallet({
+      account: { address: OWNER, type: 'json-rpc' },
+      // the wallet switched to another account after the simulation
+      getAddresses: async () => [STRANGER],
+      writeContract: async () => {
+        throw new Error('must not reach the wallet');
+      },
+    } as unknown as WalletClient);
+    await expect(c.revokeAgent(4, AGENT)).rejects.toThrow(/simulated for 0x0+aa, but the wallet signs as 0x0+cc/i);
+    expect(simulated).toEqual([OWNER]);
+  });
+});
+
 describe('RFQ band', () => {
   it('stays a fraction in (0, 1]', () => {
     expect(rfqBand(undefined)).toBe(0.2);

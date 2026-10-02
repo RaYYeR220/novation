@@ -105,6 +105,40 @@ test.describe('live mode on a mocked RPC', () => {
     await expect(page.getByRole('button', { name: /^Buy 1 NVDA/ })).toBeDisabled();
   });
 
+  test('earn: in-kind exits show both parts, a rolled exit claims both, and a vault waits for settlement', async ({ page }) => {
+    await injectWallet(page, MOCK_OWNER);
+    await open(page, '/app/earn?data=live');
+    await connect(page);
+    await expect(page.getByRole('heading', { level: 2, name: 'Novation Covered Call NVDA' })).toBeVisible();
+    // a rolled redemption is ready in both parts: one Claim sends claimRedeemed and claimRedeemedCash
+    const claim = page.locator('[data-state="claimable"]');
+    await expect(claim).toContainText('0.5 NVDA + 3.00 USDG');
+    await expect(claim.getByRole('button', { name: 'Claim' })).toBeEnabled();
+
+    // an exit worth 2 NVDA: 97% in NVDA, 3% in USDG, from the vault's previewRedeemInKind
+    await page.getByRole('button', { name: 'Withdraw', exact: true }).click();
+    const w = page.getByRole('dialog', { name: 'Withdraw from nccNVDA' });
+    await w.getByLabel('Amount').fill('2');
+    await expect(w.locator('[data-exit-preview]')).toContainText('1.94 NVDA + 13.80 USDG');
+    // redeemInKind is sent with a floor under each part
+    await expect(w).toContainText('floor 1% under each part');
+    await expect(w).toContainText('1.9206 NVDA + 13.66 USDG');
+    await expect(w.getByRole('button', { name: 'Withdraw' })).toBeEnabled();
+    await w.getByRole('button', { name: 'Cancel' }).click();
+
+    // the TSLA vault still holds an expired, priced series: deposits and instant exits wait for the roll
+    await page.getByRole('list', { name: 'Vaults' }).getByRole('button').filter({ hasText: 'Covered call on TSLA' }).click();
+    await expect(page.getByRole('heading', { level: 2, name: 'Novation Covered Call TSLA' })).toBeVisible();
+    const wait = page.locator('#vault-detail [data-state="settlement-wait"]').first();
+    await expect(wait).toContainText('Waiting for settlement');
+    await expect(wait).toContainText('Fri, Sep 25, 16:00 ET');
+    await expect(wait).toContainText('anyone can send the roll now');
+    await expect(page.getByRole('button', { name: 'Deposit TSLA' })).toBeDisabled();
+    await page.getByRole('button', { name: 'Withdraw', exact: true }).click();
+    const t = page.getByRole('dialog', { name: 'Withdraw from nccTSLA' });
+    await expect(t.locator('[data-state="settlement-wait"]')).toContainText('Waiting for settlement');
+  });
+
   test("another wallet's account is view only", async ({ page }) => {
     await injectWallet(page, '0x000000000000000000000000000000000000bEEF');
     await open(page, `/app/portfolio?data=live&account=${MOCK_ACCOUNT}`);

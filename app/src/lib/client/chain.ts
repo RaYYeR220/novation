@@ -1,6 +1,7 @@
 import {
   WAD,
   RefusalError,
+  assertSimulatedFor,
   bsQuote,
   createNovation,
   createNovationClient,
@@ -38,24 +39,30 @@ import {
   getPositionsRaw,
   getCash,
   convertToAssets,
+  convertToShares,
+  exitMinimums,
   refusalMessage,
   getCollateral,
+  getSeries,
   getSettlementPrice,
   getSubaccountsOf,
   getTrades,
   getUnderlyingsOf,
   getVaultActivity,
+  getVaultExitWait,
   getVaultHolding,
   getVaultQuotesSynced,
   getVaults,
   listSeries,
   mulWad,
   nextWeeklyExpiry,
-  previewWithdraw,
+  previewRedeemInKind,
   proofRefusals,
   robinhoodChainTestnet,
   scenarioGridFor,
   simulateApprove,
+  simulateClaimRedeemed,
+  simulateClaimRedeemedCash,
   simulateCreateSubaccount,
   simulateDeposit,
   simulateGrantAgent,
@@ -70,8 +77,8 @@ import {
   rfqPremium,
   simulateVaultBuy,
   simulateVaultDeposit,
+  simulateVaultRedeemInKind,
   simulateVaultSellBack,
-  simulateVaultWithdraw,
   simulateWithdraw,
   symbolOf,
   takerCashDelta,
@@ -100,6 +107,7 @@ import type {
   AccountState,
   AgentGrant,
   Auction,
+  ExitPreview,
   ExpiryLeg,
   ExpiryPool,
   FeedRefusal,
@@ -148,6 +156,12 @@ const RFQ_MIN_LIFETIME = 15;
 const RFQ_MAX_LIFETIME = 600;
 /** Relay silences and refusals are retried after this long. */
 const RFQ_RETRY_MS = 8_000;
+
+/**
+ * Slippage allowed on each part of an in-kind vault exit, in basis points: redeemInKind reverts
+ * (BelowMinOut) rather than pay less than the tokens or the USDG the dialog showed, less this.
+ */
+export const EXIT_SLIPPAGE_BPS = 100;
 
 /** A maker's signed quote, as the relay sent it: only the signed fields count, never its extra numbers. */
 type RelayQuote = { quote: RfqQuote; signature: Hex };
@@ -265,6 +279,8 @@ export class ChainClient implements NovationClient {
   private readonly memos = new Map<string, { at: number; p: Promise<unknown> }>();
   private readonly rfqCache = new Map<string, { until: number; p: Promise<RelayAnswer> }>();
   private readonly shown = new Map<Hex, ShownQuote>();
+  /** Exits previewed for the dialog, raw, by vault, value and owner: redeemInKind's floors come from what was shown. */
+  private readonly exits = new Map<string, { shares: bigint; tokens: bigint; cash: bigint }>();
 
   constructor(opts: { rpcUrl?: string; client?: PublicClient } = {}) {
     const client = opts.client ?? createNovationClient({ chain: LIVE_CHAIN, rpcUrl: opts.rpcUrl ?? LIVE_RPC });
@@ -324,8 +340,11 @@ export class ChainClient implements NovationClient {
 
   private async seriesInfo(id: number): Promise<SeriesInfo> {
     const s = this.seriesCache.get(id) ?? (await this.allSeries()).find((x) => x.id === id);
-    if (!s) throw new Error(`unknown series ${id}`);
-    return s;
+    if (s) return s;
+    // listed after the series list was read: series never change, so read and keep it
+    const listed = await getSeries(this.ctx, id);
+    this.seriesCache.set(id, listed);
+    return listed;
   }
 
   /**
@@ -840,12 +859,13 @@ export class ChainClient implements NovationClient {
     const m = ms.find((x) => x.token.toLowerCase() === v.underlying.toLowerCase());
     if (!m) throw new Error(`no market for ${v.underlying}`);
     const g = await this.globals();
-    const [cash, collateral, positions, activity, launch] = await Promise.all([
+    const [cash, collateral, positions, activity, launch, wait] = await Promise.all([
       getCash(this.ctx, v.vaultId),
       getCollateral(this.ctx, v.vaultId),
       getPositionsRaw(this.ctx, v.vaultId),
       getVaultActivity(this.ctx, v.address),
       this.memo('launch', 3_600_000, () => this.ctx.client.getBlock({ blockNumber: this.ctx.deployment.block })),
+      getVaultExitWait(this.ctx, v.address),
     ]);
     const times = await getBlockTimes(this.ctx, activity.bought.map((e) => e.blockNumber));
     const dec = v.assetDecimals;
@@ -914,6 +934,16 @@ export class ChainClient implements NovationClient {
       deficits: [],
       markVol: fromWad(m.markVol),
       fillShare: Number.NaN,
+      ...(wait.waiting
+        ? {
+            settlementWait: {
+              expiries: wait.expiries,
+              awaitingPrice: wait.awaitingPrice,
+              rollable: wait.rollable,
+              ...(wait.until !== undefined ? { until: wait.until } : {}),
+            },
+          }
+        : {}),
     };
   }
 
@@ -930,13 +960,47 @@ export class ChainClient implements NovationClient {
       }),
     );
     const vs = await this.vaultStates();
+    const usdgDec = await this.decimals(tokenOf(this.ctx.deployment, 'USDG'));
     const holdings = await Promise.all(
       vs.map(async (v): Promise<VaultHolding> => {
         const h = await getVaultHolding(this.ctx, v.address, who);
-        return { vault: v.address, shares: fromUnits(h.shares, v.shareDecimals), lastReceive: h.lastReceive, pendingShares: fromUnits(h.pendingShares, v.shareDecimals) };
+        const maxExit = h.maxRedeem > 0n ? await convertToAssets(this.ctx, v.address, h.maxRedeem) : 0n;
+        return {
+          vault: v.address,
+          shares: fromUnits(h.shares, v.shareDecimals),
+          lastReceive: h.lastReceive,
+          pendingShares: fromUnits(h.pendingShares, v.shareDecimals),
+          redeemable: fromUnits(h.redeemable, v.assetDecimals),
+          redeemableCash: fromUnits(h.redeemableCash, usdgDec),
+          maxExit: fromUnits(maxExit, v.assetDecimals),
+        };
       }),
     );
-    return { owner, tokens, vaults: holdings.filter((h) => h.shares > 0 || h.pendingShares > 0) };
+    return { owner, tokens, vaults: holdings.filter((h) => h.shares > 0 || h.pendingShares > 0 || (h.redeemable ?? 0) > 0 || (h.redeemableCash ?? 0) > 0) };
+  }
+
+  private async vaultState(address: string): Promise<VaultState> {
+    const v = (await this.vaultStates()).find((x) => x.address.toLowerCase() === address.toLowerCase());
+    if (!v) throw new Error(`unknown vault ${address}`);
+    return v;
+  }
+
+  /**
+   * Both parts of an exit worth `value` (asset units at NAV) now, from the vault's own
+   * previewRedeemInKind: the shares worth it (capped at what `owner` holds), the asset part and the
+   * USDG part. The raw numbers are kept: vaultRedeemInKind bounds the exit by what was shown.
+   */
+  async previewExit(vault: string, value: number, owner?: string): Promise<ExitPreview> {
+    const v = await this.vaultState(vault);
+    const raw = toUnits(value, v.assetDecimals);
+    let shares = await convertToShares(this.ctx, v.address, raw);
+    if (owner) {
+      const held = (await getVaultHolding(this.ctx, v.address, owner as Address)).shares;
+      if (shares > held) shares = held;
+    }
+    const [p, usdgDec] = await Promise.all([previewRedeemInKind(this.ctx, v.address, shares), this.decimals(tokenOf(this.ctx.deployment, 'USDG'))]);
+    this.exits.set(exitKey(v.address, raw, owner), { shares, ...p });
+    return { shares: fromUnits(shares, v.shareDecimals), tokens: fromUnits(p.tokens, v.assetDecimals), cash: fromUnits(p.cash, usdgDec) };
   }
 
   async expiries(id: number): Promise<AccountExpiry[]> {
@@ -1186,8 +1250,14 @@ export class ChainClient implements NovationClient {
 
   /** Sends a simulated request, waits for it and forgets cached reads. */
   private async send(sim: Promise<{ request: unknown }>): Promise<Hash> {
-    const { wallet } = this.signer();
+    const { wallet, account } = this.signer();
     const { request } = await sim;
+    // the wallet must still sign as the account the transaction was checked for: one switched in the
+    // wallet since the simulation (or reported differently by it now) is refused
+    const [current] = await wallet.getAddresses();
+    if (!current) throw new Error('The wallet reports no account. Reconnect it and try again.');
+    assertSimulatedFor(request, account);
+    assertSimulatedFor(request, current);
     // the wallet signs; gas carries the SDK's headroom over the estimate
     // pinned to the live chain and the wallet's account: viem refuses to send if the wallet sits on
     // another network, rather than spending gas at the same addresses somewhere else
@@ -1376,25 +1446,55 @@ export class ChainClient implements NovationClient {
     return this.send(simulateVaultDeposit(this.ctx, account, v.address, raw, account));
   }
 
-  /** Instant withdrawal of `amount` asset units (up to the free assets). */
-  async vaultWithdraw(vault: string, amount: number): Promise<Hash> {
+  /**
+   * Instant exit of the shares worth `value` asset units at NAV, paid in kind (redeemInKind): the
+   * asset and, from a covered-call vault, its share of the vault's USDG. Each part has a floor, the
+   * amount the dialog showed (previewExit) less EXIT_SLIPPAGE_BPS, so the exit reverts BelowMinOut
+   * rather than pay less.
+   */
+  async vaultRedeemInKind(vault: string, value: number): Promise<Hash> {
     const { account } = this.signer();
-    const v = (await this.vaultStates()).find((x) => x.address.toLowerCase() === vault.toLowerCase());
-    if (!v) throw new Error(`unknown vault ${vault}`);
-    return this.send(simulateVaultWithdraw(this.ctx, account, v.address, toUnits(amount, v.assetDecimals), account, account));
+    const v = await this.vaultState(vault);
+    const key = exitKey(v.address, toUnits(value, v.assetDecimals), account);
+    if (!this.exits.has(key)) await this.previewExit(v.address, value, account);
+    const shown = this.exits.get(key)!;
+    if (shown.shares === 0n) throw new Error('That is less than one share of the vault.');
+    const { minTokens, minCash } = exitMinimums(shown, EXIT_SLIPPAGE_BPS);
+    const hash = await this.send(simulateVaultRedeemInKind(this.ctx, account, v.address, shown.shares, account, account, minTokens, minCash));
+    this.exits.delete(key);
+    return hash;
   }
 
-  /** Queues the shares worth `amount` asset units now for the next roll. */
+  /** Queues the shares worth `amount` asset units at NAV now for the next roll. */
   async requestRedeem(vault: string, amount: number): Promise<Hash> {
     const { account } = this.signer();
-    const v = (await this.vaultStates()).find((x) => x.address.toLowerCase() === vault.toLowerCase());
-    if (!v) throw new Error(`unknown vault ${vault}`);
-    // previewWithdraw rounds shares up: queuing "all" must not ask for more than the balance
+    const v = await this.vaultState(vault);
+    // shares at NAV, rounded down; queuing "all" must not ask for more than the balance
     const [wanted, held] = await Promise.all([
-      previewWithdraw(this.ctx, v.address, toUnits(amount, v.assetDecimals)),
+      convertToShares(this.ctx, v.address, toUnits(amount, v.assetDecimals)),
       getVaultHolding(this.ctx, v.address, account).then((h) => h.shares),
     ]);
     const shares = wanted > held ? held : wanted;
     return this.send(simulateRequestRedeem(this.ctx, account, v.address, shares, account));
   }
+
+  /**
+   * Claims the wallet's rolled redemptions from `vault`: the asset part (claimRedeemed) and the USDG
+   * part of an in-kind exit (claimRedeemedCash), each one that has anything to pay.
+   */
+  async claimRedeemed(vault: string): Promise<Hash[]> {
+    const { account } = this.signer();
+    const v = await this.vaultState(vault);
+    const h = await getVaultHolding(this.ctx, v.address, account);
+    if (h.redeemable === 0n && h.redeemableCash === 0n) throw new Error('Nothing to claim yet: the roll that pays your queued shares has not run.');
+    const out: Hash[] = [];
+    if (h.redeemable > 0n) out.push(await this.send(simulateClaimRedeemed(this.ctx, account, v.address, account)));
+    if (h.redeemableCash > 0n) out.push(await this.send(simulateClaimRedeemedCash(this.ctx, account, v.address, account)));
+    return out;
+  }
+}
+
+/** The key of an exit preview: vault, raw value and the owner it was capped for. */
+function exitKey(vault: string, raw: bigint, owner?: string): string {
+  return `${vault.toLowerCase()}:${raw}:${(owner ?? '').toLowerCase()}`;
 }

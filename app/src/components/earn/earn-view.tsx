@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import { useAccount } from 'wagmi';
 import { useAccountId } from '@/components/app/account-context';
+import { useLiveTx } from '@/components/app/live-tx';
 import { Page, SectionHead } from '@/components/app/section-head';
 import { NavChart, NavSparkline, type NavMark } from '@/components/charts/nav-chart';
 import { Button } from '@/components/ui/button';
@@ -11,12 +12,13 @@ import { DataTable, type Column } from '@/components/ui/data-table';
 import { Lamp } from '@/components/ui/lamp';
 import { Panel } from '@/components/ui/panel';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useToast } from '@/components/ui/toast';
 import { useAsOf, useFeeds, useIsDemo, useSubaccount, useUnderlyings, useVault, useVaults, useWallet } from '@/lib/client/hooks';
-import type { Vault, VaultDetail, VaultEpoch } from '@/lib/client/types';
+import type { Vault, VaultDetail, VaultEpoch, VaultHolding } from '@/lib/client/types';
 import { cn } from '@/lib/cn';
 import { fmtAddress, fmtDuration, fmtExpiry, fmtNumber, fmtPct, fmtQty, fmtSigned } from '@/lib/format';
 import { fmtCloseEt, fmtEt } from '@/lib/nyse';
-import { DepositDialog, WithdrawDialog } from './vault-dialogs';
+import { DepositDialog, WithdrawDialog, fmtExit, settlementWaitText } from './vault-dialogs';
 
 const STRATEGY = { coveredCall: 'Covered call', putWrite: 'Put write' } as const;
 
@@ -146,8 +148,9 @@ function Rules({ v }: { v: VaultDetail }) {
     `Quotes the kernel's Black-Scholes at mark vol × (1 + ${c.skewSlope} × distance from spot + ${c.utilSlope} × utilization after the trade), plus a ${fmtPct(c.spread, 0)} spread.`,
     `Buys back at its bid, which never goes above its own mark less ${fmtPct(c.spread, 0)}, and only up to its short in that series.`,
     call
-      ? `Premium sits as USDG in the vault's account and counts in NAV; exits pay ${v.underlying} up to the unlocked tokens.`
+      ? `Premium sits as USDG in the vault's account and counts in NAV. Exits are paid in kind: your share of that USDG in USDG, the rest in ${v.underlying}, up to the unlocked tokens.`
       : 'Premium and cash stay in the vault’s account; exits pay USDG up to the unlocked cash.',
+    'While the vault holds an expired series not yet settled into its account, deposits and instant exits wait for the roll that settles it; a redemption request still queues.',
   ];
   return (
     <ul className="grid gap-s2 text-t15 text-pretty text-navy-200">
@@ -158,6 +161,36 @@ function Rules({ v }: { v: VaultDetail }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * Rolled redemptions ready to claim: the asset part and, from a covered-call vault, the USDG part.
+ * In live mode one click claims both (claimRedeemed, then claimRedeemedCash).
+ */
+function ClaimRow({ v, holding, demo }: { v: VaultDetail; holding: VaultHolding; demo: boolean }) {
+  const live = useLiveTx();
+  const { toast } = useToast();
+  const tokens = holding.redeemable ?? 0;
+  const cash = holding.redeemableCash ?? 0;
+  if (tokens <= 0 && cash <= 0) return null;
+  const what = fmtExit({ tokens, cash }, v.asset);
+  const claim = async () => {
+    if (demo) {
+      toast({ tone: 'neutral', title: 'Checked, not sent', description: `Claiming ${what} from ${v.symbol}. Nothing is sent in the demo.` });
+      return;
+    }
+    await live.run(`Claim ${what} from ${v.symbol}`, (c) => c.claimRedeemed(v.address));
+  };
+  return (
+    <div data-state="claimable" className="mt-s3 flex flex-wrap items-center justify-between gap-s3 border-t border-navy-800 pt-s3 text-t13">
+      <p className="text-pretty text-navy-200">
+        Ready to claim from the roll that paid your queued shares: <span className="tabular-nums text-navy-50">{what}</span>.
+      </p>
+      <Button size="sm" variant="secondary" onClick={() => void claim()} loading={live.busy} loadingLabel="Claiming">
+        Claim
+      </Button>
+    </div>
   );
 }
 
@@ -202,7 +235,9 @@ function VaultDetailView({ address }: { address: string }) {
     { ok: v.live, text: `${v.underlying} not halted` },
     { ok: true, text: 'Mark vol updated within 2 days' },
     { ok: true, text: 'No deficit owed by the vault' },
+    { ok: !v.settlementWait, text: 'No expired series waiting to settle into the vault' },
   ];
+  const wait = settlementWaitText(v);
 
   return (
     <section id="vault-detail" aria-labelledby="vault-title" className="grid gap-s5">
@@ -217,12 +252,20 @@ function VaultDetailView({ address }: { address: string }) {
           <p className="text-t15 text-navy-200">
             Epoch {v.epoch}: sells the {fmtCloseEt(v.nextRoll)} expiry. The roll after it pays the redemption queue.
           </p>
+          {wait && (
+            <p role="status" data-state="settlement-wait" className="flex max-w-[72ch] items-start gap-s2 text-t13 text-pretty text-navy-200">
+              <Lamp tone="loss-1" size={6} className="mt-[6px]" />
+              <span>
+                <span className="font-semibold text-navy-50">Waiting for settlement.</span> {wait}
+              </span>
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap gap-s3">
           <Button variant="secondary" onClick={() => setWithdraw(true)}>
             Withdraw
           </Button>
-          <Button variant="primary" lamp onClick={() => setDeposit(true)} disabled={!v.live}>
+          <Button variant="primary" lamp onClick={() => setDeposit(true)} disabled={!v.live || Boolean(v.settlementWait)}>
             Deposit {v.asset}
           </Button>
         </div>
@@ -307,6 +350,7 @@ function VaultDetailView({ address }: { address: string }) {
                   : `No shares in this vault. Your wallet holds ${fmtQty(balance)} ${v.asset}.`}
               </p>
             )}
+            {holding && <ClaimRow v={v} holding={holding} demo={demo} />}
           </Panel>
 
           <Panel title="Priced at live NAV">
@@ -337,7 +381,7 @@ function VaultDetailView({ address }: { address: string }) {
       </div>
 
       <DepositDialog vault={v} open={deposit} onOpenChange={setDeposit} asOf={asOf} demo={demo} balance={balance} />
-      <WithdrawDialog vault={v} open={withdraw} onOpenChange={setWithdraw} asOf={asOf} demo={demo} holding={holding} />
+      <WithdrawDialog vault={v} open={withdraw} onOpenChange={setWithdraw} asOf={asOf} demo={demo} holding={holding} owner={demo ? undefined : connected} />
     </section>
   );
 }

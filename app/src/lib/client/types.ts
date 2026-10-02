@@ -68,8 +68,27 @@ export interface VaultDetail extends Vault {
   markVol: number;
   /** Demo: share of capacity takers bought at each roll in the replay. */
   fillShare: number;
+  /**
+   * Present while the vault holds a series that expired and isn't settled into its account yet:
+   * deposits, instant exits and the queue's payout wait for it (a roll settles it). Queuing a
+   * redemption still works. `rollable`: the registry has the price, so anyone can roll the vault
+   * now. `until`: while the price is still missing, when the wait ends at the latest.
+   */
+  settlementWait?: { expiries: number[]; awaitingPrice: boolean; rollable: boolean; until?: number };
 }
-export interface VaultHolding { vault: string; shares: number; lastReceive: number; pendingShares: number }
+export interface VaultHolding {
+  vault: string; shares: number; lastReceive: number; pendingShares: number;
+  /** Rolled redemptions claimable now: the asset part (claimRedeemed) and, for a covered call, the USDG part (claimRedeemedCash). */
+  redeemable?: number; redeemableCash?: number;
+  /** The most value (asset units at NAV) the holder can take out now, where the chain says; otherwise the vault's free assets bound it. */
+  maxExit?: number;
+}
+/**
+ * What an exit worth `value` (asset units at NAV) pays now: `tokens` of the vault's asset and `cash`
+ * USDG on top, for `shares` shares. Covered-call exits are in kind (the holder's share of the vault's
+ * USDG cash comes in USDG); a put-write vault's asset is USDG, so `cash` is 0.
+ */
+export interface ExitPreview { shares: number; tokens: number; cash: number }
 export interface WalletHoldings { owner: string; tokens: Record<string, number>; vaults: VaultHolding[] }
 
 /* ---------- settlement (pool per expiry) ---------- */
@@ -145,6 +164,8 @@ export interface NovationClient {
   vault(address: string): Promise<VaultDetail>;
   /** A wallet's tokens and vault shares. */
   wallet(owner: string): Promise<WalletHoldings>;
+  /** Both parts of an exit worth `value` (asset units at NAV) from `vault`; `owner` caps the shares at what it holds. */
+  previewExit(vault: string, value: number, owner?: string): Promise<ExitPreview>;
   /** The account's expiries: the open one at today's spot, then each settled one with its pool state. */
   expiries(id: number): Promise<AccountExpiry[]>;
   pools(): Promise<ExpiryPool[]>;

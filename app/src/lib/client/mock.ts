@@ -1,5 +1,5 @@
 import type {
-  AccountExpiry, AccountState, AgentGrant, Auction, ExpiryPool, FeedRefusal, FeedStatus, GasRow, InsuranceFund, NewGrant,
+  AccountExpiry, AccountState, AgentGrant, Auction, ExitPreview, ExpiryPool, FeedRefusal, FeedStatus, GasRow, InsuranceFund, NewGrant,
   NovationClient, OpenInterestRow, ProtocolStats, Quote, Refusal, ScenarioGrid, Series, Session, Underlying, Vault, VaultDetail,
   Venue, WalletHoldings, WhatIfOptions,
 } from './types';
@@ -253,6 +253,23 @@ export class MockClient implements NovationClient {
     const w = walletJson as unknown as WalletHoldings;
     if (owner.toLowerCase() !== w.owner.toLowerCase()) return { owner, tokens: {}, vaults: [] };
     return clone(w);
+  }
+
+  /**
+   * CoveredCallVault's in-kind split on the snapshot: with NAV `ta` (tokens), cash C and C at spot
+   * `cashA`, an exit worth `value` takes C x value / ta in USDG and value x (ta - cashA) / ta in
+   * tokens; all USDG, at most its value, once cash covers the whole NAV. Put-write exits are all USDG.
+   */
+  async previewExit(address: string, value: number): Promise<ExitPreview> {
+    const v = await this.vault(address);
+    const shares = value / v.navPerShare;
+    const ta = v.shares * v.navPerShare;
+    const spot = (await this.underlyings()).find((u) => u.symbol === v.underlying)?.spot ?? 0;
+    if (v.kind !== 'coveredCall' || !(v.cash > 0) || !(ta > 0) || !(spot > 0)) return { shares, tokens: value, cash: 0 };
+    const units = (x: number) => Math.floor(x * 1e6) / 1e6;
+    const cashA = v.cash / spot;
+    if (cashA >= ta) return { shares, tokens: 0, cash: units(Math.min(v.cash, value * spot)) };
+    return { shares, tokens: (value * (ta - cashA)) / ta, cash: units((v.cash * value) / ta) };
   }
 
   async expiries(id: number): Promise<AccountExpiry[]> {

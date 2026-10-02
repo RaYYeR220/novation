@@ -89,6 +89,17 @@ export function useVault(address: string | undefined) {
   return useQuery({ queryKey: ['vault', address], queryFn: () => c.vault(address as string), enabled: Boolean(address) });
 }
 
+/** Both parts of an exit worth `value` (asset units at NAV); holds the last answer while a new value prices. */
+export function useExitPreview(vault: string | undefined, value: number | undefined, owner?: string) {
+  const c = useClient();
+  return useQuery({
+    queryKey: ['exitPreview', vault, value, owner],
+    queryFn: () => c.previewExit(vault as string, value as number, owner),
+    enabled: Boolean(vault) && value !== undefined && value > 0,
+    placeholderData: keepPreviousData,
+  });
+}
+
 export function useWallet(owner: string | undefined) {
   const c = useClient();
   return useQuery({ queryKey: ['wallet', owner], queryFn: () => c.wallet(owner as string), enabled: Boolean(owner) });

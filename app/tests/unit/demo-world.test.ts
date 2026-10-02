@@ -74,6 +74,24 @@ describe('vaults', () => {
     }
   });
 
+  it('splits a covered-call exit in kind and pays a put-write exit in USDG', async () => {
+    const vs = await c.vaults();
+    const cc = vs.find((v) => v.kind === 'coveredCall')!;
+    const pw = vs.find((v) => v.kind === 'putWrite')!;
+    const d = await c.vault(cc.address);
+    const spot = (await c.underlyings()).find((u) => u.symbol === d.underlying)!.spot;
+    const p = await c.previewExit(cc.address, 10);
+    expect(p.shares).toBeCloseTo(10 / d.navPerShare, 9);
+    // the USDG part is the vault's cash per unit of NAV; with the tokens it is worth the exit, no more
+    expect(p.cash).toBeGreaterThan(0);
+    expect(p.cash).toBeCloseTo((d.cash * 10) / (d.shares * d.navPerShare), 5);
+    expect(p.tokens + p.cash / spot).toBeLessThanOrEqual(10 + 1e-9);
+    expect(p.tokens + p.cash / spot).toBeCloseTo(10, 6);
+    const put = await c.previewExit(pw.address, 500);
+    expect(put.tokens).toBe(500);
+    expect(put.cash).toBe(0);
+  });
+
   it('validates amounts the way the dialogs show them', () => {
     expect(parseAmount('', 10, 'NVDA', 'your wallet holds').error).toBe('Enter an amount.');
     expect(parseAmount('1e3', 10, 'NVDA', 'your wallet holds').error).toBe('Numbers only.');

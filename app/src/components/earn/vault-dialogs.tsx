@@ -7,9 +7,30 @@ import { NumberField } from '@/components/ui/number-field';
 import { Segment, SegmentedControl } from '@/components/ui/segmented-control';
 import { useToast } from '@/components/ui/toast';
 import { useLiveTx } from '@/components/app/live-tx';
-import type { VaultDetail, VaultHolding } from '@/lib/client/types';
+import { EXIT_SLIPPAGE_BPS } from '@/lib/client/chain';
+import { useExitPreview } from '@/lib/client/hooks';
+import type { ExitPreview, VaultDetail, VaultHolding } from '@/lib/client/types';
 import { fmtDuration, fmtNumber, fmtQty } from '@/lib/format';
 import { fmtCloseEt, fmtEt } from '@/lib/nyse';
+
+/** Why a vault's deposits and instant exits wait for an expired series to settle, in a sentence or two. */
+export function settlementWaitText(vault: Pick<VaultDetail, 'settlementWait'>): string | undefined {
+  const w = vault.settlementWait;
+  if (!w) return undefined;
+  const which = w.expiries.length ? `the ${w.expiries.map(fmtCloseEt).join(' and ')} expiry` : 'an earlier expiry';
+  if (w.rollable) {
+    return `The vault still holds options from ${which}. They have a settlement price but are not settled into the vault yet, so deposits and instant exits wait until a roll settles them; anyone can send the roll now.`;
+  }
+  return `The vault still holds options from ${which}, which has no settlement price yet. Deposits and instant exits wait for it${
+    w.until !== undefined ? `, at the latest until ${fmtEt(w.until)}` : ''
+  }.`;
+}
+
+/** "1.94 NVDA + 13.80 USDG": both parts of an exit; the USDG part only when there is one. */
+export function fmtExit(p: Pick<ExitPreview, 'tokens' | 'cash'>, asset: string): string {
+  if (asset === 'USDG') return `${fmtNumber(p.tokens + p.cash)} USDG`;
+  return p.cash > 0 ? `${fmtQty(p.tokens)} ${asset} + ${fmtNumber(p.cash)} USDG` : `${fmtQty(p.tokens)} ${asset}`;
+}
 
 /** Parses an amount typed into a field; the error says what to fix. */
 export function parseAmount(raw: string, max: number, unit: string, maxLabel: string): { value: number; error?: string } {
@@ -37,8 +58,15 @@ export function DepositDialog({ vault, open, onOpenChange, asOf, demo, balance }
   const { toast } = useToast();
   const unit = vault.asset;
   const parsed = parseAmount(raw, balance, unit, 'your wallet holds');
-  const notLive = !vault.live;
-  const error = notLive ? 'The vault is not live: deposits are closed until its underlying trades normally again.' : touched ? parsed.error : undefined;
+  const waiting = Boolean(vault.settlementWait);
+  const notLive = !vault.live || waiting;
+  const error = !vault.live
+    ? 'The vault is not live: deposits are closed until its underlying trades normally again.'
+    : waiting
+      ? 'Deposits wait for settlement: the vault holds an expired series not yet settled into it, so its NAV is not final.'
+      : touched
+        ? parsed.error
+        : undefined;
   const shares = parsed.error ? 0 : parsed.value / vault.navPerShare;
   const live = useLiveTx();
   const submit = async () => {
@@ -131,9 +159,11 @@ export function DepositDialog({ vault, open, onOpenChange, asOf, demo, balance }
 
 /**
  * Withdraw now (up to the free assets, net of the redemption queue) or request a redemption paid
- * at the next roll. Both wait out the exit cooldown.
+ * at the next roll. Both wait out the exit cooldown. A covered-call vault pays exits in kind: the
+ * holder's share of its USDG premium cash in USDG, the rest in the stock token. Both parts come from
+ * the vault's own previewRedeemInKind, and a live exit is sent as redeemInKind with a floor on each.
  */
-export function WithdrawDialog({ vault, open, onOpenChange, asOf, demo, holding }: Common & { holding?: VaultHolding }) {
+export function WithdrawDialog({ vault, open, onOpenChange, asOf, demo, holding, owner }: Common & { holding?: VaultHolding; owner?: string }) {
   const [mode, setMode] = useState<'now' | 'queue'>('now');
   const [raw, setRaw] = useState('');
   const [touched, setTouched] = useState(false);
@@ -143,47 +173,61 @@ export function WithdrawDialog({ vault, open, onOpenChange, asOf, demo, holding 
   const own = shares * vault.navPerShare;
   const coolUntil = (holding?.lastReceive ?? 0) + vault.cooldown;
   const cooling = holding !== undefined && asOf < coolUntil;
-  const instantMax = Math.min(own, vault.free);
+  const waiting = Boolean(vault.settlementWait);
+  const instantMax = Math.min(own, holding?.maxExit ?? vault.free);
   const max = mode === 'now' ? instantMax : own;
   const parsed = parseAmount(raw, max, unit, mode === 'now' ? 'can leave now' : 'your shares are worth');
-  const gate = !holding || shares <= 0
+  const noShares = !holding || shares <= 0;
+  // queuing reads no price: it waits only for the cooldown
+  const queueGate = noShares
     ? 'This wallet holds no shares of this vault.'
     : cooling
       ? `Your shares arrived ${fmtEt(holding.lastReceive)}. Exits open ${fmtEt(coolUntil)}, ${fmtDuration(coolUntil - asOf)} from now.`
-      : !vault.live
-        ? 'The vault is not live; instant withdrawals wait. A redemption request still queues.'
-        : undefined;
-  const blocked = Boolean(gate) && !(mode === 'queue' && !vault.live && !cooling && shares > 0);
+      : undefined;
+  const nowGate =
+    queueGate ??
+    (!vault.live
+      ? 'The vault is not live; instant withdrawals wait. A redemption request still queues.'
+      : waiting
+        ? 'Instant exits wait for the expired series to settle. A redemption request still queues.'
+        : undefined);
+  const gate = mode === 'now' ? nowGate : (queueGate ?? (!vault.live ? 'The vault is not live; instant withdrawals wait. A redemption request still queues.' : undefined));
+  const blocked = mode === 'now' ? Boolean(nowGate) : Boolean(queueGate);
   const error = gate ?? (touched ? parsed.error : undefined);
-  const burn = parsed.error ? 0 : parsed.value / vault.navPerShare;
+  const value = parsed.error ? undefined : parsed.value;
+  const preview = useExitPreview(vault.address, value, owner);
+  const legs = value !== undefined ? preview.data : undefined;
+  const burn = legs?.shares ?? (value !== undefined ? value / vault.navPerShare : 0);
+  const floor = (x: number) => x * (1 - EXIT_SLIPPAGE_BPS / 10_000);
   const live = useLiveTx();
-  const submit = async () => {
-    setTouched(true);
-    if (blocked || parsed.error) return;
-    if (!demo) {
-      const amount = parsed.value;
-      const r = await live.run(
-        mode === 'now' ? `Withdraw ${fmtQty(amount)} ${unit} from ${vault.symbol}` : `Queue ${fmtNumber(burn, 4)} ${vault.symbol} for the next roll`,
-        (c) => (mode === 'now' ? c.vaultWithdraw(vault.address, amount) : c.requestRedeem(vault.address, amount)),
-      );
-      if (!r.ok) return;
-      onOpenChange(false);
-      setRaw('');
-      setTouched(false);
-      return;
-    }
-    toast({
-      tone: 'neutral',
-      title: demo ? 'Checked, not sent' : mode === 'now' ? 'Withdrawal sent' : 'Redemption requested',
-      description:
-        mode === 'now'
-          ? `${fmtQty(parsed.value)} ${unit} now for ${fmtNumber(burn, 4)} shares at ${fmtNumber(vault.navPerShare, 6)}.${demo ? ' Nothing is sent in the demo.' : ''}`
-          : `${fmtNumber(burn, 4)} shares queued for the roll after ${fmtCloseEt(vault.nextRoll)}, paid at the NAV then.${demo ? ' Nothing is sent in the demo.' : ''}`,
-    });
+  const close = () => {
     onOpenChange(false);
     setRaw('');
     setTouched(false);
   };
+  const submit = async () => {
+    setTouched(true);
+    if (blocked || parsed.error) return;
+    const amount = parsed.value;
+    if (!demo) {
+      const r = await live.run(
+        mode === 'now' ? `Withdraw ${fmtQty(amount)} ${unit} of value from ${vault.symbol}` : `Queue ${fmtNumber(burn, 4)} ${vault.symbol} for the next roll`,
+        (c) => (mode === 'now' ? c.vaultRedeemInKind(vault.address, amount) : c.requestRedeem(vault.address, amount)),
+      );
+      if (r.ok) close();
+      return;
+    }
+    toast({
+      tone: 'neutral',
+      title: 'Checked, not sent',
+      description:
+        mode === 'now'
+          ? `${legs ? fmtExit(legs, unit) : `${fmtQty(amount)} ${unit}`} now for ${fmtNumber(burn, 4)} shares at ${fmtNumber(vault.navPerShare, 6)}. Nothing is sent in the demo.`
+          : `${fmtNumber(burn, 4)} shares queued for the roll after ${fmtCloseEt(vault.nextRoll)}, paid at the NAV then. Nothing is sent in the demo.`,
+    });
+    close();
+  };
+  const inKind = vault.kind === 'coveredCall';
   return (
     <Dialog
       open={open}
@@ -216,6 +260,12 @@ export function WithdrawDialog({ vault, open, onOpenChange, asOf, demo, holding 
           <Segment value="now">Withdraw now</Segment>
           <Segment value="queue">Request redemption</Segment>
         </SegmentedControl>
+        {waiting && (
+          <div role="status" data-state="settlement-wait" className="grid gap-s1 rounded-[4px] border border-navy-700 bg-navy-800 px-s3 py-s2 text-t13">
+            <p className="font-semibold text-navy-50">Waiting for settlement</p>
+            <p className="text-pretty text-navy-200">{settlementWaitText(vault)}</p>
+          </div>
+        )}
         <NumberField
           label="Amount"
           unit={unit}
@@ -229,16 +279,36 @@ export function WithdrawDialog({ vault, open, onOpenChange, asOf, demo, holding 
           max={max}
           hint={
             mode === 'now'
-              ? `Up to ${fmtQty(instantMax)} ${unit} now: the vault's free assets after open shorts and the queue are ${fmtQty(vault.free)} ${unit}.`
+              ? `Value at NAV, up to ${fmtQty(instantMax)} ${unit} now: the vault's free assets after open shorts and the queue are ${fmtQty(vault.free)} ${unit}.`
               : `Queued shares are paid by the roll after the ${fmtCloseEt(vault.nextRoll)} expiry settles, at the NAV then.`
           }
           error={error}
           disabled={blocked}
         />
+        {legs && !blocked && (
+          <dl className="grid grid-cols-2 gap-s3 text-t13 tabular-nums" data-exit-preview="">
+            <div className="grid gap-0.5">
+              <dt className="text-t12 text-navy-200">{mode === 'now' ? 'You receive' : 'Worth now'}</dt>
+              <dd className="text-t17 font-semibold text-navy-50">{fmtExit(legs, unit)}</dd>
+            </div>
+            <div className="grid gap-0.5">
+              <dt className="text-t12 text-navy-200">Shares</dt>
+              <dd className="text-t15 text-navy-50">{fmtNumber(legs.shares, 4)}</dd>
+            </div>
+          </dl>
+        )}
         <p className="text-t13 text-pretty text-navy-200">
           {mode === 'now'
             ? 'Instant withdrawals take only what open shorts and the redemption queue leave free. The rest waits for a roll.'
             : 'The roll pays the queue from assets the settled expiry frees. Once requested, the queue’s claim is reserved: new sales and instant withdrawals can’t use it.'}
+          {inKind && ` Exits are paid in kind: your share of the vault's USDG premium cash comes in USDG, the rest in ${unit}${mode === 'queue' ? ', and each part is claimed after the roll' : ''}.`}
+          {mode === 'now' && legs && !blocked && !demo && (
+            <>
+              {' '}
+              Sent with a floor {fmtNumber(EXIT_SLIPPAGE_BPS / 100, 0)}% under each part: the exit reverts rather than pay less than{' '}
+              <span className="tabular-nums text-navy-50">{fmtExit({ tokens: floor(legs.tokens), cash: floor(legs.cash) }, unit)}</span>.
+            </>
+          )}
           {holding && holding.pendingShares > 0 && (
             <>
               {' '}

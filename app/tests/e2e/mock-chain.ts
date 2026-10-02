@@ -2,8 +2,11 @@
  * A stand-in for the Robinhood Chain testnet RPC, so live-mode tests never touch the network. It
  * answers the JSON-RPC calls the chain client makes (batched, through Multicall3, and the deployless
  * vault-quote lens) from a small fixed world: four underlyings (AAPL halted by a multiplier window),
- * four NVDA series, three vaults and account 4 holding one call. Calls are decoded and answered with
- * the SDK's own ABIs, so a change in the contracts' interface breaks these tests.
+ * four NVDA series, three vaults and account 4 holding one call. The owner holds 10 shares of the
+ * NVDA covered-call vault, whose exits pay 3% of their value in USDG, and a rolled redemption ready
+ * in both parts; the TSLA covered-call vault still holds an expired, priced series, so it waits for
+ * settlement. Calls are decoded and answered with the SDK's own ABIs, so a change in the contracts'
+ * interface breaks these tests.
  */
 import type { Page, Route } from '@playwright/test';
 import {
@@ -53,6 +56,9 @@ const MULTICALL = '0xca11bde05977b3631167028862be2a173976ca11';
 export const MOCK_NOW = 1790872000;
 const BLOCK = d.block + 70_000n;
 const E1 = 1790971200; // Fri Oct 2, 16:00 ET
+const E0 = E1 - 7 * 86400; // Fri Sep 25, 16:00 ET: expired and settled
+/** The expired TSLA call the TSLA covered-call vault (account 2) still holds, unsettled into it. */
+const EXPIRED_SERIES = 99;
 export const MOCK_OWNER = '0x4108064852c95135844be338fc8bcbdf91c41acf' as Address;
 export const MOCK_ACCOUNT = 4;
 /** Holds a live agent grant on MOCK_ACCOUNT (granted without asking it, as any owner can). */
@@ -186,11 +192,12 @@ const HANDLERS: Record<string, Handler> = {
   // SeriesRegistry
   'registry.seriesCount': () => SERIES.length,
   'registry.series': ([id]) => {
+    if (Number(id) === EXPIRED_SERIES) return { underlying: d.tokens.TSLA!, expiry: BigInt(E0), isCall: true, strike: 360n * W };
     const s = SERIES.find((x) => x.id === Number(id));
     if (!s) revert('UnknownSeries');
     return { underlying: d.tokens[s!.sym]!, expiry: BigInt(E1), isCall: s!.isCall, strike: s!.strike };
   },
-  'registry.settlementPriceOf': () => [0n, false],
+  'registry.settlementPriceOf': ([, e]) => (Number(e) === E0 ? [350n * W, true] : [0n, false]),
   'registry.seriesId': () => 0,
   // kernel: simple, deterministic numbers (the real maths is tested against KernelReference in the SDK)
   'kernel.bsQuote': ([spot, strike, , , , isCall]) => {
@@ -212,7 +219,7 @@ const HANDLERS: Record<string, Handler> = {
   // Clearinghouse
   'ch.ownerOf': ([id]) => (Number(id) === MOCK_ACCOUNT ? MOCK_OWNER : Number(id) <= 3 ? d.vaults[Number(id) - 1]!.address : zeroAddress),
   'ch.accountState': ([id]) => (Number(id) === MOCK_ACCOUNT ? STATE : { ...STATE, cash: 0n, mtm: 0n, equity: 0n, im: 0n, mm: 0n }),
-  'ch.positionsOf': ([id]) => (Number(id) === MOCK_ACCOUNT ? [{ seriesId: 1, qty: W }] : []),
+  'ch.positionsOf': ([id]) => (Number(id) === MOCK_ACCOUNT ? [{ seriesId: 1, qty: W }] : Number(id) === 2 ? [{ seriesId: EXPIRED_SERIES, qty: -W }] : []),
   'ch.marginAfter': ([, , qtyDelta, cashDelta]) => {
     const cash = STATE.cash + (cashDelta as bigint);
     if (cash < 0n) revert('InsufficientCash', [BigInt(MOCK_ACCOUNT), STATE.cash, -(cashDelta as bigint)]);
@@ -267,6 +274,9 @@ function special(kind: string, to: string, fn: string, args: readonly unknown[])
     const assetDec = put ? 6 : 18;
     const supply = put ? 50_000n * 10n ** 12n : 100n * 10n ** 24n;
     const assets = put ? 50_000n * 10n ** 6n : 100n * W;
+    // the owner's 10 shares of the NVDA covered-call vault, past the cooldown
+    const owners = i === 0 && String(args[0]).toLowerCase() === MOCK_OWNER;
+    const held = owners ? 10n * 10n ** 24n : 0n;
     const table: Record<string, unknown> = {
       name: put ? `Novation Put Write ${v.underlying}` : `Novation Covered Call ${v.underlying}`,
       symbol: put ? `npw${v.underlying}` : `ncc${v.underlying}`,
@@ -279,13 +289,20 @@ function special(kind: string, to: string, fn: string, args: readonly unknown[])
       freeAssets: assets,
       lockedAssets: 0n,
       convertToAssets: () => ((args[0] as bigint) * assets) / supply,
+      convertToShares: () => ((args[0] as bigint) * supply) / assets,
       previewWithdraw: () => ((args[0] as bigint) * supply) / assets,
-      balanceOf: 0n,
+      // in kind: 97% of the value in the asset, 3% in USDG at 230 (a put write pays all in USDG)
+      previewRedeemInKind: () => {
+        const value = ((args[0] as bigint) * assets) / supply;
+        return put ? [value, 0n] : [(value * 97n) / 100n, (value * 3n * 230n) / (100n * 10n ** 12n)];
+      },
+      balanceOf: held,
       lastReceive: 0n,
       pendingRedeem: 0n,
-      redeemable: 0n,
-      maxWithdraw: 0n,
-      maxRedeem: 0n,
+      redeemable: owners ? W / 2n : 0n,
+      redeemableCash: owners ? 3_000_000n : 0n,
+      maxWithdraw: owners ? (((held * assets) / supply) * 97n) / 100n : 0n,
+      maxRedeem: held,
     };
     if (fn in table) {
       const v = table[fn];
