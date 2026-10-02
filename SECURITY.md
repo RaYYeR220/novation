@@ -44,7 +44,7 @@ Two powers deserve a note. The setup admin chooses the venue list, and a venue v
 | Every parameter stays inside its bound | `RiskParams._validateUnderlying`, `_validateGlobals` | `RiskParams.t.sol` boundary tests |
 | The Stylus kernel and `KernelReference` return identical integers | One algorithm, the same constant tables and the same order of operations | shared vectors in Foundry and Rust, a 5,100-call differential fuzz, on-chain parity on testnet |
 
-Besides the unit, fuzz and mutation tests per module, a stateful suite (`contracts/test/invariant`) checks the properties together. Its handler drives five trading accounts with agent keys, a liquidator, a covered-call vault and a put-write vault, the RFQ venue and a test venue, over two underlyings and a rolling set of weekly expiries. The actions are deposits and withdrawals (down to the margin limit), trades, RFQ fills signed by owners and agents, vault buys, sell-backs, deposits, redemptions and rolls, price moves (including moves against an account's worst scenario), time warps across sessions and expiries, volatility syncs, registry settlement (with the 72-hour fallback), account settlement in any order, claims, liquidations, deficit sales, socialization and repayment. After every call the suite checks:
+Besides the unit, fuzz and mutation tests per module, a stateful suite (`contracts/test/invariant`) checks the properties together. Its handler drives five trading accounts with agent keys, a liquidator, a covered-call vault and a put-write vault, the RFQ venue and a test venue, over two underlyings and a rolling set of weekly expiries. The actions are deposits and withdrawals (down to the margin limit), trades, RFQ fills signed by owners and agents, vault buys, sell-backs, deposits, in-kind redemptions and withdrawals, queued redemptions and rolls, price moves (including moves against an account's worst scenario), time warps across sessions and expiries, volatility syncs, registry settlement (with the 72-hour fallback), account settlement in any order, claims, liquidations and their ends, price-outage marks, deficit sales, socialization and repayment. After every call the suite checks:
 
 - the USDG and stock-token backing;
 - per-series zero-sum and open interest;
@@ -55,8 +55,8 @@ Besides the unit, fuzz and mutation tests per module, a stateful suite (`contrac
 - the InsuranceFund's outstanding bridges against the clearinghouse's books;
 - the cash, deficit and claim bookkeeping;
 - the position limits;
-- vault share prices on entry and exit;
-- settlement liveness: every priced expiry settles, every complete pool pays its claims, and nothing stays pending once the default waterfall has run.
+- vault entries and exits: an exit, both legs at spot, pays at most what the shares are worth, and the holders who stay keep their share price;
+- settlement liveness: every priced expiry settles, every complete pool pays its claims, nothing stays pending once the default waterfall has run, and every debt can then be repaid from cash.
 
 Each run then settles every expiry and every deficit to completion and checks everything again. A fork suite (`contracts/test/fork`) deploys the core on Robinhood Chain mainnet against the real tokens and Chainlink feeds and runs a covered-call cycle to settlement.
 

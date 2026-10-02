@@ -76,6 +76,17 @@ contract Handler is Test {
         address agent;
     }
 
+    /// @dev A vault exit's state before it runs (see vaultExit).
+    struct Exit {
+        uint256 a0; // totalAssets
+        uint256 s0; // totalSupply
+        uint256 shares0; // the owner's shares
+        IERC20 asset;
+        bool inKind; // the asset isn't USDG: a USDG leg may come on top
+        uint256 tokens0; // the owner's asset balance
+        uint256 cash0; // the owner's USDG balance
+    }
+
     // ---------------------------------------------------------------- system
 
     Clearinghouse public immutable ch;
@@ -401,41 +412,86 @@ contract Handler is Test {
         uint256 a0 = v.totalAssets();
         uint256 s0 = v.totalSupply();
         _vaultDeposit(actors[a], v, amount);
-        _checkSharePrice(v, a0, s0, "deposit");
+        _checkSharePrice(v, a0, s0, 0, "deposit");
         ++count["vaultDeposit"];
     }
 
-    function vaultRedeem(uint256 actorSeed, bool calls, uint256 sharesSeed) external tracked {
-        OptionVaultBase v = calls ? callVault : putVault;
-        address owner = actors[actorSeed % N_ACTORS];
+    /// @notice An instant exit: `mode % 3` of 0 is redeem, 1 redeemInKind (its minimums set to the
+    /// exact preview, which must be met), 2 withdraw. The covered-call vault pays exits in kind,
+    /// its asset plus a USDG leg floored to whole units. With both legs valued at spot, the leaver
+    /// gets at most what its burned shares are worth and at most one USDG unit (plus a few wei of
+    /// rounding) less; the holders who stay keep their share price, gaining at most that rounding
+    /// and never losing more than the conversion's own few wei.
+    function vaultExit(uint256 actorSeed, bool calls, uint256 amountSeed, uint8 mode) external tracked {
+        // three exits in four from the covered-call vault, the one with a USDG leg
+        OptionVaultBase v = calls || amountSeed % 2 == 0 ? callVault : putVault;
+        (bool found, address owner) = _shareholder(v, actorSeed);
+        if (!found) return;
         hub.syncVol(v.underlying());
-        uint256 cap = v.maxRedeem(owner);
-        if (cap == 0) return;
-        uint256 a0 = v.totalAssets();
-        uint256 s0 = v.totalSupply();
-        vm.prank(owner);
-        v.redeem(_bound(sharesSeed, 1, cap), owner, owner);
-        _checkSharePrice(v, a0, s0, "redeem");
-        ++count["vaultRedeem"];
+        Exit memory x;
+        x.a0 = v.totalAssets();
+        x.s0 = v.totalSupply();
+        x.shares0 = v.balanceOf(owner);
+        x.asset = IERC20(v.asset());
+        x.inKind = address(x.asset) != address(usdg);
+        x.tokens0 = x.asset.balanceOf(owner);
+        x.cash0 = usdg.balanceOf(owner);
+        mode %= 3;
+        if (mode == 2) {
+            uint256 cap = v.maxWithdraw(owner);
+            if (cap == 0) return;
+            uint256 assets = _bound(amountSeed, 1, cap);
+            vm.prank(owner);
+            v.withdraw(assets, owner, owner);
+            if (x.asset.balanceOf(owner) - x.tokens0 != assets) {
+                _flag("sharePrice", "withdraw moved other than assets");
+            }
+        } else {
+            uint256 cap = v.maxRedeem(owner);
+            if (cap == 0) return;
+            uint256 sh = _bound(amountSeed, 1, cap);
+            if (mode == 1) {
+                (uint256 t, uint256 c) = v.previewRedeemInKind(sh);
+                vm.prank(owner);
+                (uint256 gotT, uint256 gotC) = v.redeemInKind(sh, owner, owner, t, c);
+                if (gotT != t || gotC != c) _flag("sharePrice", "redeemInKind differs from its preview");
+                if (x.asset.balanceOf(owner) - x.tokens0 != gotT) _flag("sharePrice", "redeemInKind tokens moved");
+                if (x.inKind && usdg.balanceOf(owner) - x.cash0 != gotC) {
+                    _flag("sharePrice", "redeemInKind cash moved");
+                }
+            } else {
+                vm.prank(owner);
+                uint256 got = v.redeem(sh, owner, owner);
+                if (x.asset.balanceOf(owner) - x.tokens0 != got) _flag("sharePrice", "redeem return != tokens moved");
+            }
+        }
+        _checkExit(v, x, owner, mode == 0 ? "redeem" : mode == 1 ? "redeemInKind" : "withdraw");
+        ++count[
+            mode == 0 ? bytes32("vaultRedeem") : mode == 1 ? bytes32("vaultRedeemInKind") : bytes32("vaultWithdraw")
+        ];
     }
 
     function vaultRequestRedeem(uint256 actorSeed, bool calls, uint256 sharesSeed) external tracked {
-        OptionVaultBase v = calls ? callVault : putVault;
-        address owner = actors[actorSeed % N_ACTORS];
+        OptionVaultBase v = calls || sharesSeed % 2 == 0 ? callVault : putVault;
+        (bool found, address owner) = _shareholder(v, actorSeed);
+        if (!found) return;
         uint256 bal = v.balanceOf(owner);
-        if (bal == 0) return;
         vm.prank(owner);
         v.requestRedeem(_bound(sharesSeed, 1, bal), owner);
         ++count["vaultRequestRedeem"];
     }
 
     /// @notice The vault's permissionless roll over every listed expiry, then every receiver's
-    /// claim on rolled epochs.
+    /// claims on rolled epochs: the asset, and the USDG leg of an in-kind exit on its own.
     function vaultRoll(bool calls) external tracked {
         OptionVaultBase v = calls ? callVault : putVault;
         v.roll(_expiries);
         for (uint256 i = 0; i < N_ACTORS; ++i) {
             if (v.redeemable(actors[i]) != 0) v.claimRedeemed(actors[i]);
+            if (v.redeemableCash(actors[i]) != 0) {
+                v.claimRedeemedCash(actors[i]);
+                ++count["claimRedeemedCash"];
+            }
         }
         ++count["vaultRoll"];
     }
@@ -566,6 +622,38 @@ contract Handler is Test {
         if (!ok) return;
         ah.startLiquidation(id);
         ++count["liquidationStart"];
+    }
+
+    /// @notice Ends the first running liquidation, from `targetSeed` on, whose account recovered
+    /// without a bid (anyone may; the auction clock counts market time, so it would otherwise stay
+    /// open across a weekend).
+    function endLiquidation(uint256 targetSeed) external tracked {
+        uint256 n = _ids.length;
+        for (uint256 j = 0; j < n; ++j) {
+            uint256 id = _ids[(targetSeed + j) % n];
+            if (ah.liquidationStartedAt(id) == 0) continue;
+            if (ch.accountState(id).liquidatable) continue;
+            ah.endLiquidation(id);
+            ++count["liquidationEnd"];
+            return;
+        }
+    }
+
+    /// @notice Anyone records a collateral token's price outage, or clears it. The feeds here
+    /// always carry a price inside the band, so the token has a usable price exactly when its
+    /// session isn't HALTED (a stale feed): the record must then be cleared, and kept otherwise.
+    function markUnpriced(uint256 uSeed) external tracked {
+        address u = _us[uSeed % 2];
+        // a token without a usable price, if either is, so outages get recorded when they happen
+        if (hub.session(u) != Session.HALTED && hub.session(_us[(uSeed + 1) % 2]) == Session.HALTED) {
+            u = _us[(uSeed + 1) % 2];
+        }
+        ch.markUnpriced(u);
+        (uint256 since,) = ch.priceOutageOf(u);
+        if ((since != 0) != (hub.session(u) == Session.HALTED)) {
+            _flag("liveness", "price outage record disagrees with the hub");
+        }
+        ++count[since != 0 ? bytes32("markUnpriced") : bytes32("markPriced")];
     }
 
     /// @notice Bids on a running liquidation, or starts one on a liquidatable account and bids on
@@ -711,9 +799,8 @@ contract Handler is Test {
     }
 
     /// @dev Every debt can be repaid from cash: each account still in deficit is funded with what
-    /// it owes plus two USDG units and repays. A socialized debt keeps a sub-unit rest that no
-    /// repayment clears (test_socializedDebtRepayableInFull in InvariantRegressions.t.sol,
-    /// skipped until that is fixed); such a rest is counted, anything larger is a violation.
+    /// it owes plus two USDG units and repays, and must then owe nothing (a socialized debt is
+    /// booked in whole units, see test_socializedDebtRepayableInFull).
     function _repayAll() internal {
         for (uint256 j = 0; j < _ids.length; ++j) {
             uint256 id = _ids[j];
@@ -721,9 +808,9 @@ contract Handler is Test {
             if (owed == 0) continue;
             _mintDeposit(liquidator, id, address(usdg), owed / UNIT + 2);
             ch.repayDeficit(id);
+            ++count["repayAtEnd"];
             (owed,,) = ch.deficitOf(id, 0);
-            if (owed >= UNIT) _flag("liveness", "debt not repayable from cash");
-            else if (owed != 0) ++count["socialDebtSubUnitRest"];
+            if (owed != 0) _flag("liveness", "debt not repayable from cash");
         }
     }
 
@@ -1124,6 +1211,16 @@ contract Handler is Test {
         return (false, 0);
     }
 
+    /// @dev The first actor from `seed` on that holds shares of `v` past its exit cooldown.
+    function _shareholder(OptionVaultBase v, uint256 seed) internal view returns (bool, address) {
+        uint256 cooldown = v.EXIT_COOLDOWN();
+        for (uint256 j = 0; j < N_ACTORS; ++j) {
+            address a = actors[(seed + j) % N_ACTORS];
+            if (v.balanceOf(a) != 0 && v.lastReceive(a) + cooldown <= _now()) return (true, a);
+        }
+        return (false, address(0));
+    }
+
     function _agentLive(uint256 a) internal view returns (bool) {
         return ch.agentPolicy(actorIds[a], agents[a]).expiresAt > _now();
     }
@@ -1302,17 +1399,39 @@ contract Handler is Test {
 
     /// @dev Share price p = (assets + 1) / (supply + 1e6), the vaults' ERC-4626 conversion. An
     /// entry or exit may move it only by rounding: at most 4 asset units down (the account's
-    /// equity converts into assets with floors) and at most one share plus 4 units up.
-    function _checkSharePrice(OptionVaultBase v, uint256 a0, uint256 s0, string memory what) internal {
+    /// equity converts into assets with floors) and at most one share plus 4 units, plus `kept`
+    /// asset units an exit leaves behind for the holders who stay, up.
+    function _checkSharePrice(OptionVaultBase v, uint256 a0, uint256 s0, uint256 kept, string memory what) internal {
         uint256 a1 = v.totalAssets();
         uint256 s1 = v.totalSupply();
         uint256 off = VIRTUAL_SHARES;
         if ((a1 + 1 + 4) * (s0 + off) < (a0 + 1) * (s1 + off)) {
             _flag("sharePrice", string.concat("share price fell on ", what));
         }
-        if ((a1 + 1) * (s0 + off) > (a0 + 1) * (s1 + off + 1) + 4 * (s0 + off)) {
+        if ((a1 + 1) * (s0 + off) > (a0 + 1) * (s1 + off + 1) + (4 + kept) * (s0 + off)) {
             _flag("sharePrice", string.concat("share price jumped on ", what));
         }
+    }
+
+    /// @dev An exit, both legs valued at spot in asset units: what the leaver got is at most the
+    /// burned shares' value at the pre-exit NAV, and at most `kept` less, where `kept` is one USDG
+    /// unit at spot (the cash leg is floored to whole units) plus 4 units of conversion rounding.
+    /// That rest stays with the holders who stay, so the share price may rise by it, never fall.
+    function _checkExit(OptionVaultBase v, Exit memory x, address owner, string memory what) internal {
+        uint256 burned = x.shares0 - v.balanceOf(owner);
+        uint256 value = burned * (x.a0 + 1) / (x.s0 + VIRTUAL_SHARES);
+        uint256 got = x.asset.balanceOf(owner) - x.tokens0;
+        uint256 kept = 4;
+        if (x.inKind) {
+            (uint256 spot,,) = hub.spot(v.underlying());
+            uint256 cash = usdg.balanceOf(owner) - x.cash0;
+            if (cash != 0) ++count["exitCashLeg"];
+            got += cash * UNIT * WAD / spot;
+            kept += (UNIT * WAD + spot - 1) / spot;
+        }
+        if (got > value) _flag("sharePrice", string.concat("exit paid more than the shares are worth on ", what));
+        if (got + kept < value) _flag("sharePrice", string.concat("exit paid too little on ", what));
+        _checkSharePrice(v, x.a0, x.s0, kept, what);
     }
 
     function _now() internal view returns (uint256) {
