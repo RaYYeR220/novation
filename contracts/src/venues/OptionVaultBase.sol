@@ -314,7 +314,9 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
 
     // ================================================================ ERC-4626 limits
 
-    /// @notice Unlimited while live, except: nothing while the account owes a deficit, and nothing
+    /// @notice Unlimited while live, except: nothing while the account owes a deficit, nothing
+    /// while it holds an expired position not yet settled (NAV marks it at the current spot, not
+    /// at the settlement print, so an entry then could take value from the holders), and nothing
     /// into a vault whose shares are worth nothing (or can't be priced).
     function maxDeposit(address) public view override returns (uint256) {
         return _canEnter() ? type(uint256).max : 0;
@@ -622,7 +624,7 @@ abstract contract OptionVaultBase is ERC4626, ReentrancyGuardTransient {
     }
 
     function _canEnter() private view returns (bool) {
-        if (!isLive() || _inDeficit()) return false;
+        if (!isLive() || _inDeficit() || _holdsExpired()) return false;
         return totalSupply() == 0 || totalAssets() != 0;
     }
 
