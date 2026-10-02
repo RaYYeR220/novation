@@ -1333,6 +1333,30 @@ contract AuctionHouseTest is Fixture {
         _assertBacked(_ids(d, c, 0));
     }
 
+    /// A debt repaid by the account's own cash (repayDeficit), not by a bid, leaves the sale's start
+    /// behind; anyone can end that sale once nothing is owed, so a later deficit on the same expiry
+    /// starts a fresh ramp.
+    function test_deficitSaleEndedAfterRepayment() public {
+        uint256 d = _deficitAccount(300e18, 500e18);
+        vm.expectRevert(AuctionHouse.ExceedsDeficit.selector);
+        ah.endDeficitSale(d, e1);
+        vm.expectRevert(AuctionHouse.SaleNotActive.selector);
+        ah.endDeficitSale(d, e2);
+
+        _deposit(carol, d, address(usdg), 801 * USDG); // anyone may pay in
+        ch.repayDeficit(d);
+        (uint256 total,,) = ch.deficitOf(d, e1);
+        assertEq(total, 0);
+        (, bool active) = ah.deficitDiscount(d, e1);
+        assertTrue(active); // the stale start
+        vm.expectEmit(true, true, true, true, address(ah));
+        emit AuctionHouse.DeficitSaleEnded(d, e1);
+        ah.endDeficitSale(d, e1);
+        assertEq(ah.saleStartedAt(d, e1), 0);
+        (, active) = ah.deficitDiscount(d, e1);
+        assertFalse(active);
+    }
+
     function test_deficitSaleEndsWhenRepaid() public {
         uint256 d = _deficitAccount(300e18, 500e18);
         uint256 c = _fund(carol, 10_000 * USDG, 0);

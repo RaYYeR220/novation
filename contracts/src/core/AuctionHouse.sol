@@ -253,6 +253,18 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
         }
     }
 
+    /// @notice Permissionless: ends the deficit sale of (`id`, `expiry`) once the account owes
+    /// nothing more for it, neither on the expiry nor as residual socialized debt (repaid by its
+    /// own cash through repayDeficit rather than by a bid). A later deficit on the same expiry then
+    /// starts a fresh ramp instead of reusing the old start at maxDiscount.
+    function endDeficitSale(uint256 id, uint64 expiry) external nonReentrant {
+        if (saleStartedAt[id][expiry] == 0) revert SaleNotActive();
+        (, uint256 bridged, uint256 pending) = ch.deficitOf(id, expiry);
+        if (bridged + pending + ch.socializedDebtOf(id) != 0) revert ExceedsDeficit();
+        delete saleStartedAt[id][expiry];
+        emit DeficitSaleEnded(id, expiry);
+    }
+
     /// @return discountWad the current discount (it stays at maxDiscount after auctionDuration)
     /// @return active whether the sale is running
     function deficitDiscount(uint256 id, uint64 expiry) external view returns (uint256 discountWad, bool active) {
