@@ -1108,13 +1108,15 @@ contract ClearinghouseSettlementTest is Fixture {
         (since,) = ch.priceOutageOf(address(spy));
         assertEq(since, t0 + 72 hours);
 
-        vm.warp(since + 72 hours - 1);
+        uint256 deadline = _marketDeadline(since);
+        vm.warp(deadline - 1);
         vm.expectRevert(MarketDataHub.NoPrice.selector);
         ch.socializeRemainder(v, e);
         uint256 snap = vm.snapshotState();
 
-        // 72 hours on, the dead collateral counts as 0 and the socialization goes through
-        vm.warp(since + 72 hours);
+        // 72 hours of market time on, the dead collateral counts as 0 and the socialization goes
+        // through
+        vm.warp(deadline);
         ch.socializeRemainder(v, e);
         assertEq(_pending(e), 0);
         assertEq(ch.collateralOf(v, address(spy)), 0.001e18); // it stays on the account
@@ -1150,11 +1152,12 @@ contract ClearinghouseSettlementTest is Fixture {
         (uint256 since,) = ch.priceOutageOf(address(spy));
         assertEq(since, t1);
 
-        vm.warp(t1 + 72 hours - 1);
+        uint256 deadline = _marketDeadline(t1);
+        vm.warp(deadline - 1);
         vm.expectRevert(abi.encodeWithSelector(CHErrors.AccountNotEmpty.selector, v));
         ch.socializeRemainder(v, e);
         uint256 snap = vm.snapshotState();
-        vm.warp(t1 + 72 hours);
+        vm.warp(deadline);
         ch.socializeRemainder(v, e); // the halted SPY counts as 0
         assertEq(_pending(e), 0);
         assertEq(ch.collateralOf(v, address(spy)), 1e18);
@@ -1164,7 +1167,7 @@ contract ClearinghouseSettlementTest is Fixture {
         // a fresh print gives a usable price back: the collateral counts again, and anyone can
         // clear the mark
         vm.revertToState(snap);
-        vm.warp(t1 + 72 hours);
+        vm.warp(deadline);
         _setPrice(address(spy), 600e18);
         vm.expectRevert(abi.encodeWithSelector(CHErrors.AccountNotEmpty.selector, v));
         ch.socializeRemainder(v, e);
@@ -1191,11 +1194,12 @@ contract ClearinghouseSettlementTest is Fixture {
         (uint256 since, uint80 round) = ch.priceOutageOf(address(spy));
         assertEq(since, t0);
         assertEq(round, 0);
-        for (uint256 i = 1; i <= 3; ++i) {
-            vm.warp(t0 + i * 23 hours);
+        uint256 deadline = _marketDeadline(t0);
+        for (uint256 t = t0 + 23 hours; t < deadline; t += 23 hours) {
+            vm.warp(t);
             ch.markUnpriced(address(spy));
         }
-        vm.warp(t0 + 72 hours);
+        vm.warp(deadline);
         ch.socializeRemainder(v, e);
         assertEq(_pending(e), 0);
 
@@ -1211,6 +1215,49 @@ contract ClearinghouseSettlementTest is Fixture {
         ch.markUnpriced(address(spy)); // a new outage, a new clock
         (since,) = ch.priceOutageOf(address(spy));
         assertEq(since, t0 + 10 days);
+    }
+
+    /// A short halt just before a long closure doesn't complete the outage clock across it: the
+    /// clock counts market time, so a token that is HALTED at the reopen only because it hasn't
+    /// printed yet keeps its value. Christmas 2026: the window closes Thursday 20:00 EST and
+    /// reopens Sunday 20:00 EST, 72 hours later.
+    function test_outageClockSkipsClosedHours() public {
+        (uint256 v, uint256 b) = _nakedShortSold();
+        _deposit(alice, v, address(spy), 1e18); // 600 USD of SPY
+        _defaultAt300(v, b);
+
+        uint256 thu1500 = 1_798_142_400; // 2026-12-24 15:00 EST
+        uint256 sun2001 = 1_798_419_660; // 2026-12-27 20:01 EST, the window has reopened
+        vm.warp(thu1500);
+        _setPrice(address(spy), 600e18);
+        vm.warp(thu1500 + 4 hours); // 19:00: a ten-minute issuer pause
+        spy.setPaused(true);
+        ch.markUnpriced(address(spy));
+        (uint256 since,) = ch.priceOutageOf(address(spy));
+        assertEq(since, thu1500 + 4 hours);
+        vm.warp(thu1500 + 4 hours + 10 minutes);
+        spy.setPaused(false); // nobody clears the mark
+
+        // Sunday 20:01: SPY hasn't printed since Thursday, so it is HALTED, but only an hour of
+        // market time has passed since the mark
+        vm.warp(sun2001);
+        (uint256 px, Session s,) = hub.spot(address(spy));
+        assertEq(px, 600e18);
+        assertEq(uint8(s), uint8(Session.HALTED));
+        assertEq(NyseCalendar.tradableSeconds(since, sun2001, 72 hours), 1 hours + 1 minutes);
+        vm.expectRevert(abi.encodeWithSelector(CHErrors.AccountNotEmpty.selector, v));
+        ch.socializeRemainder(v, e);
+        assertEq(_pending(e), 108e18);
+    }
+
+    /// @dev The first moment 72 hours of market time have passed since `since`.
+    function _marketDeadline(uint256 since) internal pure returns (uint256 t) {
+        t = since + 72 hours;
+        uint256 got = NyseCalendar.tradableSeconds(since, t, 72 hours);
+        while (got < 72 hours) {
+            t += 72 hours - got;
+            got = NyseCalendar.tradableSeconds(since, t, 72 hours);
+        }
     }
 
     /// alice's naked short settles at 300 with an empty fund: 108 pending; NVDA then prints 250.
