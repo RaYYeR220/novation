@@ -35,6 +35,7 @@ import {
   isRangeTooWide,
   isRateLimited,
   memoryEventCache,
+  UNSAFE_TAIL_BLOCKS,
   padGas,
   sendRequest,
   type UnderlyingParams,
@@ -233,30 +234,55 @@ describe('events', () => {
     await expect(getEvents(ctx, { address: ctx.deployment.clearinghouse, abi: clearinghouseAbi, eventName: 'Traded', chunk: 0n })).rejects.toThrow(RangeError);
   });
 
-  it('with a cache, fetches only the blocks after the last scan', async () => {
+  it('with a cache, fetches only new blocks plus the unsafe tail', async () => {
     const calls: [bigint, bigint][] = [];
     let head = 100n;
+    // one log every 10 blocks
+    const logsIn = (a: bigint, b: bigint) => {
+      const out: { blockNumber: bigint }[] = [];
+      for (let n = a + ((10n - (a % 10n)) % 10n); n <= b; n += 10n) out.push({ blockNumber: n });
+      return out;
+    };
     const client = {
       getBlockNumber: async () => head,
       getContractEvents: async ({ fromBlock, toBlock }: { fromBlock: bigint; toBlock: bigint }) => {
         calls.push([fromBlock, toBlock]);
-        return [{ blockNumber: toBlock }];
+        return logsIn(fromBlock, toBlock);
       },
     } as unknown as PublicClient;
     const ctx = { client, deployment: { ...getDeployment(46630), block: 0n }, eventCache: memoryEventCache() };
     const q = { address: ctx.deployment.clearinghouse, abi: clearinghouseAbi, eventName: 'Traded' as const };
-    expect(await getEvents(ctx, q)).toHaveLength(1);
-    expect(await getEvents(ctx, q)).toHaveLength(1);
+    const all = (h: bigint) => logsIn(0n, h).map((l) => l.blockNumber);
+    expect((await getEvents(ctx, q)).map((l) => l.blockNumber)).toEqual(all(100n));
+    expect((await getEvents(ctx, q)).map((l) => l.blockNumber)).toEqual(all(100n));
     head = 150n;
-    const third = await getEvents(ctx, q);
-    expect(third.map((l) => l.blockNumber)).toEqual([100n, 150n]);
+    expect((await getEvents(ctx, q)).map((l) => l.blockNumber)).toEqual(all(150n));
+    // the cache stops UNSAFE_TAIL_BLOCKS short of the head, and each scan refetches from there
+    expect(UNSAFE_TAIL_BLOCKS).toBe(32n);
     expect(calls).toEqual([
       [0n, 100n],
-      [101n, 150n],
+      [69n, 100n],
+      [69n, 150n],
     ]);
     // another filter is another scan
     await getEvents(ctx, { ...q, args: { takerId: 4n } });
     expect(calls.at(-1)).toEqual([0n, 150n]);
+  });
+
+  it('recognises the range errors of common providers, never a rate limit', () => {
+    for (const m of [
+      'query returned more than 10000 results',
+      'eth_getLogs is limited to a 10,000 range',
+      'exceed maximum block range: 50000',
+      'Log response size exceeded. You can make eth_getLogs requests with up to a 2K block range',
+      'block range is too wide',
+      'requested too many blocks from 0 to 200000, maximum is set to 2048',
+    ])
+      expect(isRangeTooWide(new Error(m)), m).toBe(true);
+    expect(isRangeTooWide(Object.assign(new Error('limit exceeded'), { code: -32005 }))).toBe(true);
+    expect(isRangeTooWide({ message: 'x', cause: { code: -32602, message: 'invalid params' } })).toBe(true);
+    expect(isRangeTooWide(new Error('connection reset'))).toBe(false);
+    expect(isRangeTooWide(Object.assign(new Error('rate limit exceeded'), { code: -32005 }))).toBe(false);
   });
 });
 

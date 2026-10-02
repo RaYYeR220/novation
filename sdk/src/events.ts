@@ -37,9 +37,37 @@ export function memoryEventCache(): EventCache {
 
 const RETRIES = 4;
 
+/**
+ * Blocks behind the head that a cache never keeps: a load-balanced node a few blocks behind, or a
+ * short reorg, can't leave a permanent gap. Each scan fetches this tail again.
+ */
+export const UNSAFE_TAIL_BLOCKS = 32n;
+
+/** Every message, detail and status in an error's cause chain, lowercased. */
 function errorText(e: unknown): string {
-  const x = e as { details?: string; shortMessage?: string; message?: string; status?: number; cause?: unknown };
-  return [x?.status, x?.details, x?.shortMessage, x?.message, (x?.cause as { message?: string })?.message].filter(Boolean).join(' ').toLowerCase();
+  const parts: unknown[] = [];
+  const seen = new Set<unknown>();
+  let x = e as { details?: string; shortMessage?: string; message?: string; status?: number; cause?: unknown } | undefined;
+  while (x && typeof x === 'object' && !seen.has(x)) {
+    seen.add(x);
+    parts.push(x.status, x.details, x.shortMessage, x.message);
+    x = x.cause as typeof x;
+  }
+  if (typeof e === 'string') parts.push(e);
+  return parts.filter(Boolean).join(' ').toLowerCase();
+}
+
+/** JSON-RPC error codes anywhere in the cause chain. */
+function errorCodes(e: unknown): number[] {
+  const out: number[] = [];
+  const seen = new Set<unknown>();
+  let x = e as { code?: unknown; cause?: unknown } | undefined;
+  while (x && typeof x === 'object' && !seen.has(x)) {
+    seen.add(x);
+    if (typeof x.code === 'number') out.push(x.code);
+    x = x.cause as typeof x;
+  }
+  return out;
 }
 
 /** The node throttled the request (HTTP 429, "rate limit"): wait and retry, never shrink the range for it. */
@@ -47,10 +75,33 @@ export function isRateLimited(e: unknown): boolean {
   return /\b429\b|rate.?limit|too many requests|throttl|capacity exceeded/.test(errorText(e));
 }
 
-/** The node refused the block range itself (too many blocks or results in one eth_getLogs). */
+const RANGE_WORDING = new RegExp(
+  [
+    'query returned more than',
+    'block range',
+    'range (is )?too (large|wide|big|long)',
+    'exceeds? (the )?(max(imum)?|allowed) (block )?range',
+    'max(imum)? (block )?range',
+    'response size (exceeded|is larger|too (large|big))',
+    'log response size',
+    'too many (results|logs|blocks)',
+    'requested too many',
+    'is limited to( a)? [0-9,]+',
+    'range limit',
+    'results? limit',
+    '[0-9,]+ results',
+    'exceeds? (the )?(max|maximum) ',
+  ].join('|'),
+);
+
+/**
+ * The node refused the block range itself (too many blocks or results in one eth_getLogs), in the
+ * wordings and codes common providers use (-32005 limit exceeded, -32602 invalid range). Never a
+ * rate limit: that is retried at the same range.
+ */
 export function isRangeTooWide(e: unknown): boolean {
   if (isRateLimited(e)) return false;
-  return /block range|range (is )?too (large|wide|big)|max(imum)? (block )?range|query returned more than|too many (results|logs|blocks)|response size|results? limit|10000 results|exceeds? (the )?(max|maximum) /.test(errorText(e));
+  return RANGE_WORDING.test(errorText(e)) || errorCodes(e).some((c) => c === -32005 || c === -32602);
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -62,7 +113,7 @@ const argKey = (args?: Record<string, unknown>) =>
  * eth_getLogs for one event from the deployment block, in chain order. The whole range goes in one
  * request; a range the node refuses as too wide is split in half until it passes, and a throttled
  * request backs off and retries. With a cache, a scan up to the latest block fetches only the
- * blocks after the last one it saw.
+ * blocks after the cached ones, which stop UNSAFE_TAIL_BLOCKS short of the head.
  */
 export async function getEvents<const abi extends Abi, eventName extends ContractEventName<abi>>(
   ctx: NovationContext,
@@ -106,7 +157,11 @@ export async function getEvents<const abi extends Abi, eventName extends Contrac
       throw e;
     }
   }
-  if (cache && q.toBlock === undefined) cache.set(key, { from, to, logs: out });
+  if (cache && q.toBlock === undefined) {
+    // keep the tail out of the cache: the next scan fetches it again
+    const safe = to - UNSAFE_TAIL_BLOCKS;
+    if (safe >= from) cache.set(key, { from, to: safe, logs: out.filter((l) => (l as { blockNumber: bigint }).blockNumber <= safe) });
+  }
   return out as GetContractEventsReturnType<abi, eventName>;
 }
 
