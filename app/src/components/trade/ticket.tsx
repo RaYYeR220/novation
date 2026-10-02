@@ -21,6 +21,7 @@ import { cn } from '@/lib/cn';
 import { fmtDays, fmtFee, fmtNumber, fmtSeries, fmtSeriesShort, fmtSigned } from '@/lib/format';
 import { fmtCloseEt, fmtEt } from '@/lib/nyse';
 import { perContract } from '@/lib/margin';
+import { closedFor, closedSession, untilReopen } from '@/lib/market-state';
 import type { ChainSeries, Side } from './options-chain';
 
 export type { Venue } from '@/lib/client/types';
@@ -45,6 +46,8 @@ export interface TicketProps {
   onClear: () => void;
   /** The live vault that writes this series' type, if any. */
   vault?: Vault;
+  /** The vault that writes it while closed for the weekend or a holiday. */
+  closedVault?: Vault;
   /** Agents with a grant on this account. */
   grants: AgentGrant[];
   /** Price per contract at the venue the ticket will use. */
@@ -107,7 +110,10 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
   const viewOnly = !p.demo && act.connected && !act.checking && !act.canAct;
   const { series, quote, now } = p;
   const refusal = quote?.refusal;
-  const fit = useFit(p.args, Boolean(refusal));
+  // live: signing syncs a vol that is behind its feed first, then sends the trade
+  const volSync = refusal?.code === 'VolNotCurrent' && !p.demo;
+  const volSyncNote = `Signing syncs the vol of ${refusal?.underlying ?? 'this underlying'} first (one more transaction, which anyone may send), then sends this trade.`;
+  const fit = useFit(p.args, Boolean(refusal) && refusal?.code !== 'VolNotCurrent');
   const grant = p.grants.find((g) => g.agent === p.signer);
   const qtyNum = Number(p.qty);
   const qtyOk = !p.qtyError && Number.isFinite(qtyNum) && qtyNum > 0;
@@ -155,6 +161,7 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
           ? `Signed quote from maker account ${quote.rfq.makerId}: ${fmtNumber(quote.rfq.price)} per contract, checked against the kernel mark, valid until ${fmtEt(quote.rfq.expiresAt, { seconds: true })}.`
           : `No RFQ maker relay is answering: the what-if prices at the kernel mark, ${fmtNumber(p.price ?? 0)}, and the ticket can't be sent.`;
   const noVault = !p.vault;
+  const closed = closedSession(p.closedVault?.session);
   const signerNote = grant
     ? `${grant.label} may leave at most ${fmtNumber(grant.maxWorstLoss)} of worst-case loss (now ${fmtNumber(now?.im ?? grant.used)}) and pay at most ${fmtNumber(grant.maxPremiumPerTrade)} premium per trade.`
     : p.grants.some((g) => !g.allowed.includes(series.underlying))
@@ -304,7 +311,11 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
             )}
           </div>
           <p className="text-t12 text-pretty text-navy-200">
-            {noVault ? `No vault writes ${series.underlying} ${series.isCall ? 'calls' : 'puts'}. ` : ''}
+            {noVault
+              ? closed
+                ? `The ${series.underlying} ${series.isCall ? 'covered-call' : 'put-write'} vault is closed for ${closedFor(closed)}: no vault quotes ${untilReopen(p.asOf)}. `
+                : `No vault writes ${series.underlying} ${series.isCall ? 'calls' : 'puts'}. `
+              : ''}
             {venueNote} {signerNote}
           </p>
         </div>
@@ -346,9 +357,11 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
             who={who}
             agentLabel={grant?.label}
             hint={
-              fit.data !== undefined && fit.data > 0
-                ? `Up to ${fmtNumber(fit.data, 0)} contracts clear the same checks. Cut the size${refusal.code.startsWith('Agent') ? ', or sign from the owner wallet' : ', or deposit USDG'}.`
-                : undefined
+              volSync
+                ? volSyncNote
+                : fit.data !== undefined && fit.data > 0
+                  ? `Up to ${fmtNumber(fit.data, 0)} contracts clear the same checks. Cut the size${refusal.code.startsWith('Agent') ? ', or sign from the owner wallet' : ', or deposit USDG'}.`
+                  : undefined
             }
             action={
               fit.data !== undefined && fit.data > 0 ? (
@@ -389,7 +402,7 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
             variant="primary"
             size="lg"
             lamp
-            disabled={!qtyOk || !quote || Boolean(refusal) || p.pending || viewOnly}
+            disabled={!qtyOk || !quote || (Boolean(refusal) && !volSync) || p.pending || viewOnly}
             loading={live.busy}
             loadingLabel="Signing"
             onClick={sign}
@@ -401,7 +414,9 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
             {p.pending
               ? 'Checking the ticket again before it can be signed.'
               : refusal
-                ? 'Refused before signing. Change the ticket and the check runs again.'
+                ? volSync
+                  ? volSyncNote
+                  : 'Refused before signing. Change the ticket and the check runs again.'
                 : p.demo
                 ? 'Demo mode: the ticket is checked, nothing is sent.'
                 : viewOnly

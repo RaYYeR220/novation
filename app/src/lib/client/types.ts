@@ -9,7 +9,15 @@ export interface Position { seriesId: number; qty: number; mark: number; }
 export interface AccountState { cash: number; mtm: number; settledValue: number; deficit: number; equity: number; im: number; mm: number; worstScenario: number; healthy: boolean; liquidatable: boolean; }
 /** The kernel's 39 scenarios for a book under one session's shocks, and the initial margin those shocks give. */
 export interface ScenarioGrid { session: Session; cells: number[] /* 39, index = v*13+j */; shockRange: Record<string, number>; im: number; }
-export interface Refusal { code: 'InsufficientMargin' | 'AgentRiskBudgetExceeded' | 'AgentPremiumExceeded' | 'AgentValueDrainExceeded' | 'AgentUnderlyingNotAllowed' | 'OpeningNotAllowed' | 'OpenInterestCap' | 'VaultNotLive' | 'InsufficientCash' | string; message: string; numbers?: Record<string, number>; }
+export interface Refusal {
+  code:
+    | 'InsufficientMargin' | 'AgentRiskBudgetExceeded' | 'AgentPremiumExceeded' | 'AgentValueDrainExceeded' | 'AgentUnderlyingNotAllowed' | 'OpeningNotAllowed'
+    | 'OpenInterestCap' | 'VaultNotLive' | 'InsufficientCash' | 'VolNotCurrent' | 'TooManyClaimExpiries' | 'StillLiquidatable' | 'FallbackApplies' | string;
+  message: string;
+  numbers?: Record<string, number>;
+  /** The underlying the refusal names, by symbol (VolNotCurrent: the one whose vol is behind its feed). */
+  underlying?: string;
+}
 /**
  * `premium` is always a positive magnitude; direction comes from the sign of `qtyDelta`.
  * Buy (qtyDelta > 0): the account pays premium + fee. Sell (qtyDelta < 0): it receives
@@ -29,7 +37,14 @@ export interface Quote {
 }
 export type Venue = 'vault' | 'rfq';
 export interface WhatIfOptions { agent?: string; venue?: Venue; }
-export interface Vault { address: string; kind: 'coveredCall' | 'putWrite'; underlying: string; tvl: number; nav: number; apy7d: number; utilization: number; epoch: number; live: boolean; }
+export interface Vault {
+  address: string; kind: 'coveredCall' | 'putWrite'; underlying: string; tvl: number; nav: number; apy7d: number; utilization: number; epoch: number; live: boolean;
+  /**
+   * The underlying's session. A WEEKEND or HOLIDAY session closes the vault (`live` is false): no
+   * quotes, sales, buy-backs, deposits, exits or roll payouts; queuing an exit still works.
+   */
+  session: Session;
+}
 export interface AgentGrant { agent: string; label: string; maxWorstLoss: number; maxPremiumPerTrade: number; allowed: string[]; expiresAt: number; used: number; lastRefusal?: Refusal & { txHash?: string }; }
 export interface ProtocolStats { openInterestUsd: number; vaultTvlUsd: number; insuranceFundUsd: number; premium7dUsd: number; liquidations7d: number; socializedUsd: number; }
 export interface GasRow { positions: number; solidityOptimized: number; solidityReference?: number; stylus: number; }
@@ -125,6 +140,11 @@ export interface FeedStatus {
   uiMultiplier: number; lastMultiplierChange: number | null; oraclePaused: boolean; paused: boolean;
   corporateAction?: { kind: string; amount: number; status: string; processDate: string } | null;
   halts: HaltEpisode[]; historyFrom: number; historyTo: number; rounds: number;
+  /**
+   * Feed rounds the vol estimate has not folded in yet; null when the feed moved to a new aggregator
+   * phase (the vol waits for syncAndRebaseVol). Read from the chain; absent in the demo.
+   */
+  volBehind?: number | null;
 }
 export interface Auction {
   id: number; kind: 'liquidation' | 'deficit'; account: number; startedAt: number;

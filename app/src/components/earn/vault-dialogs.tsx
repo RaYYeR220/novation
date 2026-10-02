@@ -12,6 +12,7 @@ import { useExitPreview } from '@/lib/client/hooks';
 import type { ExitPreview, VaultDetail, VaultHolding } from '@/lib/client/types';
 import { fmtDuration, fmtNumber, fmtQty } from '@/lib/format';
 import { fmtCloseEt, fmtEt } from '@/lib/nyse';
+import { closedFor, closedSession, untilReopen, vaultClosedText } from '@/lib/market-state';
 
 /** Why a vault's deposits and instant exits wait for an expired series to settle, in a sentence or two. */
 export function settlementWaitText(vault: Pick<VaultDetail, 'settlementWait'>): string | undefined {
@@ -59,14 +60,17 @@ export function DepositDialog({ vault, open, onOpenChange, asOf, demo, balance }
   const unit = vault.asset;
   const parsed = parseAmount(raw, balance, unit, 'your wallet holds');
   const waiting = Boolean(vault.settlementWait);
-  const notLive = !vault.live || waiting;
-  const error = !vault.live
-    ? 'The vault is not live: deposits are closed until its underlying trades normally again.'
-    : waiting
-      ? 'Deposits wait for settlement: the vault holds an expired series not yet settled into it, so its NAV is not final.'
-      : touched
-        ? parsed.error
-        : undefined;
+  const closed = closedSession(vault.session);
+  const notLive = !vault.live || waiting || Boolean(closed);
+  const error = closed
+    ? `The vault is closed for ${closedFor(closed)}: no deposits ${untilReopen(asOf)}.`
+    : !vault.live
+      ? 'The vault is not live: deposits are closed until its underlying trades normally again.'
+      : waiting
+        ? 'Deposits wait for settlement: the vault holds an expired series not yet settled into it, so its NAV is not final.'
+        : touched
+          ? parsed.error
+          : undefined;
   const shares = parsed.error ? 0 : parsed.value / vault.navPerShare;
   const live = useLiveTx();
   const submit = async () => {
@@ -174,6 +178,7 @@ export function WithdrawDialog({ vault, open, onOpenChange, asOf, demo, holding,
   const coolUntil = (holding?.lastReceive ?? 0) + vault.cooldown;
   const cooling = holding !== undefined && asOf < coolUntil;
   const waiting = Boolean(vault.settlementWait);
+  const closed = closedSession(vault.session);
   const instantMax = Math.min(own, holding?.maxExit ?? vault.free);
   const max = mode === 'now' ? instantMax : own;
   const parsed = parseAmount(raw, max, unit, mode === 'now' ? 'can leave now' : 'your shares are worth');
@@ -186,12 +191,15 @@ export function WithdrawDialog({ vault, open, onOpenChange, asOf, demo, holding,
       : undefined;
   const nowGate =
     queueGate ??
-    (!vault.live
-      ? 'The vault is not live; instant withdrawals wait. A redemption request still queues.'
-      : waiting
-        ? 'Instant exits wait for the expired series to settle. A redemption request still queues.'
-        : undefined);
-  const gate = mode === 'now' ? nowGate : (queueGate ?? (!vault.live ? 'The vault is not live; instant withdrawals wait. A redemption request still queues.' : undefined));
+    (closed
+      ? `The vault is closed for ${closedFor(closed)}: no instant withdrawals ${untilReopen(asOf)}. A redemption request still queues.`
+      : !vault.live
+        ? 'The vault is not live; instant withdrawals wait. A redemption request still queues.'
+        : waiting
+          ? 'Instant exits wait for the expired series to settle. A redemption request still queues.'
+          : undefined);
+  const gate =
+    mode === 'now' ? nowGate : (queueGate ?? (!vault.live && !closed ? 'The vault is not live; instant withdrawals wait. A redemption request still queues.' : undefined));
   const blocked = mode === 'now' ? Boolean(nowGate) : Boolean(queueGate);
   const error = gate ?? (touched ? parsed.error : undefined);
   const value = parsed.error ? undefined : parsed.value;
@@ -260,6 +268,12 @@ export function WithdrawDialog({ vault, open, onOpenChange, asOf, demo, holding,
           <Segment value="now">Withdraw now</Segment>
           <Segment value="queue">Request redemption</Segment>
         </SegmentedControl>
+        {closed && (
+          <div role="status" data-state="vault-closed" className="grid gap-s1 rounded-[4px] border border-navy-700 bg-navy-800 px-s3 py-s2 text-t13">
+            <p className="font-semibold text-navy-50">Closed for {closedFor(closed)}</p>
+            <p className="text-pretty text-navy-200">{vaultClosedText(asOf)}</p>
+          </div>
+        )}
         {waiting && (
           <div role="status" data-state="settlement-wait" className="grid gap-s1 rounded-[4px] border border-navy-700 bg-navy-800 px-s3 py-s2 text-t13">
             <p className="font-semibold text-navy-50">Waiting for settlement</p>

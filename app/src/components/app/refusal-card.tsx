@@ -1,9 +1,11 @@
 'use client';
 
 import type { ReactNode } from 'react';
+import { refusalMessage } from '@novation/sdk';
 import { RefusalCard, type RefusalBreach } from '@/components/ui/refusal-card';
 import type { Refusal } from '@/lib/client/types';
 import { fmtNumber } from '@/lib/format';
+import { volSyncText } from '@/lib/market-state';
 
 export interface RefusalNoticeProps {
   refusal: Refusal;
@@ -153,6 +155,34 @@ export function refusalCopy(r: Refusal, who: string, agentLabel = 'the agent'): 
     }
     case 'OpeningNotAllowed':
       return { reason: r.message, context: `${who}.`, hint: 'Trades that reduce risk still clear. Opening resumes when the session reopens.' };
+    case 'VolNotCurrent':
+      return {
+        reason: volSyncText(r.underlying),
+        context: `${refusalMessage(r.code)} ${who}.`,
+        hint: 'Anyone may send the sync. Once it lands, the same transaction clears this check.',
+      };
+    case 'TooManyClaimExpiries': {
+      const id = n(r, 'id');
+      return {
+        reason: refusalMessage(r.code),
+        context: id !== undefined ? `Account ${id} would hold them. ${who}.` : `${who}.`,
+        hint: 'Claim the expiries whose pools are ready (anyone may send a claim), then bid again.',
+      };
+    }
+    case 'StillLiquidatable':
+      return {
+        reason: refusalMessage(r.code),
+        context: `${who}.`,
+        hint: 'The liquidation ends once bids bring the account back above initial margin, or once it recovers above maintenance on its own.',
+      };
+    case 'FallbackApplies':
+      return {
+        reason: refusalMessage(r.code),
+        context: `${who}.`,
+        hint: 'Settle the expiry on that print, or on the fallback price once the 72 hours have passed.',
+      };
+    case 'TooManyUnderlyings':
+      return { reason: refusalMessage(r.code), context: `${who}.`, hint: 'Close out an underlying the account holds before opening another.' };
     default:
       return { reason: r.message, context: `${who}.` };
   }

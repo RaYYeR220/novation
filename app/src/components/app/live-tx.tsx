@@ -54,6 +54,15 @@ export function useLiveTx() {
         // a wallet client for the live chain now, not the one React handed over before the switch
         chain.setWallet(await getWalletClient(config, { chainId: LIVE_CHAIN.id }));
         pending = toast({ tone: 'pending', title: label, description: 'Confirm in your wallet; then it waits for the block.' });
+        // a vol behind its feed is synced first: one more transaction to confirm
+        chain.onVolSync((symbol) => {
+          if (pending !== undefined) dismiss(pending);
+          pending = toast({
+            tone: 'pending',
+            title: `Syncing the vol of ${symbol}`,
+            description: `Its vol estimate is behind the feed, so the chain refuses "${label}" until it is synced. Anyone may send the sync: confirm it in your wallet, then the transaction follows.`,
+          });
+        });
         const value = await f(chain);
         dismiss(pending);
         const hash = hashOf(value);
@@ -75,6 +84,7 @@ export function useLiveTx() {
         toast({ tone: 'refused', title: refusal ? `Refused on chain: ${refusal.code}` : `${label} failed`, description: refusal?.message ?? error });
         return { ok: false, refusal, error };
       } finally {
+        chain.onVolSync(undefined);
         setBusy(false);
       }
     },

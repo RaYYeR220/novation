@@ -210,3 +210,38 @@ test.describe('live mode on a mocked RPC', () => {
     await expect(page.getByRole('heading', { name: /USDG equity/ })).toContainText('2,001.50');
   });
 });
+
+test.describe('live mode over a weekend', () => {
+  test('the NVDA vaults are closed: no quotes, deposits or instant exits, while a redemption request still queues', async ({ page }) => {
+    await mockChain(page, { closed: 'WEEKEND' });
+    await injectWallet(page, MOCK_OWNER);
+    await open(page, '/app/earn?data=live');
+    await connect(page);
+    const rows = page.getByRole('list', { name: 'Vaults' }).getByRole('button');
+    const nvda = rows.filter({ hasText: 'Covered call on NVDA' });
+    await expect(nvda).toContainText('Closed');
+    await expect(nvda).toContainText('for the weekend');
+    await expect(rows.filter({ hasText: 'Covered call on TSLA' })).not.toContainText('Closed');
+
+    await expect(page.getByRole('heading', { level: 2, name: 'Novation Covered Call NVDA' })).toBeVisible();
+    const banner = page.locator('#vault-detail p[data-state="vault-closed"]');
+    await expect(banner).toContainText('Closed for the weekend. No quotes, sales, buy-backs, deposits, exits or roll payouts');
+    await expect(banner).toContainText('A redemption request still queues.');
+    await expect(page.getByRole('button', { name: 'Deposit NVDA' })).toBeDisabled();
+
+    await page.getByRole('button', { name: 'Withdraw', exact: true }).click();
+    const w = page.getByRole('dialog', { name: 'Withdraw from nccNVDA' });
+    await expect(w.locator('[data-state="vault-closed"]')).toContainText('Closed for the weekend');
+    await expect(w.getByRole('button', { name: 'Withdraw' })).toBeDisabled();
+    await w.getByText('Request redemption', { exact: true }).click();
+    await w.getByLabel('Amount').fill('1');
+    await expect(w.getByRole('button', { name: 'Request redemption' })).toBeEnabled();
+    await w.getByRole('button', { name: 'Cancel' }).click();
+
+    // trade: the vault side of the NVDA chain is empty, and the ticket says why
+    await page.getByRole('navigation', { name: 'App sections' }).first().getByRole('link', { name: 'Trade' }).click();
+    await expect(page.locator('[data-state="vault-closed"]').first()).toContainText('NVDA vaults closed for the weekend.');
+    await page.getByRole('button', { name: 'Buy NVDA 245 call: no ask quoted' }).click();
+    await expect(page.getByText('The NVDA covered-call vault is closed for the weekend', { exact: false })).toBeVisible();
+  });
+});

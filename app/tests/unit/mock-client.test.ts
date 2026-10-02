@@ -163,3 +163,33 @@ describe('MockClient', () => {
     expect(feed.numbers).toEqual(wi.numbers);
   });
 });
+
+describe('MockClient sessions', () => {
+  const NVDA_CALLS = '0xa100000000000000000000000000000000000000';
+  const TSLA_CALLS = '0xa300000000000000000000000000000000000000';
+
+  it('reports each vault in its underlying session: the fixtures trade in the regular one', async () => {
+    const vs = await c.vaults();
+    expect(vs.every((v) => v.session === 'REGULAR' && v.live)).toBe(true);
+    expect((await c.vault(NVDA_CALLS)).session).toBe('REGULAR');
+  });
+
+  it('closes the vaults of an underlying in a weekend or holiday session, the way isLive does', async () => {
+    for (const session of ['WEEKEND', 'HOLIDAY'] as const) {
+      const m = new MockClient({ sessions: { NVDA: session } });
+      expect((await m.underlyings()).find((u) => u.symbol === 'NVDA')?.session).toBe(session);
+      const vs = await m.vaults();
+      const nvda = vs.filter((v) => v.underlying === 'NVDA');
+      expect(nvda).toHaveLength(2);
+      expect(nvda.every((v) => v.session === session && !v.live)).toBe(true);
+      expect(vs.find((v) => v.address === TSLA_CALLS)).toMatchObject({ session: 'REGULAR', live: true });
+      expect(await m.vault(NVDA_CALLS)).toMatchObject({ session, live: false });
+    }
+  });
+
+  it('a halted underlying is not live either, but not closed', async () => {
+    const m = new MockClient({ sessions: { TSLA: 'HALTED' } });
+    expect((await m.underlyings()).find((u) => u.symbol === 'TSLA')).toMatchObject({ session: 'HALTED', halted: true });
+    expect(await m.vault(TSLA_CALLS)).toMatchObject({ session: 'HALTED', live: false });
+  });
+});

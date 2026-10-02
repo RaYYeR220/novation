@@ -7,7 +7,7 @@ import { useLiveTx } from '@/components/app/live-tx';
 import { Page, SectionHead } from '@/components/app/section-head';
 import { NavChart, NavSparkline, type NavMark } from '@/components/charts/nav-chart';
 import { Button } from '@/components/ui/button';
-import { Chip } from '@/components/ui/chip';
+import { Chip, SESSION_LAMP } from '@/components/ui/chip';
 import { DataTable, type Column } from '@/components/ui/data-table';
 import { Lamp } from '@/components/ui/lamp';
 import { Panel } from '@/components/ui/panel';
@@ -18,6 +18,7 @@ import type { Vault, VaultDetail, VaultEpoch, VaultHolding } from '@/lib/client/
 import { cn } from '@/lib/cn';
 import { fmtAddress, fmtDuration, fmtExpiry, fmtNumber, fmtPct, fmtQty, fmtSigned } from '@/lib/format';
 import { fmtCloseEt, fmtEt } from '@/lib/nyse';
+import { closedFor, closedSession, vaultClosedText } from '@/lib/market-state';
 import { DepositDialog, WithdrawDialog, fmtExit, settlementWaitText } from './vault-dialogs';
 
 const STRATEGY = { coveredCall: 'Covered call', putWrite: 'Put write' } as const;
@@ -27,6 +28,7 @@ function ruleLine(v: Pick<Vault, 'kind' | 'underlying'>) {
 }
 
 function VaultRow({ v, history, selected, onSelect }: { v: Vault; history?: VaultDetail['navHistory']; selected: boolean; onSelect: () => void }) {
+  const closed = closedSession(v.session);
   return (
     <li>
       <button
@@ -71,7 +73,14 @@ function VaultRow({ v, history, selected, onSelect }: { v: Vault; history?: Vaul
           <span className="text-t15 font-medium tabular-nums text-navy-50">{v.epoch}</span>
         </span>
         <span>
-          {v.live ? (
+          {closed ? (
+            <span data-state="vault-closed" className="grid justify-items-start gap-0.5">
+              <Chip size="sm" lamp={SESSION_LAMP[closed].tone} lampState={SESSION_LAMP[closed].state}>
+                Closed
+              </Chip>
+              <span className="text-t12 text-navy-200">for {closedFor(closed)}</span>
+            </span>
+          ) : v.live ? (
             <Chip size="sm" lamp="cyan">
               Live
             </Chip>
@@ -151,6 +160,7 @@ function Rules({ v }: { v: VaultDetail }) {
       ? `Premium sits as USDG in the vault's account and counts in NAV. Exits are paid in kind: your share of that USDG in USDG, the rest in ${v.underlying}, up to the unlocked tokens.`
       : 'Premium and cash stay in the vault’s account; exits pay USDG up to the unlocked cash.',
     'While the vault holds an expired series not yet settled into its account, deposits and instant exits wait for the roll that settles it; a redemption request still queues.',
+    'Closed over weekends and NYSE holidays, while the price is the last close: no quotes, sales, buy-backs, deposits, exits or roll payouts until 20:00 ET on the eve of the next trading day. A redemption request still queues.',
   ];
   return (
     <ul className="grid gap-s2 text-t15 text-pretty text-navy-200">
@@ -230,9 +240,13 @@ function VaultDetailView({ address }: { address: string }) {
   const cooling = holding ? asOf < holding.lastReceive + v.cooldown : false;
   const spot = v.navHistory.at(-1)?.spot ?? underlyings.data?.find((u) => u.symbol === v.underlying)?.spot ?? 0;
   const value = holding ? holding.shares * v.navPerShare : 0;
+  const closed = closedSession(v.session);
+  // a closed vault is not live, whatever its price says
+  const trading = v.live || Boolean(closed);
   const checks = [
-    { ok: v.live, text: `${v.underlying} price readable, inside its band and fresh for the session` },
-    { ok: v.live, text: `${v.underlying} not halted` },
+    { ok: !closed, text: `Market open: ${v.underlying} is not in a weekend or holiday session` },
+    { ok: trading, text: `${v.underlying} price readable, inside its band and fresh for the session` },
+    { ok: trading, text: `${v.underlying} not halted` },
     { ok: true, text: 'Mark vol updated within 2 days' },
     { ok: true, text: 'No deficit owed by the vault' },
     { ok: !v.settlementWait, text: 'No expired series waiting to settle into the vault' },
@@ -252,6 +266,14 @@ function VaultDetailView({ address }: { address: string }) {
           <p className="text-t15 text-navy-200">
             Epoch {v.epoch}: sells the {fmtCloseEt(v.nextRoll)} expiry. The roll after it pays the redemption queue.
           </p>
+          {closed && (
+            <p role="status" data-state="vault-closed" className="flex max-w-[72ch] items-start gap-s2 text-t13 text-pretty text-navy-200">
+              <Lamp tone={SESSION_LAMP[closed].tone} state={SESSION_LAMP[closed].state} size={6} className="mt-[6px]" />
+              <span>
+                <span className="font-semibold text-navy-50">Closed for {closedFor(closed)}.</span> {vaultClosedText(asOf)}
+              </span>
+            </p>
+          )}
           {wait && (
             <p role="status" data-state="settlement-wait" className="flex max-w-[72ch] items-start gap-s2 text-t13 text-pretty text-navy-200">
               <Lamp tone="loss-1" size={6} className="mt-[6px]" />
@@ -265,7 +287,7 @@ function VaultDetailView({ address }: { address: string }) {
           <Button variant="secondary" onClick={() => setWithdraw(true)}>
             Withdraw
           </Button>
-          <Button variant="primary" lamp onClick={() => setDeposit(true)} disabled={!v.live || Boolean(v.settlementWait)}>
+          <Button variant="primary" lamp onClick={() => setDeposit(true)} disabled={!v.live || Boolean(closed) || Boolean(v.settlementWait)}>
             Deposit {v.asset}
           </Button>
         </div>
@@ -341,7 +363,9 @@ function VaultDetailView({ address }: { address: string }) {
                 <Lamp tone={cooling ? 'loss-1' : 'navy-200'} size={6} className="mt-[6px]" />
                 {cooling
                   ? `Exit cooldown: your shares arrived ${fmtEt(holding.lastReceive)}; withdrawals and redemption requests open ${fmtEt(holding.lastReceive + v.cooldown)}, ${fmtDuration(holding.lastReceive + v.cooldown - asOf)} from now.`
-                  : 'Past the one-hour exit cooldown: you can withdraw or queue a redemption.'}
+                  : closed
+                    ? `Past the one-hour exit cooldown: you can queue a redemption now; instant withdrawals wait while the vault is closed for ${closedFor(closed)}.`
+                    : 'Past the one-hour exit cooldown: you can withdraw or queue a redemption.'}
               </p>
             ) : (
               <p className="text-t13 text-navy-200">
