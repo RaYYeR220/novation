@@ -1,5 +1,17 @@
 {
   "chainId": 4663,
+  "kernel": {
+    "address": "0x6d07e246eb757A1F97E3cdB7d1881ee5De27ceaA",
+    "type": "stylus",
+    "codehash": "0xa34c0177edcade5da15ac0fe4aeddb59161e76165303686f66a9eeaed27a5c8d",
+    "wasmSha256": "ed1fdde1c826c81c39ef6e4e72336c24f098ef581346691e7b7d735bb2487096",
+    "status": "deployed, not activated",
+    "createTx": "0x154dd53142d61126f6f9ca7a2c0cbc0322470853bf259d5628c26ba934706d61",
+    "createBlock": 78500826,
+    "createGasUsed": 5261543,
+    "activation": "rejected at submission with \"Transaction rejected by chain policy\" on 2026-10-02 around 20:00 UTC, during the Arbitrum Security Council's emergency pause of new Stylus activations announced that day; ArbWasm.programVersion reverts ProgramNotActivated()"
+  },
+  "note": "No core contract is deployed on Robinhood Chain mainnet. The tokens and Chainlink proxies below are the real mainnet ones, verified on chain; the core deploy reads them from this file.",
   "tokens": {
     "USDG": "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
     "NVDA": "0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC",

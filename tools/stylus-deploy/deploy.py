@@ -2,6 +2,7 @@
 
   python deploy.py --check-size kernel.wasm
   python deploy.py --deploy kernel.wasm --rpc $RH_TESTNET_RPC [--key-name kernel]
+  python deploy.py --activate 0xPROGRAM --rpc $RH_MAINNET_RPC [--dry-run]   # a program already deployed
 
 Steps (stylus-tools 0.10.9): wasm-tools roundtrip + strip, brotli q11 lgwin22, 0xEFF00000 prefix,
 init code prelude, free dry-run of ArbWasm.activateProgram, CREATE, activateProgram with fee*1.2.
@@ -164,6 +165,53 @@ def deploy(src, url, fallback_fee=None, activate_gas=None):
     print("kernel", addr)
 
 
+def activate(addr, url, fallback_fee=None, activate_gas=None, dry_run=False):
+    """Activates a program that is already deployed (its CREATE went through, its activation didn't).
+    Does nothing if ArbWasm already reports a version for it. On success, marks the kernel recorded
+    in contracts/deployments/<chainId>.json as activated."""
+    load_env()
+    addr = to_checksum_address(addr)
+    arg = encode(["address"], [addr])
+    try:
+        out = rpc(url, "eth_call", [{"to": ARBWASM, "data": "0x" + (keccak(text="programVersion(address)")[:4] + arg).hex()},
+                                    "latest"])
+        print(f"{addr} is already active: version {decode(['uint16'], bytes.fromhex(out[2:]))[0]}")
+        return
+    except RuntimeError:
+        pass  # ProgramNotActivated
+    key = os.environ.get("DEPLOYER_PRIVATE_KEY")
+    if not key:
+        sys.exit("DEPLOYER_PRIVATE_KEY not set")
+    acct = Account.from_key(key)
+    data = "0x" + (keccak(text="activateProgram(address)")[:4] + arg).hex()
+    try:
+        dry = rpc(url, "eth_call", [{"from": acct.address, "to": ARBWASM, "data": data, "value": hex(10**18)},
+                                    "latest", {acct.address: {"balance": hex(2**200)}}])
+        ver, fee = decode(["uint16", "uint256"], bytes.fromhex(dry[2:]))
+        print(f"dry-run activation OK: version {ver}, dataFee {fee} wei")
+    except RuntimeError as e:
+        if not fallback_fee:
+            raise
+        print(f"dry-run refused ({e}); would send {fallback_fee} wei, the excess is refunded")
+        fee = int(fallback_fee / 1.2)
+    value = int(fee * 1.2)
+    if dry_run:
+        print(f"dry run: activateProgram({addr}) with {value} wei; nothing sent")
+        return
+    h, rc, used, _ = send(url, acct, ARBWASM, data, value=value, gas=activate_gas)
+    print(f"activate tx {h} gasUsed {used}")
+    chain_id = int(rpc(url, "eth_chainId", []), 16)
+    path = os.path.join(ROOT, "contracts", "deployments", f"{chain_id}.json")
+    dep = json.load(open(path)) if os.path.exists(path) else {"chainId": chain_id}
+    k = dep.get("kernel") or {}
+    if k.get("address", "").lower() == addr.lower():
+        k["status"] = "deployed, activated"
+        k["activateTx"] = h
+        dep["kernel"] = k
+        json.dump(dep, open(path, "w"), indent=2)
+        print("wrote", path)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--check-size", metavar="WASM")
@@ -171,9 +219,15 @@ def main():
     ap.add_argument("--rpc")
     ap.add_argument("--fallback-fee-wei", type=int, help="activation value if the RPC refuses the eth_call dry-run")
     ap.add_argument("--activate-gas", type=int, help="manual gas limit for activateProgram")
+    ap.add_argument("--activate", metavar="ADDRESS", help="activate a program that is already deployed")
+    ap.add_argument("--dry-run", action="store_true", help="with --activate: check and price it, send nothing")
     a = ap.parse_args()
     if a.check_size:
         check_size(a.check_size)
+    elif a.activate:
+        if not a.rpc:
+            sys.exit("--rpc required")
+        activate(a.activate, a.rpc, a.fallback_fee_wei, a.activate_gas, a.dry_run)
     elif a.deploy:
         if not a.rpc:
             sys.exit("--rpc required")
