@@ -10,7 +10,10 @@
  *    (ii) the hint is still the latest round and now is strictly after the expiry; (iii) the
  *    hint is the last round of its phase and round 1 of the next phase printed after the expiry;
  *  - otherwise, 72 hours after the expiry, the fallback: the first round printed after the expiry,
- *    accepted when its predecessor is stale or outside the band.
+ *    accepted when its predecessor is stale or outside the band;
+ *  - and when no in-band round has printed after the expiry (a dead feed, or an implausible first
+ *    print), 7 days after it the last resort: the last pre-close round, proven last as above but
+ *    without the lag bound, if it is in the band (settlementPriceLastResort).
  */
 export interface Round {
   id: bigint;
@@ -25,12 +28,12 @@ export interface RoundReader {
   round(id: bigint): Promise<Round>;
 }
 
-export type Proof = 'nextRound' | 'latestRound' | 'phaseChange' | 'fallback';
+export type Proof = 'nextRound' | 'latestRound' | 'phaseChange' | 'fallback' | 'lastResort';
 
 export type HintResult =
   | {
       kind: 'ready';
-      method: 'settleExpiry' | 'settleExpiryFallback';
+      method: 'settleExpiry' | 'settleExpiryFallback' | 'settleExpiryLastResort';
       /** The round id to pass: the pre-close round, or for the fallback the first post-close one. */
       hint: bigint;
       proof: Proof;
@@ -53,6 +56,8 @@ export interface HintOptions {
   decimals?: number;
   /** MarketDataHub's FALLBACK_DELAY (72 h). */
   fallbackDelay?: number;
+  /** MarketDataHub's LAST_RESORT_DELAY (7 days). */
+  lastResortDelay?: number;
   /** Aggregator phases walked back from the latest (default 8). */
   maxPhases?: number;
   /** Rounds read for one hint before giving up (default 1000). */
@@ -62,6 +67,7 @@ export interface HintOptions {
 const MASK = (1n << 64n) - 1n;
 const MAX_ROUND_SEARCH = 1n << 40n;
 export const FALLBACK_DELAY = 72 * 3600;
+export const LAST_RESORT_DELAY = 7 * 86400;
 
 export const phaseOf = (id: bigint) => id >> 64n;
 export const numberOf = (id: bigint) => id & MASK;
@@ -199,11 +205,20 @@ async function search(r: Counting, expiry: number, now: number, o: HintOptions):
     return { kind: 'ready', method: 'settleExpiry', hint: found.id, proof, round: found, ...(next ? { next } : {}), reads: r.reads };
   }
 
-  // the pre-close print is stale or implausible: only the fallback, 72 h after the close
+  // the pre-close print is stale or implausible: the fallback 72 h after the close, at the first
+  // post-close print if it is in the band; failing that, the last resort 7 days after the close,
+  // at the pre-close print if that one is in the band
   const reason = !lagOk ? 'last pre-close round is older than maxSettlementLag' : 'last pre-close round is outside the band';
-  if (!next) return { kind: 'wait', reason: `${reason}; the fallback needs a round printed after the expiry`, round: found, reads: r.reads };
-  const opensAt = expiry + (o.fallbackDelay ?? FALLBACK_DELAY);
-  if (now < opensAt) return { kind: 'wait', reason: `${reason}; the fallback opens 72 h after the expiry`, until: opensAt, round: found, reads: r.reads };
-  if (!inBand(next.answer, o)) return { kind: 'stuck', reason: `${reason}, and the first post-close round is outside the band too`, round: found, reads: r.reads };
-  return { kind: 'ready', method: 'settleExpiryFallback', hint: next.id, proof: 'fallback', round: next, next, reads: r.reads };
+  if (next && inBand(next.answer, o)) {
+    const opensAt = expiry + (o.fallbackDelay ?? FALLBACK_DELAY);
+    if (now < opensAt) return { kind: 'wait', reason: `${reason}; the fallback opens 72 h after the expiry`, until: opensAt, round: found, reads: r.reads };
+    return { kind: 'ready', method: 'settleExpiryFallback', hint: next.id, proof: 'fallback', round: next, next, reads: r.reads };
+  }
+  const after = next ? 'the first post-close round is outside the band' : 'nothing has printed after the expiry';
+  if (found.answer <= 0n || !inBand(found.answer, o)) {
+    return { kind: next ? 'stuck' : 'wait', reason: `${reason}, and ${after}`, round: found, reads: r.reads };
+  }
+  const lastResortAt = expiry + (o.lastResortDelay ?? LAST_RESORT_DELAY);
+  if (now < lastResortAt) return { kind: 'wait', reason: `${reason}, and ${after}; the last resort opens 7 days after the expiry`, until: lastResortAt, round: found, reads: r.reads };
+  return { kind: 'ready', method: 'settleExpiryLastResort', hint: found.id, proof: 'lastResort', round: found, ...(next ? { next } : {}), reads: r.reads };
 }

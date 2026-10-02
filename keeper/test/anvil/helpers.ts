@@ -89,6 +89,13 @@ export function nextTradable(ts: number): number {
   throw new Error('no tradable session within 8 days');
 }
 
+/** A moment inside the next weekend after `ts`: the first WEEKEND hour, plus twelve. */
+export function nextWeekend(ts: number): number {
+  let t = ts;
+  for (let i = 0; i < 24 * 8; i++, t += 3600) if (baseSession(t) === 'WEEKEND') return t + 12 * 3600;
+  throw new Error('no weekend within 8 days');
+}
+
 export interface Actor {
   account: PrivateKeyAccount;
   wallet: WalletClient;

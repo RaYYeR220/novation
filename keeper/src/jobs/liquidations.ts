@@ -1,14 +1,25 @@
 import {
   auctionHouseAbi,
   fromWad,
-  getAccountState,
   getCash,
-  getCollateral,
+  getClaimable,
+  getClaimExpiries,
+  getLiquidationState,
+  getPool,
+  getUnderlyingParams,
+  getUnderlyingsOf,
+  getVolState,
+  simulateClaim,
+  simulateEndDeficitSale,
+  simulateEndLiquidation,
+  simulateSyncAndRebaseVol,
+  simulateSyncVol,
+  simulateVaultRoll,
+    getCollateral,
   getDeficit,
   getDeficitSale,
   getGlobals,
   getLiquidation,
-  getPositionStatus,
   getSocializedDebt,
   getSpot,
   getSubaccountsOf,
@@ -18,11 +29,74 @@ import {
   symbolOf,
   WAD,
 } from '@novation/sdk';
-import { chainNow, execute, why, type Keeper } from '../keeper';
+import { phaseOf } from '../hint';
+import { chainNow, execute, feedReader, why, type Keeper } from '../keeper';
 import { depositUsdg } from '../setup';
 import { repayIfCovered } from './deficit';
 
 const JOB = 'liquidation';
+
+/** Claim expiries a liquidation bid may move: each side holds at most this many (Types.sol). */
+export const MAX_CLAIM_EXPIRIES = 16;
+/** Feed rounds a liquidation folds into each underlying's vol itself; a longer backlog needs a syncVol first. */
+export const LIQUIDATION_VOL_ROUNDS = 8n;
+
+/**
+ * Which of an account's claim expiries to claim before a bid (the ready ones: claim is
+ * permissionless and empties them), how many are left, and whether that is still more than a bid
+ * may move (the bid would revert TooManyClaimExpiries).
+ */
+export function claimPlan(expiries: readonly number[], ready: (expiry: number) => boolean, cap = MAX_CLAIM_EXPIRIES): { claim: number[]; left: number; over: boolean } {
+  const claim = expiries.filter(ready);
+  const left = expiries.length - claim.length;
+  return { claim, left, over: left > cap };
+}
+
+/**
+ * Claims the account's ready claims (its pool has no unsettled short and nothing pending), a
+ * vault's through its roll, so its claim expiries shrink before a bid moves them. True when the
+ * account then fits the cap; when blocked claims alone keep it over, the bid would revert and is
+ * skipped.
+ */
+async function trimClaims(k: Keeper, id: bigint): Promise<boolean> {
+  const expiries = await getClaimExpiries(k.ctx, id);
+  if (expiries.length <= MAX_CLAIM_EXPIRIES) return true;
+  const ready = new Set<number>();
+  for (const e of expiries) {
+    const pool = await getPool(k.ctx, e);
+    if (pool.unsettledShortQty === 0n && pool.pending === 0n && (await getClaimable(k.ctx, id, e)) > 0n) ready.add(e);
+  }
+  const plan = claimPlan(expiries, (e) => ready.has(e));
+  const vault = k.state.vaultIds.get(id);
+  for (const e of plan.claim) {
+    if (vault) await execute(k, JOB, `roll vault ${id} ${e} (claim)`, () => simulateVaultRoll(k.ctx, k.account, vault, [e]), { id, expiry: e });
+    else await execute(k, JOB, `claim ${id} ${e}`, () => simulateClaim(k.ctx, k.account, id, e), { id, expiry: e, reason: 'trim claim expiries before a bid' });
+  }
+  const left = (await getClaimExpiries(k.ctx, id)).length;
+  if (left > MAX_CLAIM_EXPIRIES) {
+    k.log('info', JOB, 'skip', { id, label: 'bidLiquidation', reason: `claims on ${left} expiries, more than a bid may move (${MAX_CLAIM_EXPIRIES}), and the rest are not ready` });
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Brings the vol of every underlying of the account within LIQUIDATION_VOL_ROUNDS of its feed, so
+ * starting or bidding in its liquidation doesn't revert VolNotCurrent: syncVol for a longer
+ * backlog, syncAndRebaseVol after an aggregator migration. Not rate-limited: a liquidation needs it.
+ */
+async function catchUpVol(k: Keeper, id: bigint): Promise<void> {
+  for (const u of await getUnderlyingsOf(k.ctx, id)) {
+    const [vol, p] = await Promise.all([getVolState(k.ctx, u), getUnderlyingParams(k.ctx, u)]);
+    const latest = await feedReader(k, p.feed).latest();
+    const sym = symbolOf(k.ctx.deployment, u) ?? u;
+    if (phaseOf(latest.id) > phaseOf(vol.lastRoundId)) {
+      await execute(k, JOB, `syncAndRebaseVol ${sym}`, () => simulateSyncAndRebaseVol(k.ctx, k.account, u), { id, underlying: sym });
+    } else if (latest.id - vol.lastRoundId > LIQUIDATION_VOL_ROUNDS) {
+      await execute(k, JOB, `syncVol ${sym}`, () => simulateSyncVol(k.ctx, k.account, u), { id, underlying: sym, behind: latest.id - vol.lastRoundId });
+    }
+  }
+}
 
 const min = (a: bigint, b: bigint) => (a < b ? a : b);
 
@@ -64,6 +138,17 @@ async function owedOn(k: Keeper, id: bigint, expiry: number): Promise<bigint> {
   return d.bridged + d.pending + social;
 }
 
+/**
+ * A repaid deficit sale (by a bid, or the account's own cash through repayDeficit) that is still
+ * open is ended, so a later deficit on the same expiry starts a fresh ramp instead of reusing the
+ * old start at maxDiscount (endDeficitSale is permissionless). True once no sale is open.
+ */
+async function closeSale(k: Keeper, id: bigint, expiry: number): Promise<boolean> {
+  if (!(await getDeficitSale(k.ctx, id, expiry)).active) return true;
+  const rec = await execute(k, JOB, `endDeficitSale ${id} ${expiry}`, () => simulateEndDeficitSale(k.ctx, k.account, id, expiry), { id, expiry });
+  return rec?.status === 'success';
+}
+
 /** owedOn net of the account's cash. */
 async function stillOwed(k: Keeper, id: bigint, expiry: number): Promise<bigint> {
   const [owed, cash] = await Promise.all([owedOn(k, id, expiry), getCash(k.ctx, id)]);
@@ -75,7 +160,9 @@ async function stillOwed(k: Keeper, id: bigint, expiry: number): Promise<bigint>
  * started (startLiquidation is permissionless; the auction house refuses it outside a REGULAR or
  * EXTENDED session). A restart without a successful keeper bid since the last start waits
  * restartBackoffSec per account (shouldStart), so an account nobody takes over doesn't cost a start
- * every 30 min.
+ * every 30 min. A start or bid reverts VolNotCurrent when an underlying's vol is more than 8 feed
+ * rounds behind, so the keeper syncs those first (catchUpVol). An auction left running on an
+ * account that recovered is ended (endLiquidation).
  *
  * Bidding is opt-in (`bid`) and capped: at most bidBudget per bid and bidExposureCap over the life
  * of the process, from the keeper's own funded subaccount. A bid goes in as soon as the auction
@@ -85,7 +172,11 @@ async function stillOwed(k: Keeper, id: bigint, expiry: number): Promise<bigint>
  * sized to what the deficit still needs; a sliver below dustSweep that the discount ramp leaves is
  * paid in and applied with repayDeficit, so dust doesn't keep the account blocked. Cash that already
  * covers a deficit (a deposit, a claim) is applied with repayDeficit before the sale is dropped;
- * repays are gated by shouldRepay (backoff after one that changed nothing, reserve on repeats).
+ * repays are gated by shouldRepay (backoff after one that changed nothing, reserve on repeats). A
+ * repaid sale that is still open is ended (endDeficitSale). Before a bid, the ready claims of the
+ * account and of the bidder are claimed, since a bid can't leave either holding claims on more
+ * than MAX_CLAIM_EXPIRIES expiries (it reverts TooManyClaimExpiries); still over with blocked
+ * claims only, the bid is skipped.
  */
 export async function liquidations(k: Keeper): Promise<void> {
   const { ctx } = k;
@@ -93,8 +184,21 @@ export async function liquidations(k: Keeper): Promise<void> {
   const now = await chainNow(k);
 
   for (const id of k.state.accounts) {
-    const [st, ps] = await Promise.all([getAccountState(ctx, id), getPositionStatus(ctx, id)]);
-    if (!st.liquidatable || ps.live === 0n || ps.awaiting !== 0n) continue;
+    const { state: st, live, awaiting } = await getLiquidationState(ctx, id);
+    if (!st.liquidatable) {
+      // an auction left running on an account that recovered: end it, so a later fall starts a
+      // fresh ramp (endLiquidation is permissionless and needs no open market)
+      if (k.state.liquidating.has(id)) {
+        const startedAt = await k.client.readContract({ address: ctx.deployment.auctionHouse, abi: auctionHouseAbi, functionName: 'liquidationStartedAt', args: [id] });
+        if (startedAt === 0n) k.state.liquidating.delete(id);
+        else {
+          const rec = await execute(k, JOB, `endLiquidation ${id}`, () => simulateEndLiquidation(ctx, k.account, id), { id, equity: fromWad(st.equity), mm: fromWad(st.mm) });
+          if (rec?.status === 'success') k.state.liquidating.delete(id);
+        }
+      }
+      continue;
+    }
+    if (live === 0n || awaiting !== 0n) continue;
     const base = { id, equity: fromWad(st.equity), mm: fromWad(st.mm), im: fromWad(st.im) };
     const can = await biddable(k);
     let lq = await getLiquidation(ctx, id);
@@ -104,9 +208,11 @@ export async function liquidations(k: Keeper): Promise<void> {
         k.log('debug', JOB, 'backoff', { ...base, reason: 'no keeper bid went through since the last start', lastStart: last });
         continue;
       }
+      await catchUpVol(k, id);
       const rec = await execute(k, JOB, `startLiquidation ${id}`, () => simulateStartLiquidation(ctx, k.account, id), base);
       if (rec?.status !== 'success') continue;
       k.state.lastStart.set(id, now);
+      k.state.liquidating.add(id);
       lq = await getLiquidation(ctx, id);
     }
     if ('reason' in can) {
@@ -114,6 +220,10 @@ export async function liquidations(k: Keeper): Promise<void> {
       continue;
     }
     if (can.id === id) continue;
+    // a bid moves the account's unpaid claims to the bidder: neither may end up holding claims on
+    // more than MAX_CLAIM_EXPIRIES expiries, so the ready ones are claimed first
+    if (!(await trimClaims(k, id)) || !(await trimClaims(k, can.id))) continue;
+    await catchUpVol(k, id);
     let fraction = st.equity <= g.dustEquity ? WAD : g.maxFractionPerBid;
     for (let attempt = 0; attempt < 4; attempt++) {
       let sim: Awaited<ReturnType<typeof simulateBidLiquidation>>;
@@ -149,12 +259,13 @@ export async function liquidations(k: Keeper): Promise<void> {
     const expiry = Number(eS);
     const owed = await owedOn(k, id, expiry);
     if (owed === 0n) {
-      k.state.deficitSales.delete(key);
+      if (await closeSale(k, id, expiry)) k.state.deficitSales.delete(key);
       continue;
     }
     // cash that already covers the debt (a deposit, a claim) only counts once it is applied
     if ((await getCash(ctx, id)) >= owed) {
-      if ((await repayIfCovered(k, JOB, id)) || (await owedOn(k, id, expiry)) === 0n) k.state.deficitSales.delete(key);
+      await repayIfCovered(k, JOB, id);
+      if ((await owedOn(k, id, expiry)) === 0n && (await closeSale(k, id, expiry))) k.state.deficitSales.delete(key);
       continue;
     }
     const sale = await getDeficitSale(ctx, id, expiry);
@@ -219,7 +330,8 @@ export async function liquidations(k: Keeper): Promise<void> {
       const dep = await depositUsdg(k, JOB, id, need);
       if (dep?.status === 'success') {
         k.state.committed += need;
-        if ((await repayIfCovered(k, JOB, id)) || (await owedOn(k, id, expiry)) === 0n) k.state.deficitSales.delete(key);
+        await repayIfCovered(k, JOB, id);
+        if ((await owedOn(k, id, expiry)) === 0n && (await closeSale(k, id, expiry))) k.state.deficitSales.delete(key);
       }
     }
   }

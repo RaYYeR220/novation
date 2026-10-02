@@ -12,7 +12,7 @@ export { syncVol } from './jobs/syncVol';
 export { listSeries } from './jobs/listSeries';
 export { claim } from './jobs/claim';
 export { roll } from './jobs/roll';
-export { liquidations, bidderOf, shouldStart } from './jobs/liquidations';
+export { liquidations, bidderOf, shouldStart, claimPlan, MAX_CLAIM_EXPIRIES, LIQUIDATION_VOL_ROUNDS } from './jobs/liquidations';
 export { repayIfCovered, shouldRepay } from './jobs/deficit';
 export { openDemoPosition, type DemoResult } from './demo';
 export * from './env';

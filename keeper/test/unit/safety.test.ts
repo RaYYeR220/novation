@@ -6,7 +6,7 @@ import { createKeeper, DEFAULT_OPTIONS, isTestChain, MAX_TX_GAS, padGas } from '
 import { deriveKeeperKey, keeperKeyFromEnv } from '../../src/keys';
 import { openDemoPosition } from '../../src/demo';
 import { shouldRepay } from '../../src/jobs/deficit';
-import { shouldStart } from '../../src/jobs/liquidations';
+import { claimPlan, MAX_CLAIM_EXPIRIES, shouldStart } from '../../src/jobs/liquidations';
 import { findHint, packRound, type Round, type RoundReader } from '../../src/hint';
 
 /** anvil's account 9 (public test mnemonic): stands in for a deployer key. */
@@ -131,5 +131,22 @@ describe('repay and restart gates', () => {
     expect(shouldStart({ ...b, lastStart: 48_000, lastBidOk: 47_000 })).toBe(false);
     expect(shouldStart({ ...b, lastStart: 48_000, lastBidOk: 48_000 })).toBe(true);
     expect(shouldStart({ ...b, lastStart: 50_000 - 21_600 })).toBe(true);
+  });
+});
+
+describe('claim expiries before a liquidation bid', () => {
+  const expiries = Array.from({ length: 20 }, (_, i) => 1_790_971_200 + i * 604_800);
+
+  it('claims the ready ones so a bid can move the rest', () => {
+    const ready = new Set(expiries.slice(0, 5));
+    const plan = claimPlan(expiries, (e) => ready.has(e));
+    expect(plan).toEqual({ claim: expiries.slice(0, 5), left: 15, over: false });
+  });
+
+  it('skips the bid when blocked claims alone keep the account over the cap', () => {
+    const ready = new Set(expiries.slice(0, 3));
+    expect(claimPlan(expiries, (e) => ready.has(e))).toMatchObject({ left: 17, over: true });
+    expect(claimPlan(expiries.slice(0, MAX_CLAIM_EXPIRIES), () => false)).toMatchObject({ claim: [], left: 16, over: false });
+    expect(MAX_CLAIM_EXPIRIES).toBe(16);
   });
 });
