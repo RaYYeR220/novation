@@ -82,6 +82,8 @@ contract ClearinghouseInvariantTest is Fixture {
         _target(Handler.vaultRoll.selector, 1);
         _target(Handler.syncVol.selector, 1);
         _target(Handler.syncVolUpTo.selector, 1);
+        _target(Handler.migrateFeed.selector, 1);
+        _target(Handler.syncAndRebaseVol.selector, 1);
         _target(Handler.listSeries.selector, 1);
         _target(Handler.settleExpiry.selector, 1);
         _target(Handler.settleAccounts.selector, 1);
@@ -533,7 +535,7 @@ contract ClearinghouseInvariantTest is Fixture {
     /// and run with -vv; the last run's log holds the totals). The running totals live in
     /// environment variables of the forge process, the only state that survives between runs.
     function _summary() internal {
-        string[36] memory ops = [
+        string[39] memory ops = [
             "deposit",
             "withdraw",
             "withdrawToMargin",
@@ -569,7 +571,10 @@ contract ClearinghouseInvariantTest is Fixture {
             "markUnpriced",
             "markPriced",
             "syncVolUpTo",
-            "endDeficitSale"
+            "endDeficitSale",
+            "volNotCurrent",
+            "migrateFeed",
+            "syncAndRebaseVol"
         ];
         for (uint256 i = 0; i < ops.length; ++i) {
             console2.log(ops[i], _accumulate(ops[i], handler.count(bytes32(bytes(ops[i])))));

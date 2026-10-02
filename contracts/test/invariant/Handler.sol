@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Clearinghouse} from "../../src/core/Clearinghouse.sol";
+import {CHErrors} from "../../src/core/ClearinghouseStorage.sol";
 import {AuctionHouse} from "../../src/core/AuctionHouse.sol";
 import {MarketDataHub} from "../../src/core/MarketDataHub.sol";
 import {SeriesRegistry} from "../../src/core/SeriesRegistry.sol";
@@ -125,6 +126,7 @@ contract Handler is Test {
     mapping(address u => mapping(uint64 e => bool)) public listedOn;
     mapping(address u => Round[]) internal _rounds;
     uint256 internal _nonce;
+    uint16[2] internal _phase; // aggregator migrations per feed (the mock starts in phase 1)
 
     // ---------------------------------------------------------------- ghosts
 
@@ -245,7 +247,11 @@ contract Handler is Test {
         uint256 bal = k == 0 ? ch.cashOf(actorIds[a]) / UNIT : ch.collateralOf(actorIds[a], token);
         if (bal == 0) return;
         vm.prank(actors[a]);
-        ch.withdraw(actorIds[a], token, _bound(amount, 1, bal), actors[a]);
+        try ch.withdraw(actorIds[a], token, _bound(amount, 1, bal), actors[a]) {}
+        catch (bytes memory err) {
+            _volBehindOrRevert(err);
+            return;
+        }
         _noteWithdrawal(actorIds[a]);
         ++count["withdraw"];
     }
@@ -262,7 +268,11 @@ contract Handler is Test {
         uint256 amount = (free < cash ? free : cash) * _bound(fraction, 0.5e18, 0.999e18) / WAD / UNIT;
         if (amount == 0) return;
         vm.prank(actors[a]);
-        ch.withdraw(id, address(usdg), amount, actors[a]);
+        try ch.withdraw(id, address(usdg), amount, actors[a]) {}
+        catch (bytes memory err) {
+            _volBehindOrRevert(err);
+            return;
+        }
         _noteWithdrawal(id);
         ++count["withdrawToMargin"];
     }
@@ -289,7 +299,7 @@ contract Handler is Test {
         uint256 premium = px * qty / WAD;
         int256 tOld = _qtyOf(actorIds[t], sid);
         int256 mOld = _qtyOf(actorIds[m], sid);
-        venue.trade(
+        try venue.trade(
             TradeParams({
                 takerActor: actors[t],
                 makerActor: actors[m],
@@ -299,7 +309,11 @@ contract Handler is Test {
                 qty: sq,
                 premium: premium
             })
-        );
+        ) {}
+        catch (bytes memory err) {
+            _volBehindOrRevert(err);
+            return;
+        }
         _noteSide(actorIds[t], tOld, tOld + sq, address(0));
         _noteSide(actorIds[m], mOld, mOld - sq, address(0));
         ++count["trade"];
@@ -340,7 +354,11 @@ contract Handler is Test {
         int256 tOld = _qtyOf(actorIds[t], sid);
         int256 mOld = _qtyOf(actorIds[m], sid);
         vm.prank(takerActor);
-        rfq.fill(q, abi.encodePacked(r, s, v), actorIds[t], qty);
+        try rfq.fill(q, abi.encodePacked(r, s, v), actorIds[t], qty) {}
+        catch (bytes memory err) {
+            _volBehindOrRevert(err);
+            return;
+        }
         int256 tq = makerSells ? int256(qty) : -int256(qty);
         _noteSide(actorIds[t], tOld, tOld + tq, takerAgent ? takerActor : address(0));
         _noteSide(actorIds[m], mOld, mOld - tq, makerAgent ? q.signer : address(0));
@@ -569,6 +587,30 @@ contract Handler is Test {
             _listAround(uint64(NyseCalendar.nextWeeklyExpiry(e)));
         }
         ++count["warp"];
+    }
+
+    /// @notice Chainlink moves a proxy to a new aggregator (once per feed and run): the
+    /// feed's phase steps up and prints its first round at the current price. Until someone runs
+    /// syncAndRebaseVol the vol estimate can't fold the new phase, so withdrawals and trades priced
+    /// at it are refused (VolNotCurrent, counted) and so are bids.
+    function migrateFeed(uint256 uSeed) external tracked {
+        uint256 k = uSeed % 2;
+        if (_phase[k] != 0) return;
+        uint256 p = _price(k);
+        ++_phase[k];
+        _feeds[k].setPhase(1 + _phase[k]);
+        _push(k, p);
+        ++count["migrateFeed"];
+    }
+
+    /// @notice After a migration: folds the rest of the old phase and rebases the estimate onto
+    /// the new one, which must then be current.
+    function syncAndRebaseVol(uint256 uSeed) external tracked {
+        address u = _us[uSeed % 2];
+        if (hub.syncAndRebaseVol(u) && !hub.volCurrent(u)) {
+            _flag("liveness", "vol not current after syncAndRebaseVol");
+        }
+        ++count["syncAndRebaseVol"];
     }
 
     function syncVol(uint256 uSeed) external tracked {
@@ -856,8 +898,15 @@ contract Handler is Test {
     /// @dev Every underlying's vol folded to the feed's latest round, as a keeper does before it
     /// liquidates (a liquidation folds at most 8 rounds itself).
     function _syncVols() internal {
-        hub.syncVol(_us[0]);
-        hub.syncVol(_us[1]);
+        for (uint256 k = 0; k < 2; ++k) {
+            address u = _us[k];
+            // after an aggregator migration: fold the old phase's rest and rebase (NoPhaseChange
+            // otherwise, which is fine)
+            try hub.syncAndRebaseVol(u) {} catch {}
+            for (uint256 i = 0; i < 4 && !hub.volCurrent(u); ++i) {
+                hub.syncVol(u);
+            }
+        }
     }
 
     /// @dev liquidationState is accountState plus positionStatus from one pass: both must agree.
@@ -910,6 +959,7 @@ contract Handler is Test {
         }
         _push(0, _price(0));
         _push(1, _price(1));
+        _syncVols();
     }
 
     /// @dev The waterfall after settlement for one account: the backstop buys its stock in every
@@ -1094,6 +1144,21 @@ contract Handler is Test {
         if (!opening) return;
         _openers.push(id);
         if (agent != address(0)) _agentSides.push(AgentSide(id, agent));
+    }
+
+    /// @dev A withdrawal or a trade that reverted: one refused because a vol estimate it prices
+    /// at is still behind its feed (VolNotCurrent, the contracts having synced up to 64 rounds
+    /// themselves) is counted and the call ends without effect; any other refusal reverts as is.
+    /// Nothing a refused trade or withdrawal emits before reverting is booked: their tracked events
+    /// (Traded, Withdrawn) come after every check.
+    function _volBehindOrRevert(bytes memory err) internal {
+        if (err.length >= 4 && bytes4(err) == CHErrors.VolNotCurrent.selector) {
+            ++count["volNotCurrent"];
+            return;
+        }
+        assembly ("memory-safe") {
+            revert(add(err, 0x20), mload(err))
+        }
     }
 
     /// @dev An account with positions must still meet IM after a withdrawal.
