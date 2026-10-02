@@ -26,41 +26,110 @@
     "codehash": "0xf46d723e12cd3a13b314d991ac137789fcc7a431d1c664b6448c4b22d7d84e40",
     "wasmSha256": "06466b69755c093658d433239d7284ce208497887e6715ebaf61c00565bb9f27"
   },
-  "timelock": "0xf60F96DF709B2dD958519329b4ab488C27e178b5",
+  "timelock": "0xe3a0D2Dd94607f86d9641571B5fe328a274C4030",
   "guardian": "0x4108064852c95135844be338fc8bcBdF91C41ACF",
-  "riskParams": "0x113AbDCd234d00FfEA37D29A31BD1Fb2B035dcf1",
-  "hub": "0xEcD2baaE3C13b526ffdBB8a8388609442C84d993",
-  "registry": "0x9C99381dE80518350fEaA09db17a064eD2180b7b",
-  "insurance": "0x531394f5a5D0c3D9e54d258c8825Fa70Fd645429",
-  "clearinghouse": "0x0b0F4e67DcA3B846859Af452576e8E09316D1949",
-  "auctionHouse": "0x4a132D6f83d9db88092A3D1F8B5985B30fd99Ad9",
-  "rfq": "0x1aFD874fdd3914fB6958F282769dAC546993ED82",
+  "riskParams": "0x569768651DbB577Dcda4547e9B177f702b6F1D00",
+  "hub": "0x42894B89a9fC7aFe3bD12555CAc20b6695a5ed9C",
+  "registry": "0x079f744c046F7C1fCc43b1Fe5124513637d19dA8",
+  "insurance": "0x295FB7eB9dcE936190567032C72697FaCEAdb96C",
+  "clearinghouse": "0x397dc6b74003172C27297520E98472C5fd168238",
+  "auctionHouse": "0x2775a3feECA95a29141A9d3903b1C8fABa2B4658",
+  "rfq": "0xcD5d78984A2ebe76D7B09C8304E79a078B93D328",
   "vaults": [
     {
-      "address": "0xCCF205358eF9bfd97335f0D7bD5240487bB64865",
+      "address": "0xAC989aF37744FeB96Cad8d553e7321a8b5b1D5d9",
       "type": "coveredCall",
       "underlying": "NVDA"
     },
     {
-      "address": "0xF95EAbF20EE1D9034ABa1b240D0242B75e645BD5",
+      "address": "0x55E624783C129721Bd8735D1E4Ef1E5c06BE708A",
       "type": "coveredCall",
       "underlying": "TSLA"
     },
     {
-      "address": "0x0FEee896be42E954c2881668da9035efc5dB0947",
+      "address": "0xa47A07846902bDB8cE5306C1F851278447f3e237",
       "type": "putWrite",
       "underlying": "NVDA"
     }
   ],
   "libraries": {
-    "AuctionHookLogic": "0x5c3A1bAF3e0554bB703C00723ddb342ce2C82C06",
-    "MarginLogic": "0x36EC877374e7F48b34BB190EB18f629F0067a536",
-    "SettlementLogic": "0x095B3F6BB7B34E14835fa3BC375725B2C74669e7",
-    "TradeLogic": "0xC899560e64267952dc88122651dDF3e40029eA4B",
-    "VaultPricing": "0xe110F03A4C2835A3BAAf69D5A2d1EeB602f31C58"
+    "AuctionHookLogic": "0x27D6Be2eC8980721235916b7d6Ed73aaaD79C6be",
+    "MarginLogic": "0x3e991293bfff1953e9C30ef7B5D2dd28083B234D",
+    "SettlementLogic": "0x943D999897d3833Ea76826AFf894814F82d38fA7",
+    "TradeLogic": "0x53F0e60fa0Ccdd8B4A76a6961fE228498B4F9471",
+    "VaultPricing": "0x47417e1Ac7Ac31F015E06C3Af843A92C6f217D51"
   },
-  "block": 127521684,
+  "block": 127762103,
   "superseded": [
+    {
+      "note": "core deployed 2026-10-02 from integration acb549e (polished contracts), replaced the same day by the final reviewed code; still live: the weekend proof and the Oct 2 settlement run by keeper #2 happen here. Its proof transactions remain valid on-chain.",
+      "timelock": "0xf60F96DF709B2dD958519329b4ab488C27e178b5",
+      "riskParams": "0x113AbDCd234d00FfEA37D29A31BD1Fb2B035dcf1",
+      "hub": "0xEcD2baaE3C13b526ffdBB8a8388609442C84d993",
+      "registry": "0x9C99381dE80518350fEaA09db17a064eD2180b7b",
+      "insurance": "0x531394f5a5D0c3D9e54d258c8825Fa70Fd645429",
+      "clearinghouse": "0x0b0F4e67DcA3B846859Af452576e8E09316D1949",
+      "auctionHouse": "0x4a132D6f83d9db88092A3D1F8B5985B30fd99Ad9",
+      "rfq": "0x1aFD874fdd3914fB6958F282769dAC546993ED82",
+      "vaults": [
+        {
+          "address": "0xCCF205358eF9bfd97335f0D7bD5240487bB64865",
+          "type": "coveredCall",
+          "underlying": "NVDA"
+        },
+        {
+          "address": "0xF95EAbF20EE1D9034ABa1b240D0242B75e645BD5",
+          "type": "coveredCall",
+          "underlying": "TSLA"
+        },
+        {
+          "address": "0x0FEee896be42E954c2881668da9035efc5dB0947",
+          "type": "putWrite",
+          "underlying": "NVDA"
+        }
+      ],
+      "libraries": {
+        "AuctionHookLogic": "0x5c3A1bAF3e0554bB703C00723ddb342ce2C82C06",
+        "MarginLogic": "0x36EC877374e7F48b34BB190EB18f629F0067a536",
+        "SettlementLogic": "0x095B3F6BB7B34E14835fa3BC375725B2C74669e7",
+        "TradeLogic": "0xC899560e64267952dc88122651dDF3e40029eA4B",
+        "VaultPricing": "0xe110F03A4C2835A3BAAf69D5A2d1EeB602f31C58"
+      },
+      "block": 127521684,
+      "proofs": {
+        "1 createSubaccount (user)": "0x0d501e07bf14eecbc94bb55e3aeedd54ecc581a4f42a3a12f367539c2f814c4a",
+        "1 mint USDG": "0x0509b03074358097cbe6f3e42d6a05d461f50fb23af5e3dc8787b216c6a64f6f",
+        "1 mint NVDA": "0x070352253d64b7cf9749b357e284efc6cc1f744f3562b4297388f10d475b90c2",
+        "1 approve USDG": "0x59ad8d2ab72bf83ed183543a961ade91f9cc1e4226cc8e8511ee9e8456795573",
+        "1 approve NVDA": "0x6daeeb86b512af43e472863d5d82fe961260e8878e45b38a77ded91443fb791f",
+        "1 deposit 2000 USDG": "0xab0c410cb644ebb7cbc3ecf2b4f6128a957fb5214c00b1b7c05f53eddca4f8c8",
+        "1 deposit 1 NVDA": "0x75ff034cc9076ca4ce0365d592c0cd76d7122d820d535492ad9eff28d7c5a4d7",
+        "2 syncVol NVDA": "0x75828566c73180cf1354590e61016e263bd4d4848fad37cc88af709af15c85a4",
+        "2 buy 1 NVDA call from the covered-call vault": "0x8a930cccecd40cd0052246ad0fd94fc64f093fc1611b723e3d333ddfdc174361",
+        "3 createSubaccount (maker)": "0xd0fdc68f17044d1b8cd2c5d7dcd35db9e02b883e9ada9b2ad7c17bf460dda126",
+        "3 mint USDG for the maker": "0x31a460e6bce3e7b4b7c42d0daf5340ac8d7cc6f350bb0badb3a727aae8185e62",
+        "3 deposit 2000 USDG into the maker account": "0x808e0d892dd2aa70e7888b4bcacb378bfa6910e995b73a4afaa2e240ba688d94",
+        "3 RFQ fill: user sells 5 NVDA puts to the maker": "0x4a3ae55b02d64356f67b69ed81bbbcb0d53830fdf8f2af6a3761e3907d2fc233",
+        "4 createSubaccount (agent-run)": "0x80cdc5de0738e63d14fc4bc3edfaa52ca87b6ed018f55f1b5d1487890892a701",
+        "4 deposit 500 USDG (agent-run)": "0x7b4666736325d6f315c7ac367db2a04e434c88cc05ceaed7880d9aa986fd5e58",
+        "4 grantAgent (risk budget 1.5x one call)": "0xfec062996b830cc13c65433a2e6afa4e63115e185f0c5d4af550ed36e5dfe9a7",
+        "4 agent buys 1 call (in budget)": "0xd8e2ffa2ecc82323c74342691fb6711126bfab998cbdcaece45900949df6387f",
+        "4 agent buys 3 more calls (over budget)": "0xb0cbe3415a6439ecee889ac1c7d6e4438093f0b71b6863842f9128c72f63f4db",
+        "5 withdraw past initial margin": "0xa7e650bedb2c60418117f762f2c775d019f491d49d5d34e5e66e7783e25f9958",
+        "6 mint NVDA for the vault deposit": "0x504261657299f226862493ac915e41cdea728d3828bda2d3efe55e327b6891e1",
+        "6 approve the vault": "0xe89c2e3b512539bb9e540fcd90cf42c993e7445b27bb6d384de01cc0133cf2ab",
+        "6 deposit 1 NVDA into the covered-call vault": "0x14cc39011bda86c4f3a99891bd6483bff480a5c721d4811c69c3396725221e3f",
+        "7 AAPL announces a 2-for-1 multiplier change effective in 30 min (mock)": "0xfd341dabc180f4f31984e9d50135497a2c420fe2ce21516c0a82805b00ab7948",
+        "7 RFQ fill on AAPL inside the multiplier window": "0xeed1994e57e6b1d0f7da167b4a44b093ad9e6dcbd42167679f165200e45360e7",
+        "7 reset the AAPL mock multiplier": "0x541b8f8a631ff2f843e64839b34a4f6c49794784d12974ac8096900703846a87",
+        "mcp: in-budget fill": "0xf17910855569d9d6fed1b5ef3676ac48599e955b3dc889ee7bdc5d7d1f109542",
+        "mcp: over-budget refusal (mined)": "0x43941aae0c18d7d004d052fd4baa72ccbb74fddd9ffe0d9e6d4dcb57407b42fe",
+        "mm-bot: RFQ fill through the relay": "0x594f2c802ebcb359d230d3bca807f854550b6d1bee466827bd6e97f69dc2d3ae",
+        "keeper2 demo: vault buy C250 Oct 2": "0x1a3b707d7a283bb975052e22625063ab3486b8bcaed08e4f39441b4e5a5ea749",
+        "keeper2 demo: rfq C235 Oct 2 (self-trade)": "0x67da0ca7d13e160e06bdcc7f67bcd2d329dec049c0b1e6da68e4dddb04e0e6e2",
+        "keeper2 demo: rfq P235 Oct 2 (self-trade)": "0x1611c4a4a6773df9f708b99e002a9169e27882a1b421fb68d50879a3b0e1bc75"
+      }
+    },
     {
       "note": "core deployed from 303951a (auction@dddb1dc), replaced on 2026-10-02 by the polished contracts; still live and holding the Oct 2 2026 settlement demo run by the first keeper. Its proof transactions remain valid on-chain.",
       "timelock": "0x5eb54aa55f3e03b7F50b7aFD22F235FB0e85235F",
