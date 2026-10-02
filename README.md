@@ -163,7 +163,14 @@ cd novation/contracts && forge build && forge test
 cd ../kernel && cargo test --test parity
 ```
 
-`forge test` runs the Solidity suites, including the parity vectors and the 256-position cap. `cargo test --test parity` checks the Rust kernel against the same vectors, integer for integer. `cargo test --release` runs the full kernel suite.
+`forge test` runs the Solidity suites, including the parity vectors, the 256-position cap and a short campaign of the stateful invariant suite. `cargo test --test parity` checks the Rust kernel against the same vectors, integer for integer. `cargo test --release` runs the full kernel suite.
+
+The invariant suite drives the whole system (trades, vaults, agents, time across sessions and expiries, settlement, liquidations, deficit sales). The `invariant-deep` profile runs a long campaign. The fork suite deploys the core against the real tokens and Chainlink feeds on Robinhood Chain mainnet; it is skipped unless `RH_MAINNET_RPC` is set. Both commands run from `contracts/`:
+
+```bash
+FOUNDRY_PROFILE=invariant-deep forge test --match-path "test/invariant/*"
+RH_MAINNET_RPC=https://rpc.mainnet.chain.robinhood.com forge test --match-path "test/fork/*"
+```
 
 The on-chain tools need a few Python packages:
 

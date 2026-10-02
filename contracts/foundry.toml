@@ -20,10 +20,18 @@ disable_block_gas_limit = true
 [profile.default.fuzz]
 runs = 512
 
+# The stateful suite in test/invariant drives the whole system through the Solidity kernel, about
+# 15 to 40 ms per call. The default campaign adds about a minute to `forge test`; the
+# invariant-deep profile is for long runs:
+#   FOUNDRY_PROFILE=invariant-deep forge test --match-path "test/invariant/*"
 [profile.default.invariant]
-runs = 128
-depth = 64
+runs = 12
+depth = 128
 fail_on_revert = false
+
+[profile.invariant-deep.invariant]
+runs = 256
+depth = 256
 
 [rpc_endpoints]
 rh_testnet = "https://rpc.testnet.chain.robinhood.com"
