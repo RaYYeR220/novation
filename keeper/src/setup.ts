@@ -5,7 +5,7 @@
 import { createWalletClient, erc20Abi, formatEther, http, maxUint256, type Chain, type Hex, type PublicClient } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { getCash, getSubaccountsOf, simulateApprove, simulateCreateSubaccount, simulateDeposit, simulateMint, fromWad, tokenOf } from '@novation/sdk';
-import { execute, padGas, txUrl, type Keeper, type TxRecord } from './keeper';
+import { execute, isTestChain, padGas, txUrl, type Keeper, type TxRecord } from './keeper';
 import type { Logger } from './log';
 
 /** Hard cap on one top-up from the deployer. */
@@ -75,8 +75,9 @@ export async function fundSubaccount(k: Keeper, id: bigint, wad: bigint): Promis
 
 /**
  * Deposits at least `wad` USDG (rounded up to whole token units) from the keeper's wallet into
- * subaccount `id`, which anyone may fund with USDG. Mints the shortfall first (testnet mocks are
- * public-mint) and approves the clearinghouse once.
+ * subaccount `id`, which anyone may fund with USDG. On the testnet or a local chain the shortfall is
+ * minted first (the mock is public-mint); elsewhere a wallet short of USDG is a logged skip. Approves
+ * the clearinghouse once.
  */
 export async function depositUsdg(k: Keeper, job: string, id: bigint, wad: bigint): Promise<TxRecord | null> {
   const usdg = tokenOf(k.ctx.deployment, 'USDG');
@@ -85,7 +86,14 @@ export async function depositUsdg(k: Keeper, job: string, id: bigint, wad: bigin
   const raw = (wad + scale - 1n) / scale;
   const me = k.account.address;
   const bal = await k.client.readContract({ address: usdg, abi: erc20Abi, functionName: 'balanceOf', args: [me] });
-  if (bal < raw) await execute(k, job, 'mint USDG', () => simulateMint(k.ctx, k.account, usdg, me, raw - bal), { amount: raw - bal });
+  if (bal < raw) {
+    // only the testnet's mock USDG mints freely; anywhere else the keeper must hold the USDG
+    if (!isTestChain(k.chain.id)) {
+      k.log('warn', job, 'skip', { label: `deposit USDG into ${id}`, reason: `the keeper wallet holds ${bal} raw USDG, ${raw} needed`, id });
+      return null;
+    }
+    await execute(k, job, 'mint USDG', () => simulateMint(k.ctx, k.account, usdg, me, raw - bal), { amount: raw - bal });
+  }
   const allowance = await k.client.readContract({ address: usdg, abi: erc20Abi, functionName: 'allowance', args: [me, k.ctx.deployment.clearinghouse] });
   if (allowance < raw) await execute(k, job, 'approve USDG', () => simulateApprove(k.ctx, k.account, usdg, k.ctx.deployment.clearinghouse, maxUint256));
   return execute(k, job, `deposit USDG into ${id}`, () => simulateDeposit(k.ctx, k.account, id, usdg, raw), { id, amount: raw });

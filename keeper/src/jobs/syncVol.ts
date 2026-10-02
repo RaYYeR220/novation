@@ -1,6 +1,6 @@
 import { getUnderlyingParams, getUnderlyingTokens, getVolState, marketDataHubAbi, simulateSyncVol, symbolOf } from '@novation/sdk';
 import { lastRoundOfPhase, packRound, phaseOf } from '../hint';
-import { chainNow, execute, feedReader, type Keeper } from '../keeper';
+import { belowReserve, chainNow, execute, feedReader, type Keeper } from '../keeper';
 
 const JOB = 'syncVol';
 
@@ -12,6 +12,10 @@ const JOB = 'syncVol';
  */
 export async function syncVol(k: Keeper): Promise<void> {
   const { ctx } = k;
+  if (await belowReserve(k)) {
+    k.log('info', JOB, 'skip', { reason: 'balance below the gas reserve: kept for settlement' });
+    return;
+  }
   const now = await chainNow(k);
   for (const u of await getUnderlyingTokens(ctx)) {
     const p = await getUnderlyingParams(ctx, u);

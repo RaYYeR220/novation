@@ -9,8 +9,8 @@ import { settleAccounts } from './settleAccounts';
 import { settleExpiry } from './settleExpiry';
 import { syncVol } from './syncVol';
 
-/** The jobs in tick order. */
-export const JOBS = { syncVol, listSeries, settleExpiry, settleAccounts, claim, roll, liquidations } as const;
+/** The jobs in tick order: settlement first, then the optional upkeep (vol, listing) that the gas reserve can hold back. */
+export const JOBS = { settleExpiry, settleAccounts, claim, roll, liquidations, syncVol, listSeries } as const;
 export type JobName = keyof typeof JOBS;
 export const JOB_NAMES = Object.keys(JOBS) as JobName[];
 

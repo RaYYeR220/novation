@@ -16,7 +16,7 @@ import { createServer } from 'node:net';
 import { createPublicClient, defineChain, http, type Hex, type PublicClient } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { chainById, fmtCloseEt, getDeployment, getPool, mockAggregatorAbi, nextWeeklyExpiry, type Address } from '@novation/sdk';
-import { createKeeper, createLogger, deriveKeeperKey, loadDotEnv, tick } from '../src/index';
+import { createKeeper, createLogger, keeperKeyFromEnv, loadDotEnv, tick } from '../src/index';
 
 function flag(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -38,9 +38,7 @@ async function main() {
   const log = createLogger();
   const chainId = 46630;
   const upstream = process.env.RH_TESTNET_RPC ?? chainById(chainId)!.rpcUrls.default.http[0]!;
-  const deployerKey = process.env.DEPLOYER_PRIVATE_KEY as Hex | undefined;
-  const key = (process.env.KEEPER_PRIVATE_KEY as Hex | undefined) ?? (deployerKey ? deriveKeeperKey(deployerKey) : undefined);
-  if (!key) throw new Error('set DEPLOYER_PRIVATE_KEY (or KEEPER_PRIVATE_KEY) in .env');
+  const key: Hex = keeperKeyFromEnv(chainId);
 
   const port = await freePort();
   const anvil = spawn('anvil', ['--fork-url', upstream, '--port', String(port), '--silent', '--no-rate-limit'], { stdio: 'ignore' });
@@ -86,7 +84,7 @@ async function main() {
     await rpc('evm_setNextBlockTimestamp', [expiry + after]);
     await rpc('evm_mine');
 
-    const k = createKeeper({ chain, deployment, key, rpcUrl, client, pollingInterval: 50, log, opts: { settleDelaySec: Math.min(after, 900) } });
+    const k = createKeeper({ chain, deployment, key, rpcUrl, client, pollingInterval: 50, log, opts: { settleDelaySec: Math.min(after, 900), confirmations: 0 } });
     const sent = await tick(k, ['settleExpiry', 'settleAccounts', 'claim', 'roll']);
     const pool = await getPool(k.ctx, expiry);
     log('info', 'rehearsal', 'result', {

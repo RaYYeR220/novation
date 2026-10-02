@@ -31,7 +31,7 @@ import {
   type RfqQuote,
 } from '@novation/sdk';
 import { gridStrikes, toGrid } from './grid';
-import { chainNow, execute, type Keeper, type TxRecord } from './keeper';
+import { chainNow, execute, isTestChain, type Keeper, type TxRecord } from './keeper';
 import { why } from './log';
 import { ensureSubaccounts, fundSubaccount } from './setup';
 
@@ -62,6 +62,7 @@ export async function openDemoPosition(
   a: { underlying?: string; expiry: number; qty?: bigint; longCash?: bigint; shortCash?: bigint },
 ): Promise<DemoResult> {
   const { ctx } = k;
+  if (!isTestChain(k.chain.id)) throw new Error(`the demo book mints mock USDG and runs on the testnet or a local chain only, not on chain ${k.chain.id}`);
   const qty = a.qty ?? WAD;
   const sym = a.underlying ?? 'NVDA';
   const u = tokenOf(ctx.deployment, sym);

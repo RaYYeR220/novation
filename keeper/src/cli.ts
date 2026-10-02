@@ -5,7 +5,7 @@
  *   tsx src/cli.ts --loop 120             a tick every 120 s, forever
  *   tsx src/cli.ts address                the keeper address
  *   tsx src/cli.ts fund [--eth 0.0005]    top the keeper's gas up from the deployer key
- *   tsx src/cli.ts setup [--usdg 5000]    open and fund the keeper's bidding subaccount
+ *   tsx src/cli.ts setup [--usdg 5000]    open and fund the keeper's bidding subaccount (testnet)
  *   tsx src/cli.ts hint [--expiry next|<unix>] [--now <unix>] [--underlying NVDA]
  *                                         dry-run the settlement hint finder (no transaction)
  *   tsx src/cli.ts demo [--underlying NVDA] [--expiry next|<unix>] [--qty 1]
@@ -13,16 +13,32 @@
  *                                         subaccounts, so its settlement has a payer (testnet)
  *
  * Options: --jobs a,b  --dry-run  --debug  --sync-vol-every <s>  --min-list-tenor <s>
- *          --settle-delay <s>  --roll-every <s>  --chain-id <id>  --rpc <url>
- * Keys come from the repo's .env: KEEPER_PRIVATE_KEY if set, else derived from DEPLOYER_PRIVATE_KEY.
+ *          --list-per-tick <n>  --settle-delay <s>  --roll-every <s>  --gas-reserve <eth>
+ *          --bid | --no-bid  --bid-cap <usdg>  --confirmations <n>  --chain-id <id>  --rpc <url>
+ *          --deployment <path to contracts/deployments/<chainId>.json>
+ * Keys come from the repo's .env: KEEPER_PRIVATE_KEY, or on the testnet a key derived from
+ * DEPLOYER_PRIVATE_KEY.
  */
+import { readFileSync } from 'node:fs';
 import { decodeFunctionResult, encodeFunctionData, formatEther, parseEther, type Hex } from 'viem';
-import { chainById, fmtCloseEt, fromWad, getDeployment, getUnderlyingTokens, nextWeeklyExpiry, seriesRegistryAbi, symbolOf, WAD, type Address } from '@novation/sdk';
+import {
+  chainById,
+  fmtCloseEt,
+  fromWad,
+  getDeployment,
+  getUnderlyingTokens,
+  nextWeeklyExpiry,
+  parseDeployment,
+  seriesRegistryAbi,
+  symbolOf,
+  WAD,
+  type Address,
+} from '@novation/sdk';
 import { loadDotEnv } from './env';
 import { JOB_NAMES, tick, type JobName } from './jobs/index';
 import { hintFor } from './jobs/settleExpiry';
-import { chainNow, createKeeper, type Keeper } from './keeper';
-import { deriveKeeperKey } from './keys';
+import { chainNow, createKeeper, isTestChain, type Keeper } from './keeper';
+import { keeperKeyFromEnv } from './keys';
 import { createLogger, why } from './log';
 import { ensureSubaccounts, fundSubaccount, topUpKeeper } from './setup';
 import { openDemoPosition } from './demo';
@@ -57,26 +73,39 @@ async function main() {
     (chainId === 46630 ? process.env.RH_TESTNET_RPC : process.env.RH_MAINNET_RPC) ??
     chain.rpcUrls.default.http[0];
   const deployerKey = process.env.DEPLOYER_PRIVATE_KEY as Hex | undefined;
-  const key = (process.env.KEEPER_PRIVATE_KEY as Hex | undefined) ?? (deployerKey ? deriveKeeperKey(deployerKey) : undefined);
-  if (!key) throw new Error('set DEPLOYER_PRIVATE_KEY (or KEEPER_PRIVATE_KEY) in .env');
+  const key = keeperKeyFromEnv(chainId);
+  const testnet = isTestChain(chainId);
+  const deployment =
+    typeof flags.deployment === 'string' ? parseDeployment(JSON.parse(readFileSync(flags.deployment, 'utf8'))) : getDeployment(chainId);
+  if (deployment.chainId !== chainId) throw new Error(`the deployment is for chain ${deployment.chainId}, not ${chainId}`);
 
   const jobs = typeof flags.jobs === 'string' ? (flags.jobs.split(',') as JobName[]) : JOB_NAMES;
   for (const j of jobs) if (!JOB_NAMES.includes(j)) throw new Error(`unknown job ${j}; jobs: ${JOB_NAMES.join(', ')}`);
 
   const k: Keeper = createKeeper({
     chain,
-    deployment: getDeployment(chainId),
+    deployment,
     key,
     rpcUrl,
     log,
     opts: {
       syncVolEverySec: num(flags['sync-vol-every'], 3600),
       minListTenorSec: num(flags['min-list-tenor'], 2 * 86400),
+      listPerTick: num(flags['list-per-tick'], 16),
       settleDelaySec: num(flags['settle-delay'], 900),
-      rollEverySec: num(flags['roll-every'], 3600),
+      rollEverySec: num(flags['roll-every'], 86400),
+      gasReserve: parseEther(typeof flags['gas-reserve'] === 'string' ? flags['gas-reserve'] : '0.0001'),
+      // bidding is opt-in: on by default on the testnet (mock USDG), off elsewhere unless --bid
+      bid: flags['no-bid'] === true ? false : flags.bid === true || testnet,
+      bidExposureCap: BigInt(Math.round(num(flags['bid-cap'], 5000))) * WAD,
+      confirmations: num(flags.confirmations, 5),
       dryRun: flags['dry-run'] === true,
     },
   });
+
+  const testnetOnly = (what: string) => {
+    if (!testnet) throw new Error(`${what} mints mock tokens and runs on the testnet or a local chain only, not on chain ${chainId}`);
+  };
 
   switch (cmd) {
     case 'address': {
@@ -91,6 +120,7 @@ async function main() {
       return;
     }
     case 'setup': {
+      testnetOnly('setup');
       const [bidder] = await ensureSubaccounts(k, 1);
       await fundSubaccount(k, bidder!, BigInt(Math.round(num(flags.usdg, 5000))) * WAD);
       log('info', 'setup', 'bidder', { id: bidder });
@@ -99,6 +129,7 @@ async function main() {
     case 'hint':
       return hintCmd(k, flags);
     case 'demo': {
+      testnetOnly('demo');
       const now = await chainNow(k);
       const expiry = typeof flags.expiry === 'string' && flags.expiry !== 'next' ? Number(flags.expiry) : nextWeeklyExpiry(now);
       const qty = BigInt(Math.round(num(flags.qty, 1) * 1e6)) * 10n ** 12n;

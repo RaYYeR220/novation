@@ -53,6 +53,10 @@ export interface HintOptions {
   decimals?: number;
   /** MarketDataHub's FALLBACK_DELAY (72 h). */
   fallbackDelay?: number;
+  /** Aggregator phases walked back from the latest (default 8). */
+  maxPhases?: number;
+  /** Rounds read for one hint before giving up (default 1000). */
+  maxReads?: number;
 }
 
 const MASK = (1n << 64n) - 1n;
@@ -64,18 +68,26 @@ export const numberOf = (id: bigint) => id & MASK;
 export const packRound = (phase: bigint, n: bigint) => (phase << 64n) | n;
 
 /** Caches rounds (they never change once printed) and counts reads. */
+class ReadBudget extends Error {}
+
 class Counting implements RoundReader {
   reads = 0;
   private cache = new Map<bigint, Round>();
-  constructor(private r: RoundReader) {}
+  constructor(
+    private r: RoundReader,
+    private max: number,
+  ) {}
+  private count() {
+    if (++this.reads > this.max) throw new ReadBudget();
+  }
   async latest() {
-    this.reads++;
+    this.count();
     return this.r.latest();
   }
   async round(id: bigint) {
     const hit = this.cache.get(id);
     if (hit) return hit;
-    this.reads++;
+    this.count();
     const x = await this.r.round(id);
     if (x.updatedAt !== 0) this.cache.set(id, x);
     return x;
@@ -131,7 +143,16 @@ function inBand(answer: bigint, o: HintOptions): boolean {
 }
 
 export async function findHint(reader: RoundReader, expiry: number, now: number, o: HintOptions): Promise<HintResult> {
-  const r = new Counting(reader);
+  const r = new Counting(reader, o.maxReads ?? 1000);
+  try {
+    return await search(r, expiry, now, o);
+  } catch (e) {
+    if (e instanceof ReadBudget) return { kind: 'stuck', reason: `gave up after ${r.reads - 1} round reads`, reads: r.reads - 1 };
+    throw e;
+  }
+}
+
+async function search(r: Counting, expiry: number, now: number, o: HintOptions): Promise<HintResult> {
   if (now <= expiry) return { kind: 'wait', reason: 'expiry not passed (the proof needs now strictly after it)', until: expiry + 1, reads: r.reads };
 
   const latest = await r.latest();
@@ -146,9 +167,12 @@ export async function findHint(reader: RoundReader, expiry: number, now: number,
     proof = 'latestRound';
   } else {
     next = latest;
-    for (let p = phaseOf(latest.id); p >= 1n; p--) {
+    // the hub's phase-change proof looks one phase up only, so the walk stops at an empty phase,
+    // and it goes back at most maxPhases phases (a feed anyone can re-phase can't stall a tick)
+    const floor = phaseOf(latest.id) - BigInt((o.maxPhases ?? 8) - 1);
+    for (let p = phaseOf(latest.id); p >= 1n && p >= floor; p--) {
       const top = p === phaseOf(latest.id) ? numberOf(latest.id) : await lastRoundOfPhase(r, p);
-      if (top === 0n) continue;
+      if (top === 0n) break;
       const topRound = await r.round(packRound(p, top));
       if (topRound.updatedAt !== 0 && topRound.updatedAt <= expiry) {
         // every round of the later phase printed after the expiry: the phase-change proof

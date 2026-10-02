@@ -1,6 +1,6 @@
 import { fromWad, getGlobals, getSpot, getUnderlyingParams, getUnderlyingTokens, simulateListSeries, symbolOf, weeklyExpiries } from '@novation/sdk';
 import { gridStrikes } from '../grid';
-import { chainNow, execute, why, type Keeper } from '../keeper';
+import { belowReserve, chainNow, execute, why, type Keeper } from '../keeper';
 
 const JOB = 'listSeries';
 
@@ -10,14 +10,20 @@ const key = (u: string, expiry: number, strike: bigint, isCall: boolean) => `${u
  * Keeps the weekly grid listed: for the next `expiriesAhead` weekly expiries (within the
  * registry's maxWeeksOut, skipping one that closes within minListTenorSec), a call and a put at
  * spot * (1 +- p%) on the strike step for each grid percentage, the seed script's grid. Strikes
- * beyond maxStrikeDeviation are skipped, as the
- * registry would refuse them, and so is an underlying the hub reports HALTED. Only missing series
- * are sent; listing is permissionless.
+ * beyond maxStrikeDeviation are skipped, as the registry would refuse them, and so is an
+ * underlying the hub reports HALTED. Only missing series are sent (listing is permissionless), at
+ * most listPerTick per tick, and none while the keeper's balance is below the gas reserve.
  */
 export async function listSeries(k: Keeper): Promise<void> {
   const { ctx, state } = k;
+  if (await belowReserve(k)) {
+    k.log('info', JOB, 'skip', { reason: 'balance below the gas reserve: kept for settlement' });
+    return;
+  }
   const now = await chainNow(k);
   const g = await getGlobals(ctx);
+  let sent = 0;
+  let left = 0;
   const expiries = weeklyExpiries(now, k.opts.expiriesAhead).filter((e) => e <= now + g.maxWeeksOut * 7 * 86400 && e - now >= k.opts.minListTenorSec);
   const listed = new Set([...state.series.values()].map((s) => key(s.underlying, s.expiry, s.strike, s.isCall)));
 
@@ -44,6 +50,8 @@ export async function listSeries(k: Keeper): Promise<void> {
         for (const isCall of [true, false]) {
           if (listed.has(key(u, expiry, strike, isCall))) continue;
           missing++;
+          if (sent >= k.opts.listPerTick) continue;
+          sent++;
           const rec = await execute(k, JOB, `list ${sym} ${expiry} ${isCall ? 'C' : 'P'}${fromWad(strike)}`, () => simulateListSeries(ctx, k.account, u, expiry, strike, isCall), {
             underlying: sym,
             expiry,
@@ -55,5 +63,8 @@ export async function listSeries(k: Keeper): Promise<void> {
       }
     }
     k.log('debug', JOB, 'grid', { underlying: sym, spot: fromWad(spot), strikes: strikes.map(fromWad), expiries, missing });
+    left += missing;
   }
+  left -= sent;
+  if (left > 0) k.log('info', JOB, 'cap', { listed: sent, left, listPerTick: k.opts.listPerTick, reason: 'the rest waits for the next tick' });
 }

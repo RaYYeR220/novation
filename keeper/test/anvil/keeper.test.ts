@@ -82,6 +82,9 @@ d('keeper on a local chain', () => {
       client: L.client,
       pollingInterval: 50,
       log: createLogger({ sink: (s) => logs.push(JSON.parse(s)) }),
+      // anvil mines a block per transaction and the test drives the clock: no confirmation lag or
+      // settle delay; bidding on, and no listing cap unless a test sets one
+      opts: { settleDelaySec: 0, confirmations: 0, bid: true, listPerTick: 1000 },
     });
     // keep the coming expiry far enough away for the trading part of the scenario
     const t = await now(L);

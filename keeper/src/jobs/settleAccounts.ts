@@ -52,11 +52,14 @@ export async function settleAccounts(k: Keeper): Promise<void> {
   const now = await chainNow(k);
   for (const t of await settleTasks(k, now)) {
     const fields = { id: t.id, expiry: t.expiry, net: fromWad(t.net), role: t.net < 0n ? 'payer' : 'receiver', ...(t.vault ? { vault: t.vault } : {}) };
+    let rec;
     if (t.vault) {
       const v = t.vault;
-      await execute(k, JOB, `roll vault ${t.id} ${t.expiry}`, () => simulateVaultRoll(k.ctx, k.account, v, [t.expiry]), fields);
+      rec = await execute(k, JOB, `roll vault ${t.id} ${t.expiry}`, () => simulateVaultRoll(k.ctx, k.account, v, [t.expiry]), fields);
     } else {
-      await execute(k, JOB, `settleAccount ${t.id} ${t.expiry}`, () => simulateSettleAccount(k.ctx, k.account, t.id, t.expiry), fields);
+      rec = await execute(k, JOB, `settleAccount ${t.id} ${t.expiry}`, () => simulateSettleAccount(k.ctx, k.account, t.id, t.expiry), fields);
     }
+    // a receiver's claim is known now; the claim job doesn't have to wait for the event scan
+    if (rec?.status === 'success' && t.net > 0n) k.state.claims.add(`${t.id}:${t.expiry}`);
   }
 }

@@ -5,7 +5,10 @@
 import {
   createPublicClient,
   createWalletClient,
+  encodeFunctionData,
   http,
+  keccak256,
+  type Abi,
   type Address,
   type Chain,
   type Hash,
@@ -40,16 +43,30 @@ export interface KeeperOptions {
   expiriesAhead: number;
   /** Of those, skip one closing sooner than this (seconds): a series listed that late barely trades. */
   minListTenorSec: number;
+  /** Most series listed in one tick; the rest wait for the next. */
+  listPerTick: number;
   /** Seconds after an expiry before settling it (lets a feed mirror catch up with late rounds). */
   settleDelaySec: number;
-  /** Minimum seconds between two queue-only rolls of one vault. */
+  /** Minimum seconds between two queue rolls of one vault by the roll job (a payable queue is rolled at once). */
   rollEverySec: number;
+  /** Below this balance (wei) the optional work (vol sync, listing, queue-only rolls) is skipped, keeping gas for settlement. */
+  gasReserve: bigint;
+  /** Bid in liquidations and deficit sales at all (opt-in). */
+  bid: boolean;
   /** Most the keeper pays in one auction bid, WAD USDG. */
   bidBudget: bigint;
+  /** Most the keeper commits to auction bids over the life of the process, WAD USDG. */
+  bidExposureCap: bigint;
   /** The bidder subaccount needs at least this much cash to bid, WAD USDG. */
   minBidderCash: bigint;
+  /** A liquidation the keeper can't bid in is (re)started at most this often per account, seconds. */
+  restartBackoffSec: number;
   /** A deficit-sale remainder at or below this (WAD USDG) is paid in rather than bid for. */
   dustSweep: bigint;
+  /** Event scans stop this many blocks below the head (a lagging RPC node can't skip a block). */
+  confirmations: number;
+  /** Each event scan re-reads this many blocks before the last one; logs are deduplicated. */
+  scanOverlap: number;
   /** Simulate only: log what would be sent. */
   dryRun: boolean;
 }
@@ -59,13 +76,30 @@ export const DEFAULT_OPTIONS: KeeperOptions = {
   gridPcts: [5, 10, 15, 20],
   expiriesAhead: 2,
   minListTenorSec: 0,
-  settleDelaySec: 0,
-  rollEverySec: 3600,
+  listPerTick: 16,
+  settleDelaySec: 900,
+  rollEverySec: 86400,
+  gasReserve: 100_000_000_000_000n, // 0.0001 ETH
+  bid: false,
   bidBudget: 2_000n * WAD,
+  bidExposureCap: 5_000n * WAD,
   minBidderCash: 10n * WAD,
+  restartBackoffSec: 6 * 3600,
   dustSweep: WAD / 100n,
+  confirmations: 5,
+  scanOverlap: 200,
   dryRun: false,
 };
+
+/** Chains whose mock tokens mint freely and where the derived keeper key may be used. */
+export const TEST_CHAIN_IDS: readonly number[] = [46630, 31337];
+
+export function isTestChain(chainId: number): boolean {
+  return TEST_CHAIN_IDS.includes(chainId);
+}
+
+/** Per-transaction gas the keeper will ever ask for (Arbitrum's cap is 32M). */
+export const MAX_TX_GAS = 31_500_000n;
 
 export interface TxRecord {
   job: string;
@@ -92,8 +126,24 @@ export interface KeeperState {
   settled: Map<string, bigint>;
   /** Vault subaccount id -> vault address. */
   vaultIds: Map<bigint, Address>;
-  /** Last queue roll per vault (chain time). */
+  /** Last queue roll per vault by the roll job (chain time). */
   lastRoll: Map<string, number>;
+  /** Event logs already applied, tx:logIndex -> block (pruned below the overlap window). */
+  seen: Map<string, bigint>;
+  /** Transactions broadcast without a receipt yet; nothing new is sent while one is open. */
+  pending: Map<Hash, PendingTx>;
+  /** WAD USDG paid into auction bids so far. */
+  committed: bigint;
+  /** Last time the keeper started a liquidation, per account (chain time). */
+  lastStart: Map<bigint, number>;
+}
+
+export interface PendingTx {
+  hash: Hash;
+  nonce: number;
+  job: string;
+  label: string;
+  fields: Record<string, unknown>;
 }
 
 export interface Keeper {
@@ -145,6 +195,10 @@ export function createKeeper(a: {
       settled: new Map(),
       vaultIds: new Map(),
       lastRoll: new Map(),
+      seen: new Map(),
+      pending: new Map(),
+      committed: 0n,
+      lastStart: new Map(),
     },
     log: a.log ?? createLogger(),
     txs: [],
@@ -163,14 +217,58 @@ export function txUrl(k: Keeper, hash: Hash): string | undefined {
 
 type Simulated = { request: unknown; result?: unknown };
 
-/** Gas limit for an estimate: +25%. */
+/**
+ * Gas limit for an estimate: +25% (on an Arbitrum chain the L1 part of the fee can move between
+ * estimate and inclusion), never above MAX_TX_GAS. When +25% would cross it, +5% capped at it.
+ */
 export function padGas(estimate: bigint): bigint {
-  return (estimate * 125n) / 100n;
+  const padded = (estimate * 125n) / 100n;
+  if (padded <= MAX_TX_GAS) return padded;
+  const tight = (estimate * 105n) / 100n;
+  return tight < MAX_TX_GAS ? tight : MAX_TX_GAS;
+}
+
+/** The keeper's balance is below the gas reserve: optional work waits. */
+export async function belowReserve(k: Keeper): Promise<boolean> {
+  return (await k.client.getBalance({ address: k.account.address })) < k.opts.gasReserve;
+}
+
+function record(k: Keeper, p: PendingTx, rc: { status: 'success' | 'reverted'; gasUsed: bigint; blockNumber: bigint }, late = false): TxRecord {
+  const rec: TxRecord = { job: p.job, label: p.label, hash: p.hash, status: rc.status, gasUsed: rc.gasUsed, block: rc.blockNumber, url: txUrl(k, p.hash) };
+  k.txs.push(rec);
+  k.state.pending.delete(p.hash);
+  k.log(rc.status === 'success' ? 'info' : 'error', p.job, 'tx', { ...rec, ...p.fields, ...(late ? { late: true } : {}) });
+  return rec;
 }
 
 /**
- * Simulates, then sends and waits. A simulation that reverts is a skip, logged with its reason
- * (a decoded refusal code when known) and returned as null; nothing is signed. Every sent
+ * Settles the open transactions: a mined one is logged; one the node no longer knows, or whose
+ * nonce another transaction has used, is dropped (its work is re-checked from chain state on the
+ * next pass, so nothing is sent twice). True when nothing is open any more.
+ */
+export async function resolvePending(k: Keeper): Promise<boolean> {
+  for (const p of [...k.state.pending.values()]) {
+    const rc = await k.client.getTransactionReceipt({ hash: p.hash }).catch(() => null);
+    if (rc) {
+      record(k, p, rc, true);
+      continue;
+    }
+    const used = await k.client.getTransactionCount({ address: k.account.address, blockTag: 'latest' });
+    const known = await k.client.getTransaction({ hash: p.hash }).catch(() => null);
+    if (used > p.nonce || !known) {
+      k.state.pending.delete(p.hash);
+      k.log('warn', p.job, 'dropped', { label: p.label, hash: p.hash, nonce: p.nonce, reason: known ? 'nonce used by another transaction' : 'unknown to the node' });
+    }
+  }
+  return k.state.pending.size === 0;
+}
+
+/**
+ * Simulates, then sends and waits. A simulation (or gas estimate) that reverts is a skip, logged
+ * with its reason (a decoded refusal code when known) and returned as null; nothing is signed.
+ * The transaction is signed locally by the keeper key and its hash is known before broadcast: one
+ * whose receipt doesn't come in time stays open (resolvePending), and nothing new is sent until it
+ * is settled, so a slow inclusion can't lead to the same work being sent twice. Every mined
  * transaction is logged as one `tx` line with its hash, status and gas.
  */
 export async function execute(
@@ -180,9 +278,15 @@ export async function execute(
   simulate: () => Promise<Simulated>,
   fields: Record<string, unknown> = {},
 ): Promise<TxRecord | null> {
+  if (k.state.pending.size && !(await resolvePending(k))) {
+    k.log('info', job, 'skip', { label, reason: 'an earlier transaction is still pending', pending: [...k.state.pending.keys()], ...fields });
+    return null;
+  }
   let sim: Simulated;
+  let gas = 0n;
   try {
     sim = await simulate();
+    if (!k.opts.dryRun) gas = padGas(await k.client.estimateContractGas(sim.request as Parameters<PublicClient['estimateContractGas']>[0]));
   } catch (e) {
     const code = (e as { refusal?: { code?: string } })?.refusal?.code;
     k.log(code ? 'info' : 'warn', job, 'skip', { label, reason: why(e), ...fields });
@@ -192,16 +296,36 @@ export async function execute(
     k.log('info', job, 'dry-run', { label, result: sim.result, ...fields });
     return null;
   }
-  // signed locally by the keeper's own key, with the gas estimate padded 25%: on an Arbitrum chain
-  // the L1 part of the fee can move between estimate and inclusion
-  const req = sim.request as Parameters<WalletClient['writeContract']>[0];
-  const estimate = await k.client.estimateContractGas(req as Parameters<PublicClient['estimateContractGas']>[0]);
-  const hash = await k.wallet.writeContract({ ...req, account: k.account, gas: padGas(estimate) });
-  const rc = await k.client.waitForTransactionReceipt({ hash, timeout: 180_000 });
-  const rec: TxRecord = { job, label, hash, status: rc.status, gasUsed: rc.gasUsed, block: rc.blockNumber, url: txUrl(k, hash) };
-  k.txs.push(rec);
-  k.log(rc.status === 'success' ? 'info' : 'error', job, 'tx', { ...rec, ...fields });
-  return rec;
+  const req = sim.request as { address: Address; abi: Abi; functionName: string; args?: readonly unknown[]; value?: bigint };
+  const p: PendingTx = { hash: '0x', nonce: 0, job, label, fields };
+  try {
+    const nonce = await k.client.getTransactionCount({ address: k.account.address, blockTag: 'pending' });
+    const prepared = await k.wallet.prepareTransactionRequest({
+      account: k.account,
+      chain: k.chain,
+      to: req.address,
+      data: encodeFunctionData({ abi: req.abi, functionName: req.functionName, args: req.args }),
+      value: req.value,
+      gas,
+      nonce,
+    });
+    const serialized = await k.wallet.signTransaction(prepared as Parameters<WalletClient['signTransaction']>[0]);
+    p.hash = keccak256(serialized);
+    p.nonce = nonce;
+    k.state.pending.set(p.hash, p);
+    await k.wallet.sendRawTransaction({ serializedTransaction: serialized });
+  } catch (e) {
+    k.log('error', job, 'send failed', { label, ...(p.hash !== '0x' ? { hash: p.hash } : {}), reason: why(e), ...fields });
+    if (p.hash !== '0x') await resolvePending(k).catch(() => false);
+    return null;
+  }
+  try {
+    const rc = await k.client.waitForTransactionReceipt({ hash: p.hash, timeout: 180_000 });
+    return record(k, p, rc);
+  } catch (e) {
+    k.log('warn', job, 'pending', { label, hash: p.hash, nonce: p.nonce, reason: why(e), ...fields });
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------- shared reads
@@ -236,9 +360,12 @@ export async function settlementOf(k: Keeper, underlying: Address, expiry: numbe
 }
 
 /**
- * Brings the state up to the chain head: new series, and the events that name accounts (Traded,
+ * Brings the state up to the chain: new series, and the events that name accounts (Traded,
  * LiquidationBid), receivers to claim for (AccountSettled with net > 0) and deficit sales. The
- * scan is incremental from the last block seen (the deployment block at first).
+ * scan is incremental from the last block seen (the deployment block at first), stops
+ * `confirmations` blocks below the head and re-reads `scanOverlap` blocks before its cursor, so a
+ * load-balanced RPC that answers getLogs from a node a few blocks behind can't make it skip a
+ * block for good. Each log is applied once, by (transaction, log index).
  */
 export async function refresh(k: Keeper): Promise<void> {
   const { ctx, state } = k;
@@ -251,9 +378,12 @@ export async function refresh(k: Keeper): Promise<void> {
     }
   }
 
-  const to = await k.client.getBlockNumber({ cacheTime: 0 }); // uncached: a tx just sent must be in the scan
-  const from = state.cursor ?? ctx.deployment.block;
-  if (from > to) return;
+  const head = await k.client.getBlockNumber({ cacheTime: 0 });
+  const to = head - BigInt(k.opts.confirmations);
+  const start = ctx.deployment.block;
+  const overlap = BigInt(k.opts.scanOverlap);
+  const from = state.cursor === undefined ? start : state.cursor - overlap > start ? state.cursor - overlap : start;
+  if (to < from) return;
   const scan = { fromBlock: from, toBlock: to };
   const ch = { address: ctx.deployment.clearinghouse, abi: clearinghouseAbi } as const;
   const ah = { address: ctx.deployment.auctionHouse, abi: auctionHouseAbi } as const;
@@ -263,14 +393,21 @@ export async function refresh(k: Keeper): Promise<void> {
     getEvents(ctx, { ...ch, eventName: 'AccountSettled', ...scan }),
     getEvents(ctx, { ...ah, eventName: 'DeficitSaleStarted', ...scan }),
   ]);
-  for (const t of trades) {
+  const fresh = (l: { transactionHash: Hash | null; logIndex: number | null; blockNumber: bigint | null }) => {
+    const id = `${l.transactionHash}:${l.logIndex}`;
+    if (state.seen.has(id)) return false;
+    state.seen.set(id, l.blockNumber ?? to);
+    return true;
+  };
+  for (const t of trades.filter(fresh)) {
     if (t.args.takerId !== undefined) state.accounts.add(t.args.takerId);
     if (t.args.makerId !== undefined) state.accounts.add(t.args.makerId);
   }
-  for (const b of bids) if (b.args.bidderId !== undefined) state.accounts.add(b.args.bidderId);
-  for (const s of settledAccts) if ((s.args.net ?? 0n) > 0n) state.claims.add(`${s.args.id}:${s.args.expiry}`);
-  for (const s of sales) state.deficitSales.add(`${s.args.id}:${s.args.expiry}`);
+  for (const b of bids.filter(fresh)) if (b.args.bidderId !== undefined) state.accounts.add(b.args.bidderId);
+  for (const s of settledAccts.filter(fresh)) if ((s.args.net ?? 0n) > 0n) state.claims.add(`${s.args.id}:${s.args.expiry}`);
+  for (const s of sales.filter(fresh)) state.deficitSales.add(`${s.args.id}:${s.args.expiry}`);
   state.cursor = to + 1n;
+  for (const [id, b] of state.seen) if (b + overlap < state.cursor) state.seen.delete(id);
 }
 
 export { why };
