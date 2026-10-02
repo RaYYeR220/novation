@@ -17,6 +17,7 @@ describe('config', () => {
     expect(c.account).toBeUndefined();
     expect(c.refusalGas).toBe(DEFAULT_REFUSAL_GAS);
     expect(c.allowForcedSend).toBe(false);
+    expect(c.maxVolSyncs).toBe(8);
     expect(c.deployment.clearinghouse).toBe(getDeployment(46630).clearinghouse);
   });
 
@@ -28,6 +29,8 @@ describe('config', () => {
     expect(c.rpcUrl).toBe('http://localhost:1');
     expect(loadConfig({ NOVATION_ALLOW_FORCED_SEND: '1' }).allowForcedSend).toBe(true);
     expect(loadConfig({ NOVATION_ALLOW_FORCED_SEND: '0' }).allowForcedSend).toBe(false);
+    expect(loadConfig({ NOVATION_MAX_VOL_SYNCS: '0' }).maxVolSyncs).toBe(0);
+    expect(loadConfig({ NOVATION_MAX_VOL_SYNCS: '20' }).maxVolSyncs).toBe(20);
   });
 
   it('rejects malformed settings', () => {
@@ -36,6 +39,7 @@ describe('config', () => {
     expect(() => loadConfig({ NOVATION_CHAIN_ID: '1' })).toThrow(/no Novation deployment/);
     expect(() => loadConfig({ NOVATION_DEPLOYMENT: '/nonexistent/31337.json' })).toThrow(/cannot read/);
     expect(() => loadConfig({ NOVATION_ALLOW_FORCED_SEND: 'yes' })).toThrow(/1 or 0/);
+    expect(() => loadConfig({ NOVATION_MAX_VOL_SYNCS: '-1' })).toThrow(/NOVATION_MAX_VOL_SYNCS/);
   });
 });
 

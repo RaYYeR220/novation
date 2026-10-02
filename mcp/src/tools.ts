@@ -48,6 +48,8 @@ import {
   type SeriesInfo,
   getVolCurrent,
   simulateCatchUpVol,
+  getVolState,
+  MAX_VOL_SYNC_STEPS,
 } from '@novation/sdk';
 import {
   decodeEventLog,
@@ -794,21 +796,33 @@ async function execute(s: Session, t: Ticket, force: boolean): Promise<TradeResu
 
 /**
  * Brings `token`'s vol up to its feed (syncVol, or syncAndRebaseVol after a feed migration, up to
- * four steps of 64 rounds), signed by the agent key: what a VolNotCurrent refusal asks for.
- * Returns a note for the trade result.
+ * MAX_VOL_SYNC_STEPS steps of 64 rounds), signed by the agent key: what a VolNotCurrent refusal asks
+ * for. It stops as soon as a step leaves the stored round where it was, and never sends more than
+ * the session's budget of catch-up transactions (NOVATION_MAX_VOL_SYNCS) in all. Returns a note for
+ * the trade result.
  */
 async function catchUpVol(s: Session, token: Address): Promise<string> {
   const ag = agentOf(s);
   const hashes: string[] = [];
-  for (let i = 0; i < 4 && !(await getVolCurrent(s.n.ctx, token)); i++) {
+  let stalled = false;
+  for (let i = 0; i < MAX_VOL_SYNC_STEPS && s.volSyncsLeft > 0 && !(await getVolCurrent(s.n.ctx, token)); i++) {
+    const before = (await getVolState(s.n.ctx, token)).lastRoundId;
     const sim = await simulateCatchUpVol(s.n.ctx, ag.account, token);
     const req = sim.request as Parameters<typeof ag.wallet.writeContract>[0];
     const gas = await s.n.client.estimateContractGas(req as Parameters<typeof s.n.client.estimateContractGas>[0]);
     const hash = await ag.wallet.writeContract({ ...req, account: ag.account, chain: s.chain, gas: (gas * GAS_HEADROOM_PCT) / 100n } as Parameters<typeof ag.wallet.writeContract>[0]);
-    await s.n.client.waitForTransactionReceipt({ hash });
+    s.volSyncsLeft--;
+    const rc = await s.n.client.waitForTransactionReceipt({ hash });
     hashes.push(hash);
+    if (rc.status !== 'success' || (await getVolState(s.n.ctx, token)).lastRoundId === before) {
+      stalled = true;
+      break;
+    }
   }
-  return `The ${symbolFor(s.n.deployment, token)} vol was behind its feed (VolNotCurrent): synced it first (${hashes.join(', ')}).`;
+  const sym = symbolFor(s.n.deployment, token);
+  if (hashes.length === 0) return `The ${sym} vol is behind its feed (VolNotCurrent), and this session's vol sync budget is spent: nothing was synced.`;
+  const why = stalled ? ' A sync did not advance the vol, so the catch-up stopped.' : '';
+  return `The ${sym} vol was behind its feed (VolNotCurrent): synced it first (${hashes.join(', ')}).${why}`;
 }
 
 const DEFAULT_SLIPPAGE_BPS = 200;

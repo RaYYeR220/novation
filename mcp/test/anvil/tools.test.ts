@@ -12,6 +12,7 @@ import {
   randomNonce,
   signQuote,
   simulatePushRound,
+  simulateSyncVol,
   simulateRevokeAgent,
   whatIfTrade,
   WAD,
@@ -277,6 +278,24 @@ d('MCP tool handlers on a local chain', () => {
     // the vault wouldn't quote on the stale vol: two catch-up steps (64 rounds, then the rest), then the trade
     expect(await L.client.getTransactionCount({ address: AGENT })).toBe(nonce + 3);
     expect((await tools.sellToVault(agent, { series_id: callId, qty: 1 })).status).toBe('filled');
+  });
+
+  it('spends no more than the session budget on vol catch-up', async () => {
+    const capped = session(L, { agentKey: AGENT_KEY, account: id, maxVolSyncs: 1 });
+    await verifyAgent(capped);
+    const feed = L.ctx.deployment.feeds.NVDA as `0x${string}`;
+    const maker = L.wallets[1]!;
+    const t = await blockTime(L);
+    const px = (await getSpot(L.ctx, L.ctx.deployment.tokens.NVDA!)).price / 10n ** 10n;
+    for (let i = 0; i < 66; i++) await send(L, maker.wallet, (await simulatePushRound(L.ctx, maker.account.address, feed, px, BigInt(t))).request);
+    const nonce = await L.client.getTransactionCount({ address: AGENT });
+    // one sync (64 rounds) is all the budget allows: the vault still can't quote, nothing is traded
+    expect((await tools.buyFromVault(capped, { series_id: callId, qty: 1 })).status).toBe('no_quote');
+    expect(await L.client.getTransactionCount({ address: AGENT })).toBe(nonce + 1);
+    expect((await tools.buyFromVault(capped, { series_id: callId, qty: 1 })).status).toBe('no_quote');
+    expect(await L.client.getTransactionCount({ address: AGENT })).toBe(nonce + 1);
+    // someone else catches it up
+    await send(L, maker.wallet, (await simulateSyncVol(L.ctx, maker.account.address, L.ctx.deployment.tokens.NVDA!)).request);
   });
 
   it("fills a maker's signed RFQ quote and refuses a tampered one", async () => {
