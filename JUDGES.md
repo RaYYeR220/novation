@@ -85,7 +85,7 @@ Robinhood Chain testnet, chain id 46630. Full list: [docs/deployments.md](docs/d
 
 ## What is not done yet
 
-- The keeper, the TypeScript SDK, the MCP server for agents and the indexer are in development; the web app is in progress in `app/`.
+- The keeper, the TypeScript SDK and the indexer are in development; the web app is in progress in `app/`.
 - Nothing is on Robinhood Chain mainnet yet, and testnet uses mock tokens and mirrored feeds ([MOCKS.md](MOCKS.md)).
 - The code is internally reviewed and not externally audited.
 
@@ -96,3 +96,4 @@ Robinhood Chain testnet, chain id 46630. Full list: [docs/deployments.md](docs/d
 - [SECURITY.md](SECURITY.md): trust model, invariants, threats, review history, known limits
 - [CLAIMS.md](CLAIMS.md): each public claim with its evidence tier
 - [MOCKS.md](MOCKS.md): what is mocked on testnet and what is real
+- [mcp/README.md](mcp/README.md): the MCP server for AI agents under an on-chain risk budget, with an over-budget agent trade refused on testnet ([`0x2aa5a4ce…`](https://explorer.testnet.chain.robinhood.com/tx/0x2aa5a4ceaf099d14136d921b29b5bc2bce8b52f618b25e4935b04494210f1064))
