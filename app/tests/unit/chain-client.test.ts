@@ -137,8 +137,9 @@ describe('ChainClient: a vol behind its feed', () => {
     expect(MAX_VOL_SYNC_STEPS).toBe(4);
     expect(sent).toEqual(Array(MAX_VOL_SYNC_STEPS).fill('syncVol'));
     const r = refusalOf(e)!;
-    expect(r).toMatchObject({ code: 'VolNotCurrent', underlying: 'NVDA', message: 'Syncing the vol of NVDA: retry in a moment.' });
-    expect(refusalCopy(r, 'Account 4').reason).toBe('Syncing the vol of NVDA: retry in a moment.');
+    // still behind after the last step: it says so, and the withdrawal is not tried again
+    expect(r).toMatchObject({ code: 'VolNotCurrent', underlying: 'NVDA', message: 'Vol of NVDA partly synced, still behind its feed: retry in a moment.' });
+    expect(refusalCopy(r, 'Account 4').reason).toBe('Vol of NVDA partly synced, still behind its feed: retry in a moment.');
   });
 
   it("names the vault's underlying when the vault's own refusal names none", async () => {
@@ -193,6 +194,28 @@ describe('ChainClient: a vol behind its feed', () => {
     expect(inner.rfqCache.has('1:buy:1')).toBe(false);
     // the shown quote is gone: a second click can't sign it either
     await expect(c.fillRfq(4, hash)).rejects.toThrow(/no longer on the ticket/);
+  });
+
+  it('says an RFQ fill\'s vol is only partly synced when the catch-up runs out of steps', async () => {
+    const { c, sent } = behindChain(10);
+    const hash = `0x${'ef'.repeat(32)}` as const;
+    const quote: RfqQuote = {
+      signer: AGENT as Address,
+      makerId: 7n,
+      seriesId: 1,
+      makerSells: true,
+      maxQty: 10n ** 18n,
+      price: 175n * 10n ** 16n,
+      deadline: BigInt(NOW + 60),
+      nonce: 2n,
+    };
+    const inner = c as unknown as { shown: Map<string, unknown> };
+    inner.shown.set(hash, { quote, signature: '0x', size: 10n ** 18n, seriesId: 1, side: 'buy', key: '1:buy:1' });
+    const e = await c.fillRfq(4, hash).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(VolSyncedError);
+    expect((e as VolSyncedError).current).toBe(false);
+    expect((e as VolSyncedError).message).toBe('Vol of NVDA partly synced, still behind its feed: retry in a moment.');
+    expect(sent).toEqual(Array(MAX_VOL_SYNC_STEPS).fill('syncVol'));
   });
 
   it("syncs a vault's vol on request, up to MAX_VOL_SYNC_STEPS, and says when it is still behind", async () => {

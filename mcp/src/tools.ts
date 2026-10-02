@@ -799,9 +799,10 @@ async function execute(s: Session, t: Ticket, force: boolean): Promise<TradeResu
  * MAX_VOL_SYNC_STEPS steps of 64 rounds), signed by the agent key: what a VolNotCurrent refusal asks
  * for. It stops as soon as a step leaves the stored round where it was, and never sends more than
  * the session's budget of catch-up transactions (NOVATION_MAX_VOL_SYNCS) in all. Returns a note for
- * the trade result.
+ * the trade result, or undefined when the vol was already current. Callers hold the session lock
+ * (s.lock): it sends with the agent key, and the budget is shared by every call of the session.
  */
-async function catchUpVol(s: Session, token: Address): Promise<string> {
+async function catchUpVol(s: Session, token: Address): Promise<string | undefined> {
   const ag = agentOf(s);
   const hashes: string[] = [];
   let stalled = false;
@@ -820,7 +821,11 @@ async function catchUpVol(s: Session, token: Address): Promise<string> {
     }
   }
   const sym = symbolFor(s.n.deployment, token);
-  if (hashes.length === 0) return `The ${sym} vol is behind its feed (VolNotCurrent), and this session's vol sync budget is spent: nothing was synced.`;
+  if (hashes.length === 0) {
+    // another call of the session synced it while this one waited for the lock
+    if (await getVolCurrent(s.n.ctx, token)) return undefined;
+    return `The ${sym} vol is behind its feed (VolNotCurrent), and this session's vol sync budget is spent: nothing was synced.`;
+  }
   const why = stalled ? ' A sync did not advance the vol, so the catch-up stopped.' : '';
   return `The ${sym} vol was behind its feed (VolNotCurrent): synced it first (${hashes.join(', ')}).${why}`;
 }
@@ -839,8 +844,10 @@ async function vaultQuoteCaughtUp(s: Session, vault: Address, series: SeriesInfo
   if (await getVolCurrent(s.n.ctx, series.underlying)) return { r };
   const spot = await getSpot(s.n.ctx, series.underlying).catch(() => null);
   if (!spot?.ok || (spot.session !== 'REGULAR' && spot.session !== 'EXTENDED')) return { r };
-  const note = await catchUpVol(s, series.underlying);
-  return { r: await ask(), note };
+  // under the agent-key lock, like a trade: parallel calls can't race for a nonce or overspend the
+  // session's sync budget (the second finds the vol current and sends nothing)
+  const note = await s.lock(() => catchUpVol(s, series.underlying));
+  return { r: await ask(), ...(note ? { note } : {}) };
 }
 
 /** No readable vault quote and no explicit limit: nothing is sent, and the caller must name its limit. */

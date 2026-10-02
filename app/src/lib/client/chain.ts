@@ -105,7 +105,7 @@ import {
 } from '@novation/sdk';
 import { formatUnits, zeroAddress, type Address, type Hash, type Hex, type PublicClient, type WalletClient } from 'viem';
 import { sessionEventCache } from './event-cache';
-import { volSyncText, volSyncedText } from '../market-state';
+import { volPartlySyncedText, volSyncText, volSyncedText } from '../market-state';
 import gasJson from '../../fixtures/gas.json';
 import type {
   AccountExpiry,
@@ -300,8 +300,12 @@ function volRefusalOf(e: unknown, token?: Address): { r: ChainRefusal; t: Addres
  * mark the quote was checked against, so the fill was not signed: the ticket re-quotes and checks again.
  */
 export class VolSyncedError extends Error {
-  constructor(readonly symbol: string) {
-    super(volSyncedText(symbol));
+  /** `current`: the catch-up reached the feed's latest round; false when it ran out of steps first. */
+  constructor(
+    readonly symbol: string,
+    readonly current = true,
+  ) {
+    super(current ? volSyncedText(symbol) : volPartlySyncedText(symbol));
     this.name = 'VolSyncedError';
   }
 }
@@ -1357,7 +1361,10 @@ export class ChainClient implements NovationClient {
     } catch (e) {
       const first = volRefusalOf(e, token);
       if (!first) throw e;
-      await this.catchUpVol(first.t);
+      if (!(await this.catchUpVol(first.t))) {
+        // out of steps and still behind: a retry would be refused the same way
+        throw new RefusalError({ ...first.r, message: volPartlySyncedText(this.sym(first.t)), args: { ...first.r.args, underlying: first.t } }, { cause: e });
+      }
       try {
         return await write();
       } catch (e2) {
@@ -1540,9 +1547,9 @@ export class ChainClient implements NovationClient {
       const behind = volRefusalOf(e);
       if (!behind) throw e;
       // the quote passed the off-market check at the old mark: sync, then never sign it unchecked
-      await this.catchUpVol(behind.t);
+      const current = await this.catchUpVol(behind.t);
       this.dropQuote(hash);
-      throw new VolSyncedError(this.sym(behind.t));
+      throw new VolSyncedError(this.sym(behind.t), current);
     }
     this.shown.delete(hash);
     this.rfqCache.delete(shown.key);

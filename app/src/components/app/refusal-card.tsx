@@ -5,7 +5,7 @@ import { refusalMessage } from '@novation/sdk';
 import { RefusalCard, type RefusalBreach } from '@/components/ui/refusal-card';
 import type { Refusal } from '@/lib/client/types';
 import { fmtNumber } from '@/lib/format';
-import { volSyncText } from '@/lib/market-state';
+import { volPartlySyncedText, volSyncText } from '@/lib/market-state';
 
 export interface RefusalNoticeProps {
   refusal: Refusal;
@@ -157,7 +157,8 @@ export function refusalCopy(r: Refusal, who: string, agentLabel = 'the agent'): 
       return { reason: r.message, context: `${who}.`, hint: 'Trades that reduce risk still clear. Opening resumes when the session reopens.' };
     case 'VolNotCurrent':
       return {
-        reason: volSyncText(r.underlying),
+        // a catch-up that ran out of steps says so; otherwise the vol is being synced
+        reason: r.underlying && r.message === volPartlySyncedText(r.underlying) ? r.message : volSyncText(r.underlying),
         context: `${refusalMessage(r.code)} ${who}.`,
         hint: 'Anyone may send the sync. Once it lands, the same transaction clears this check.',
       };

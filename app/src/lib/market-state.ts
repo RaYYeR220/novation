@@ -93,6 +93,11 @@ export function volSyncedText(symbol: string): string {
   return `Vol of ${symbol} synced: check the updated quote and sign again.`;
 }
 
+/** A catch-up that ran out of steps (MAX_VOL_SYNC_STEPS): the vol moved, but is still behind its feed. */
+export function volPartlySyncedText(symbol: string): string {
+  return `Vol of ${symbol} partly synced, still behind its feed: retry in a moment.`;
+}
+
 /** Why a vault whose vol lags its feed can't quote (`behind`: rounds, null after a feed migration). */
 export function vaultVolText(symbol: string, behind: number | null | undefined): string {
   return typeof behind === 'number'

@@ -85,7 +85,9 @@ export function useLiveTx() {
           toast({
             tone: 'neutral',
             title: e.message,
-            description: 'The new vol moves the kernel mark the quote was checked against, so the fill was not signed. The ticket checks a fresh quote against the new mark.',
+            description: e.current
+              ? 'The new vol moves the kernel mark the quote was checked against, so the fill was not signed. The ticket checks a fresh quote against the new mark.'
+              : 'The vol is still behind its feed after the syncs this sends at most, so the fill was not signed. Try again in a moment: the ticket checks a fresh quote first.',
           });
           await qc.invalidateQueries();
           return { ok: false, error: e.message, volSynced: true };

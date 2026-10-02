@@ -298,6 +298,24 @@ d('MCP tool handlers on a local chain', () => {
     await send(L, maker.wallet, (await simulateSyncVol(L.ctx, maker.account.address, L.ctx.deployment.tokens.NVDA!)).request);
   });
 
+  it('runs the vol catch-up of parallel calls one at a time under the agent-key lock', async () => {
+    const s2 = session(L, { agentKey: AGENT_KEY, account: id });
+    await verifyAgent(s2);
+    const feed = L.ctx.deployment.feeds.NVDA as `0x${string}`;
+    const maker = L.wallets[1]!;
+    const t = await blockTime(L);
+    const px = (await getSpot(L.ctx, L.ctx.deployment.tokens.NVDA!)).price / 10n ** 10n;
+    for (let i = 0; i < 66; i++) await send(L, maker.wallet, (await simulatePushRound(L.ctx, maker.account.address, feed, px, BigInt(t))).request);
+    const nonce = await L.client.getTransactionCount({ address: AGENT });
+    // two buys at once, both quoted on the stale vol: one catch-up (two syncs) between them, then
+    // the trades, each on its own nonce; the second call is over the agent's budget
+    const both = await Promise.all([tools.buyFromVault(s2, { series_id: callId, qty: 1 }), tools.buyFromVault(s2, { series_id: callId, qty: 1 })]);
+    expect(both.map((r) => r.status).sort()).toEqual(['filled', 'refused']);
+    expect(s2.volSyncsLeft).toBe(8 - 2);
+    expect(await L.client.getTransactionCount({ address: AGENT })).toBe(nonce + 3);
+    expect((await tools.sellToVault(s2, { series_id: callId, qty: 1 })).status).toBe('filled');
+  });
+
   it("fills a maker's signed RFQ quote and refuses a tampered one", async () => {
     const maker = L.wallets[1]!.account;
     const cc = L.ctx.deployment.vaults.find((v) => v.type === 'coveredCall' && v.underlying === 'NVDA')!.address;
