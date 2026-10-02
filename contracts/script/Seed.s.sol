@@ -23,7 +23,7 @@ contract Seed is Script {
     string[4] internal syms = ["NVDA", "TSLA", "AAPL", "SPY"];
 
     function run() external {
-        require(block.chainid != 1 && block.chainid != 42161, "testnet only");
+        require(block.chainid != 1 && block.chainid != 42161 && block.chainid != 4663, "testnet only");
         string memory dep =
             vm.readFile(string.concat(vm.projectRoot(), "/deployments/", vm.toString(block.chainid), ".json"));
         IMarketDataHub hub = IMarketDataHub(vm.parseJsonAddress(dep, ".hub"));

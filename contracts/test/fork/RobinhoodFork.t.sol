@@ -14,6 +14,7 @@ import {InsuranceFund} from "../../src/core/InsuranceFund.sol";
 import {Clearinghouse} from "../../src/core/Clearinghouse.sol";
 import {AuctionHouse} from "../../src/core/AuctionHouse.sol";
 import {CoveredCallVault} from "../../src/venues/CoveredCallVault.sol";
+import {VaultConfig} from "../../src/venues/OptionVaultBase.sol";
 import {IAggregatorV3} from "../../src/interfaces/IAggregatorV3.sol";
 import {IScaledUiAmount} from "../../src/interfaces/IScaledUiAmount.sol";
 import {UnderlyingParams} from "../../src/interfaces/IRiskParams.sol";
@@ -81,7 +82,10 @@ contract RobinhoodForkTest is Test, Deploy {
         insurance = new InsuranceFund(IERC20Metadata(USDG_TOKEN), address(this));
         ch = new Clearinghouse(params, hub, registry, kernel, insurance, address(this));
         ah = new AuctionHouse(ch, params, hub);
-        vault = new CoveredCallVault(IERC20Metadata(TOKENS[0]), ch, registry, hub, params, _vaultConfig());
+        // the mainnet default opens a series slot at 10 contracts; the cycle below sells 5
+        VaultConfig memory cfg = _vaultConfig();
+        cfg.minNewSeriesQty = 5e18;
+        vault = new CoveredCallVault(IERC20Metadata(TOKENS[0]), ch, registry, hub, params, cfg);
         insurance.bindClearinghouse(address(ch));
         ch.bindAuctionHouse(address(ah));
         ch.addVenue(address(vault));

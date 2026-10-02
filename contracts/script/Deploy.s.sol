@@ -19,19 +19,35 @@ import {UnderlyingParams, GlobalParams} from "../src/interfaces/IRiskParams.sol"
 import {IRiskKernel} from "../src/interfaces/IRiskKernel.sol";
 
 /// @notice Deploys the core stack on top of the kernel, tokens and feeds already recorded in
-/// deployments/<chainId>.json (deploy.py, DeployMocks.s.sol): timelock, RiskParams with the
-/// Task 7 defaults for NVDA/TSLA/AAPL/SPY, hub, registry, InsuranceFund, Clearinghouse (logic
-/// libraries linked by forge), AuctionHouse, RfqVenue and three vaults. Binds everything, adds the
-/// venues, closes the setup phase and merges the addresses back into the json (then run
+/// deployments/<chainId>.json (deploy.py, plus DeployMocks.s.sol on testnet; the mainnet json
+/// lists the real tokens and Chainlink proxies): timelock, RiskParams with the Task 7 defaults for
+/// NVDA/TSLA/AAPL/SPY, hub, registry, InsuranceFund, Clearinghouse (logic libraries linked by
+/// forge), AuctionHouse, RfqVenue and the vaults. Binds everything, adds the venues, closes the
+/// setup phase and merges the addresses back into the json (then run
 /// tools/deploy/record_libraries.py for the library addresses and the deploy block).
 ///
-/// Env: DEPLOYER_PRIVATE_KEY; optional GUARDIAN, TREASURY (default: the deployer),
-/// TIMELOCK_MIN_DELAY (default 60 s on RH testnet, 24 h elsewhere) and VAULT_MIN_NEW_SERIES_QTY
-/// (default 1 contract on RH testnet, 10 elsewhere: the smallest sale that opens a series slot in
-/// a vault, so filling all 24 of a vault's slots takes 240 in-band contracts on mainnet).
+/// What differs between chains is in _chainConfig(): the timelock delay, the vault sizes and
+/// whether the TSLA covered-call and NVDA put-write vaults are deployed next to the NVDA
+/// covered-call vault. Each can be overridden from the env.
+///
+/// Env: DEPLOYER_PRIVATE_KEY; GUARDIAN, the pause guardian and the timelock's proposer, canceller
+/// and executor (default: the deployer; off testnet it must be another key, see
+/// tools/deploy/role_keys.py); optional TREASURY (default: the deployer), TIMELOCK_MIN_DELAY
+/// (seconds), VAULT_MIN_NEW_SERIES_QTY and VAULT_MAX_TRADE_QTY (WAD contracts) and
+/// DEPLOY_ALL_VAULTS (bool).
 /// Run: forge script script/Deploy.s.sol --rpc-url $RH_TESTNET_RPC --broadcast --slow
 contract Deploy is Script {
     uint256 internal constant RH_TESTNET = 46630;
+
+    /// @dev What differs between chains. minNewSeriesQty is the smallest sale that opens a series
+    /// slot in a vault: at 10 contracts, filling all 24 of a vault's slots takes 240 in-band
+    /// contracts.
+    struct ChainConfig {
+        uint256 timelockDelay; // seconds
+        uint256 minNewSeriesQty; // WAD contracts
+        uint256 maxTradeQty; // WAD contracts per vault sale
+        bool allVaults; // TSLA covered call and NVDA put-write next to the NVDA covered call
+    }
 
     struct Stack {
         TimelockController timelock;
@@ -60,7 +76,9 @@ contract Deploy is Script {
         address deployer = vm.addr(pk);
         address guardian = vm.envOr("GUARDIAN", deployer);
         address treasury = vm.envOr("TREASURY", deployer);
-        uint256 minDelay = vm.envOr("TIMELOCK_MIN_DELAY", block.chainid == RH_TESTNET ? uint256(60) : uint256(1 days));
+        // off testnet the guardian (also the timelock's proposer and executor) must not be the deployer
+        require(block.chainid == RH_TESTNET || guardian != deployer, "set GUARDIAN to a key other than the deployer");
+        ChainConfig memory cc = _chainConfig();
         address usdg = vm.parseJsonAddress(dep, ".tokens.USDG");
         IRiskKernel kernel = IRiskKernel(vm.parseJsonAddress(dep, ".kernel.address"));
 
@@ -69,7 +87,7 @@ contract Deploy is Script {
 
         address[] memory roles = new address[](1);
         roles[0] = guardian;
-        s.timelock = new TimelockController(minDelay, roles, roles, address(0));
+        s.timelock = new TimelockController(cc.timelockDelay, roles, roles, address(0));
 
         s.params = new RiskParams(usdg, treasury, address(0), address(s.timelock), guardian, deployer, _globals());
         for (uint256 i = 0; i < 4; ++i) {
@@ -86,23 +104,45 @@ contract Deploy is Script {
         s.rfq = new RfqVenue(s.ch);
 
         address nvda = vm.parseJsonAddress(dep, ".tokens.NVDA");
-        address tsla = vm.parseJsonAddress(dep, ".tokens.TSLA");
         VaultConfig memory cfg = _vaultConfig();
         s.ccNvda = new CoveredCallVault(IERC20Metadata(nvda), s.ch, s.registry, s.hub, s.params, cfg);
-        s.ccTsla = new CoveredCallVault(IERC20Metadata(tsla), s.ch, s.registry, s.hub, s.params, cfg);
-        s.pwNvda = new PutWriteVault(IERC20Metadata(usdg), nvda, s.ch, s.registry, s.hub, s.params, cfg);
+        if (cc.allVaults) {
+            address tsla = vm.parseJsonAddress(dep, ".tokens.TSLA");
+            s.ccTsla = new CoveredCallVault(IERC20Metadata(tsla), s.ch, s.registry, s.hub, s.params, cfg);
+            s.pwNvda = new PutWriteVault(IERC20Metadata(usdg), nvda, s.ch, s.registry, s.hub, s.params, cfg);
+        }
 
         s.insurance.bindClearinghouse(address(s.ch));
         s.ch.bindAuctionHouse(address(s.ah));
         s.ch.addVenue(address(s.rfq));
         s.ch.addVenue(address(s.ccNvda));
-        s.ch.addVenue(address(s.ccTsla));
-        s.ch.addVenue(address(s.pwNvda));
+        if (cc.allVaults) {
+            s.ch.addVenue(address(s.ccTsla));
+            s.ch.addVenue(address(s.pwNvda));
+        }
         s.ch.finalizeSetup();
         s.params.finalizeSetup();
         vm.stopBroadcast();
 
-        _record(path, s, guardian);
+        _record(path, s, guardian, treasury);
+    }
+
+    // ---------------------------------------------------------------- per-chain settings
+
+    /// @dev RH testnet: a 60 s timelock, 1-contract series slots and all three vaults, so the demo
+    /// can move fast. RH mainnet and any other chain (forks, local nodes): a 24 h timelock,
+    /// 10-contract series slots and only the NVDA covered-call vault. The risk parameters below
+    /// are the same on every chain.
+    function _chainConfig() internal view returns (ChainConfig memory c) {
+        if (block.chainid == RH_TESTNET) {
+            c = ChainConfig({timelockDelay: 60, minNewSeriesQty: 1e18, maxTradeQty: 1000e18, allVaults: true});
+        } else {
+            c = ChainConfig({timelockDelay: 1 days, minNewSeriesQty: 10e18, maxTradeQty: 1000e18, allVaults: false});
+        }
+        c.timelockDelay = vm.envOr("TIMELOCK_MIN_DELAY", c.timelockDelay);
+        c.minNewSeriesQty = vm.envOr("VAULT_MIN_NEW_SERIES_QTY", c.minNewSeriesQty);
+        c.maxTradeQty = vm.envOr("VAULT_MAX_TRADE_QTY", c.maxTradeQty);
+        c.allVaults = vm.envOr("DEPLOY_ALL_VAULTS", c.allVaults);
     }
 
     // ---------------------------------------------------------------- parameters (Task 7 defaults)
@@ -152,14 +192,14 @@ contract Deploy is Script {
             maxStaleRegular: 93600,
             maxStaleExtended: 93600,
             maxStaleClosed: 345600,
-            volStaleness: 172800,
+            volStaleness: 345600,
             minPrice: minPrices[i],
             maxPrice: maxPrices[i]
         });
     }
 
     function _vaultConfig() internal view returns (VaultConfig memory) {
-        uint256 minNew = vm.envOr("VAULT_MIN_NEW_SERIES_QTY", block.chainid == RH_TESTNET ? uint256(1e18) : 10e18);
+        ChainConfig memory cc = _chainConfig();
         return VaultConfig({
             minOtm: 0.05e18,
             maxTenorDays: 35,
@@ -167,11 +207,11 @@ contract Deploy is Script {
             utilSlope: 0.3e18,
             spread: 0.02e18,
             sessionVolAdd: [uint64(0), 0.05e18, 0.15e18, 0.15e18, 0],
-            maxTradeQty: 1000e18,
+            maxTradeQty: SafeCast.toUint128(cc.maxTradeQty),
             maxOpenSeries: 24,
             minDelta: 0.05e18,
             maxDelta: 0.5e18,
-            minNewSeriesQty: SafeCast.toUint128(minNew)
+            minNewSeriesQty: SafeCast.toUint128(cc.minNewSeriesQty)
         });
     }
 
@@ -179,9 +219,10 @@ contract Deploy is Script {
 
     /// @dev The linked libraries and the deploy block (block.number is the L1 block on Arbitrum)
     /// are added from the broadcast by tools/deploy/record_libraries.py.
-    function _record(string memory path, Stack memory s, address guardian) internal {
+    function _record(string memory path, Stack memory s, address guardian, address treasury) internal {
         _set(path, "timelock", address(s.timelock));
         _set(path, "guardian", guardian);
+        _set(path, "treasury", treasury);
         _set(path, "riskParams", address(s.params));
         _set(path, "hub", address(s.hub));
         _set(path, "registry", address(s.registry));
@@ -189,16 +230,17 @@ contract Deploy is Script {
         _set(path, "clearinghouse", address(s.ch));
         _set(path, "auctionHouse", address(s.ah));
         _set(path, "rfq", address(s.rfq));
-        string memory vaults = string.concat(
-            "[",
-            _vault(address(s.ccNvda), "coveredCall", "NVDA"),
-            ",",
-            _vault(address(s.ccTsla), "coveredCall", "TSLA"),
-            ",",
-            _vault(address(s.pwNvda), "putWrite", "NVDA"),
-            "]"
-        );
-        vm.writeJson(vaults, path, ".vaults");
+        string memory vaults = _vault(address(s.ccNvda), "coveredCall", "NVDA");
+        if (address(s.ccTsla) != address(0)) {
+            vaults = string.concat(
+                vaults,
+                ",",
+                _vault(address(s.ccTsla), "coveredCall", "TSLA"),
+                ",",
+                _vault(address(s.pwNvda), "putWrite", "NVDA")
+            );
+        }
+        vm.writeJson(string.concat("[", vaults, "]"), path, ".vaults");
     }
 
     function _set(string memory path, string memory key, address a) internal {
