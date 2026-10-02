@@ -53,6 +53,9 @@ library MarginLogic {
     /// no new round meanwhile, before the socialization dust test counts it as 0 (the same 72
     /// hours as the settlement price fallback).
     uint256 internal constant OUTAGE_WRITE_OFF = 72 hours;
+    /// @notice A feed that can't be read at all has no round to tell one outage from the next, so
+    /// its outage counts as continuous only while markUnpriced sees it at least this often.
+    uint256 internal constant OUTAGE_OBSERVE = 1 days;
 
     /// @dev A book is the account's positions (plus the what-if change) as parallel arrays.
     struct Book {
@@ -89,25 +92,32 @@ library MarginLogic {
     /// hub's NoPrice / ImplausiblePrice. A socialization can't be undone (the cash index never
     /// rises), so it waits for the price rather than write off a loss that collateral the account
     /// still holds might cover. It waits a bounded time, though: once the token has been marked
-    /// without a price (markUnpriced) for OUTAGE_WRITE_OFF and its feed has printed no round since,
-    /// a feed that may never come back, it counts as 0.
+    /// without a usable price (markUnpriced: no price, or HALTED, e.g. a feed that stopped
+    /// printing) for OUTAGE_WRITE_OFF and its feed has printed no round since, a feed that may
+    /// never come back, it counts as 0 while it still has no usable price. An unreadable feed has
+    /// no round to compare, so its mark must also have been seen within OUTAGE_OBSERVE.
     function collateralValue(Deps memory d, uint256 id) external view returns (int256 mtm) {
         CHStorage storage $ = CHS.s();
         address[] storage toks = $.collateralTokens[id];
         for (uint256 i = 0; i < toks.length; ++i) {
             address t = toks[i];
             PriceOutage memory o = $.outages[t];
-            bool writtenOff =
-                o.since != 0 && block.timestamp >= o.since + OUTAGE_WRITE_OFF && o.round == _feedRound(d, t);
-            (bool priced, uint256 spot,) = _spot(d, t, writtenOff);
-            if (priced) mtm += F.mulWad($.collateral[id][t].toInt256(), spot.toInt256());
+            uint80 round = _feedRound(d, t);
+            bool writtenOff = o.since != 0 && block.timestamp >= o.since + OUTAGE_WRITE_OFF && o.round == round
+                && (round != 0 || block.timestamp <= o.seen + OUTAGE_OBSERVE);
+            (bool priced, uint256 spot, Session s) = _spot(d, t, writtenOff);
+            if (priced && !(writtenOff && s == Session.HALTED)) {
+                mtm += F.mulWad($.collateral[id][t].toInt256(), spot.toInt256());
+            }
         }
     }
 
-    /// @notice Whether the hub prices `token` now (only its NoPrice / ImplausiblePrice count as no
-    /// price; any other failure reverts), and its feed's latest round id (0 if unreadable).
-    function priceStatus(Deps memory d, address token) external view returns (bool priced, uint80 round) {
-        (priced,,) = _spot(d, token, true);
+    /// @notice Whether the hub gives `token` a usable price now: priced (only its NoPrice /
+    /// ImplausiblePrice count as no price; any other failure reverts) and not HALTED. Also its
+    /// feed's latest round id (0 if unreadable).
+    function priceStatus(Deps memory d, address token) external view returns (bool usable, uint80 round) {
+        (bool priced,, Session s) = _spot(d, token, true);
+        usable = priced && s != Session.HALTED;
         round = _feedRound(d, token);
     }
 

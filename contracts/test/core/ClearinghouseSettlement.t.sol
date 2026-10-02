@@ -10,7 +10,7 @@ import {MarketDataHub} from "../../src/core/MarketDataHub.sol";
 import {IInsuranceFund} from "../../src/interfaces/IInsuranceFund.sol";
 import {GlobalParams} from "../../src/interfaces/IRiskParams.sol";
 import {NyseCalendar} from "../../src/libraries/NyseCalendar.sol";
-import {Position} from "../../src/types/Types.sol";
+import {Position, Session} from "../../src/types/Types.sol";
 
 /// @notice Expiry settlement through the per-expiry pool: payers pay in, receivers claim once the
 /// pool is complete, deficits are bridged by the InsuranceFund or wait for auction proceeds, and an
@@ -1127,6 +1127,90 @@ contract ClearinghouseSettlementTest is Fixture {
         ch.markUnpriced(address(spy));
         (since,) = ch.priceOutageOf(address(spy));
         assertEq(since, 0);
+    }
+
+    /// A feed that just stops printing still prices the token (stale only halts it): it can be
+    /// marked too, and after 72 hours at the same round the halted collateral counts as 0, so it
+    /// can't hold the socialization (and every claim of the expiry) forever.
+    function test_staleFeedCollateralWrittenOffAfter72Hours() public {
+        (uint256 v, uint256 b) = _nakedShortSold();
+        _deposit(alice, v, address(spy), 1e18); // 600 USD of SPY, far above dust
+        _defaultAt300(v, b);
+        vm.expectRevert(abi.encodeWithSelector(CHErrors.AccountNotEmpty.selector, v));
+        ch.socializeRemainder(v, e);
+
+        // SPY prints nothing more: still priced, but HALTED once stale
+        uint256 t1 = vm.getBlockTimestamp() + 2 days;
+        vm.warp(t1);
+        (uint256 px, Session s, bool ok) = hub.spot(address(spy));
+        assertEq(px, 600e18);
+        assertEq(uint8(s), uint8(Session.HALTED));
+        assertFalse(ok);
+        ch.markUnpriced(address(spy));
+        (uint256 since,) = ch.priceOutageOf(address(spy));
+        assertEq(since, t1);
+
+        vm.warp(t1 + 72 hours - 1);
+        vm.expectRevert(abi.encodeWithSelector(CHErrors.AccountNotEmpty.selector, v));
+        ch.socializeRemainder(v, e);
+        uint256 snap = vm.snapshotState();
+        vm.warp(t1 + 72 hours);
+        ch.socializeRemainder(v, e); // the halted SPY counts as 0
+        assertEq(_pending(e), 0);
+        assertEq(ch.collateralOf(v, address(spy)), 1e18);
+        ch.claim(b, e);
+        _assertSolvent();
+
+        // a fresh print gives a usable price back: the collateral counts again, and anyone can
+        // clear the mark
+        vm.revertToState(snap);
+        vm.warp(t1 + 72 hours);
+        _setPrice(address(spy), 600e18);
+        vm.expectRevert(abi.encodeWithSelector(CHErrors.AccountNotEmpty.selector, v));
+        ch.socializeRemainder(v, e);
+        ch.markUnpriced(address(spy));
+        (since,) = ch.priceOutageOf(address(spy));
+        assertEq(since, 0);
+    }
+
+    /// A feed that can't be read at all has no round: its outage counts as one only while it is
+    /// observed (markUnpriced) at least daily. So a mark left over from an earlier outage can't
+    /// write the token off the moment the feed fails again.
+    function test_unreadableFeedOutageMustBeObservedDaily() public {
+        (uint256 v, uint256 b) = _nakedShortSold();
+        _deposit(alice, v, address(spy), 0.001e18);
+        _defaultAt300(v, b);
+        address feed = address(feedOf[address(spy)]);
+        bytes4 sel = feedOf[address(spy)].latestRoundData.selector;
+        uint256 t0 = vm.getBlockTimestamp();
+        uint256 snap = vm.snapshotState();
+
+        // observed every day for 72 hours: written off
+        vm.mockCallRevert(feed, abi.encodeWithSelector(sel), "dead");
+        ch.markUnpriced(address(spy));
+        (uint256 since, uint80 round) = ch.priceOutageOf(address(spy));
+        assertEq(since, t0);
+        assertEq(round, 0);
+        for (uint256 i = 1; i <= 3; ++i) {
+            vm.warp(t0 + i * 23 hours);
+            ch.markUnpriced(address(spy));
+        }
+        vm.warp(t0 + 72 hours);
+        ch.socializeRemainder(v, e);
+        assertEq(_pending(e), 0);
+
+        // a stale mark: the feed failed, recovered (nobody cleared the mark) and fails again later
+        vm.revertToState(snap);
+        vm.mockCallRevert(feed, abi.encodeWithSelector(sel), "dead");
+        ch.markUnpriced(address(spy));
+        vm.clearMockedCalls();
+        vm.warp(t0 + 10 days);
+        vm.mockCallRevert(feed, abi.encodeWithSelector(sel), "dead");
+        vm.expectRevert(MarketDataHub.NoPrice.selector);
+        ch.socializeRemainder(v, e); // not written off: the old mark wasn't seen for days
+        ch.markUnpriced(address(spy)); // a new outage, a new clock
+        (since,) = ch.priceOutageOf(address(spy));
+        assertEq(since, t0 + 10 days);
     }
 
     /// alice's naked short settles at 300 with an empty fund: 108 pending; NVDA then prints 250.

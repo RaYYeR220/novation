@@ -1147,6 +1147,59 @@ contract CoveredCallVaultTest is VaultFixture {
         assertGt(vault.maxRedeem(bob), 0);
     }
 
+    /// Entries wait too while the vault holds an expired position not yet settled: NAV marks it at
+    /// the current spot, not at the settlement print, so a deposit then (and a settleExpiry in the
+    /// same transaction) could take value from the holders.
+    function test_depositsWaitForExpiredPositionsToSettle() public {
+        _skipWithoutSettlement();
+        _vaultDeposit(vault, alice, 10e18);
+        _buy(vault, call190, 5e18);
+        vm.warp(e + 1);
+        _settleExpiry(address(nvda), e, 180e18);
+        _pokeVol(address(nvda));
+        assertTrue(vault.isLive());
+        assertEq(vault.maxDeposit(bob), 0);
+        assertEq(vault.maxMint(bob), 0);
+        nvda.mint(bob, 10e18);
+        vm.startPrank(bob);
+        nvda.approve(address(vault), 10e18);
+        vm.expectRevert(abi.encodeWithSelector(ERC4626.ERC4626ExceededMaxDeposit.selector, bob, 10e18, 0));
+        vault.deposit(10e18, bob);
+        vm.stopPrank();
+
+        vault.roll(_one(e)); // settled: entries reopen
+        assertEq(vault.maxDeposit(bob), type(uint256).max);
+        vm.prank(bob);
+        vault.deposit(10e18, bob);
+    }
+
+    /// An expiry the registry can never settle doesn't freeze the vault: a position still waiting
+    /// for its settlement price holds entries and exits only until SETTLEMENT_WAIT after expiry.
+    function test_unsettleableExpiryHoldsExitsForABoundedTime() public {
+        _vaultDeposit(vault, alice, 10e18);
+        _buy(vault, call190, 5e18);
+        _cooldown();
+        uint256 wait = vault.SETTLEMENT_WAIT();
+        assertEq(wait, 72 hours + 7 days);
+
+        // the registry never gets a settlement price for e
+        vm.warp(uint256(e) + wait);
+        _refresh(180e18);
+        assertTrue(vault.isLive());
+        (, bool settled) = registry.settlementPriceOf(address(nvda), e);
+        assertFalse(settled);
+        assertEq(vault.maxRedeem(alice), 0);
+        assertEq(vault.maxDeposit(bob), 0);
+
+        vm.warp(uint256(e) + wait + 1);
+        _refresh(180e18);
+        assertGt(vault.maxRedeem(alice), 0);
+        assertEq(vault.maxDeposit(bob), type(uint256).max);
+        vm.prank(alice);
+        vault.redeem(1e24, alice, alice);
+        assertGt(nvda.balanceOf(alice), 0);
+    }
+
     /// The two parts of a queued exit are claimed on their own: a USDG transfer that fails for the
     /// receiver doesn't hold up its tokens, and the other way round.
     function test_claimLegsAreIndependent() public {
