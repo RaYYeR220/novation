@@ -176,6 +176,12 @@ export function simulateSyncAndRebaseVol(ctx: NovationContext, account: Who, tok
 }
 
 /**
+ * Most catch-up steps (simulateCatchUpVol) a caller sends for one underlying before giving up:
+ * each folds up to 64 rounds, so four cover any backlog a feed builds between keeper passes.
+ */
+export const MAX_VOL_SYNC_STEPS = 4;
+
+/**
  * One step of bringing `token`'s vol up to its feed: syncAndRebaseVol after an aggregator
  * migration (the feed's latest round is in a later phase), else syncVol (up to 64 rounds). Call
  * again while the hub's volCurrent stays false. What clears a VolNotCurrent refusal of a
