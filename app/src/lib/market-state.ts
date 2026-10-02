@@ -1,4 +1,5 @@
-import type { Session } from './client/types';
+import { MAX_VOL_SYNC_STEPS } from '@novation/sdk';
+import type { Session, Vault } from './client/types';
 import { baseSession, etParts, eveningTs, fmtEt, isTradingDay } from './nyse';
 
 /** A session that closes the vaults: a weekend, or an NYSE holiday. */
@@ -69,7 +70,32 @@ export function volStatus(symbol: string, behind: number | null): { ok: boolean;
   };
 }
 
+/**
+ * A vault that can't quote only because its vol is behind: the market is open, but the vol is more
+ * than one sync behind its feed or waits for syncAndRebaseVol after a feed migration. Anyone can
+ * catch it up. Never for a weekend, a holiday or a halt, and never in the demo (no vol state there).
+ */
+export function vaultNeedsVolSync(v: Pick<Vault, 'live' | 'session' | 'volBehind'>): boolean {
+  if (v.live || (v.session !== 'REGULAR' && v.session !== 'EXTENDED') || v.volBehind === undefined) return false;
+  return v.volBehind === null || v.volBehind > VOL_SYNC_ROUNDS;
+}
+
+/** "up to 4 transactions": what a vol catch-up may ask the wallet to sign. */
+export const VOL_SYNC_TXS = `up to ${MAX_VOL_SYNC_STEPS} transactions`;
+
 /** The message for a write refused while a vol estimate catches up with its feed. */
 export function volSyncText(symbol: string | undefined): string {
   return symbol ? `Syncing the vol of ${symbol}: retry in a moment.` : 'Syncing a vol estimate: retry in a moment.';
+}
+
+/** An RFQ fill held back after its vol was synced: the quote is checked again at the new mark. */
+export function volSyncedText(symbol: string): string {
+  return `Vol of ${symbol} synced: check the updated quote and sign again.`;
+}
+
+/** Why a vault whose vol lags its feed can't quote (`behind`: rounds, null after a feed migration). */
+export function vaultVolText(symbol: string, behind: number | null | undefined): string {
+  return typeof behind === 'number'
+    ? `The ${symbol} vol is ${behind} rounds behind its feed, more than one sync folds.`
+    : `The ${symbol} feed moved to a new aggregator, and its vol waits for syncAndRebaseVol.`;
 }

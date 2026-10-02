@@ -55,6 +55,7 @@ import {
   getVaultQuotesSynced,
   getVaults,
   getVolCurrent,
+  MAX_VOL_SYNC_STEPS,
   listSeries,
   mulWad,
   nextWeeklyExpiry,
@@ -104,7 +105,7 @@ import {
 } from '@novation/sdk';
 import { formatUnits, zeroAddress, type Address, type Hash, type Hex, type PublicClient, type WalletClient } from 'viem';
 import { sessionEventCache } from './event-cache';
-import { volSyncText } from '../market-state';
+import { volSyncText, volSyncedText } from '../market-state';
 import gasJson from '../../fixtures/gas.json';
 import type {
   AccountExpiry,
@@ -160,8 +161,6 @@ const RFQ_MIN_LIFETIME = 15;
 const RFQ_MAX_LIFETIME = 600;
 /** Relay silences and refusals are retried after this long. */
 const RFQ_RETRY_MS = 8_000;
-/** Vol catch-up transactions a write sends at most (each folds up to 64 rounds) before it retries. */
-const VOL_SYNC_STEPS = 3;
 
 /**
  * Slippage allowed on each part of an in-kind vault exit, in basis points: redeemInKind reverts
@@ -286,6 +285,25 @@ function volBehind(m: MarketStatus): number | null {
   const vol = m.vol.lastRoundId;
   if (feed >> 64n > vol >> 64n) return null;
   return feed > vol ? Number(feed - vol) : 0;
+}
+
+/** A VolNotCurrent refusal and the underlying it is about; `token` for the vault's form, which names none. */
+function volRefusalOf(e: unknown, token?: Address): { r: ChainRefusal; t: Address } | undefined {
+  const r = e instanceof RefusalError ? e.refusal : decodeRefusal(e);
+  if (r?.code !== 'VolNotCurrent') return undefined;
+  const t = typeof r.args.underlying === 'string' ? (r.args.underlying as Address) : token;
+  return t ? { r, t } : undefined;
+}
+
+/**
+ * An RFQ fill was refused while a vol lagged its feed. The vol is synced now, which moves the kernel
+ * mark the quote was checked against, so the fill was not signed: the ticket re-quotes and checks again.
+ */
+export class VolSyncedError extends Error {
+  constructor(readonly symbol: string) {
+    super(volSyncedText(symbol));
+    this.name = 'VolSyncedError';
+  }
 }
 
 /** The refusal behind an error thrown by a write, or undefined. */
@@ -795,6 +813,7 @@ export class ChainClient implements NovationClient {
       kind: v.kind,
       underlying: m?.symbol ?? this.sym(v.underlying),
       session: m?.session ?? 'HALTED',
+      ...(m ? { volBehind: volBehind(m) } : {}),
       tvl: v.kind === 'coveredCall' ? assets * fromWad(spot) : assets,
       nav: fromUnits(v.assetsPerShare, v.assetDecimals),
       // a 7-day APY needs the NAV of a week ago; the chain keeps no NAV history
@@ -1315,11 +1334,11 @@ export class ChainClient implements NovationClient {
 
   /**
    * Brings `token`'s vol estimate up to its feed (permissionless): syncAndRebaseVol after an
-   * aggregator migration, else syncVol, until the hub reports it current or VOL_SYNC_STEPS are sent.
+   * aggregator migration, else syncVol, until the hub reports it current or MAX_VOL_SYNC_STEPS are sent.
    */
   async catchUpVol(token: Address): Promise<boolean> {
     const { account } = this.signer();
-    for (let i = 0; i < VOL_SYNC_STEPS; i++) {
+    for (let i = 0; i < MAX_VOL_SYNC_STEPS; i++) {
       if (await getVolCurrent(this.ctx, token)) return true;
       this.volSyncListener?.(this.sym(token));
       await this.send(simulateCatchUpVol(this.ctx, account, token));
@@ -1333,26 +1352,30 @@ export class ChainClient implements NovationClient {
    * vault's underlying, for the vault's form of the refusal, which names none.
    */
   private async syncingVol<T>(token: Address | undefined, write: () => Promise<T>): Promise<T> {
-    const behind = (e: unknown) => {
-      const r = e instanceof RefusalError ? e.refusal : decodeRefusal(e);
-      if (r?.code !== 'VolNotCurrent') return undefined;
-      const t = typeof r.args.underlying === 'string' ? (r.args.underlying as Address) : token;
-      return t ? { r, t } : undefined;
-    };
     try {
       return await write();
     } catch (e) {
-      const first = behind(e);
+      const first = volRefusalOf(e, token);
       if (!first) throw e;
       await this.catchUpVol(first.t);
       try {
         return await write();
       } catch (e2) {
-        const again = behind(e2);
+        const again = volRefusalOf(e2, token);
         if (!again) throw e2;
         throw new RefusalError({ ...again.r, message: volSyncText(this.sym(again.t)), args: { ...again.r.args, underlying: again.t } }, { cause: e2 });
       }
     }
+  }
+
+  /**
+   * Brings the vol of `symbol` up to its feed for a vault that can't quote until it is: more than one
+   * sync behind, or a feed migration awaiting syncAndRebaseVol. Throws if it is still behind.
+   */
+  async syncVol(symbol: string): Promise<void> {
+    const token = tokenOf(this.ctx.deployment, symbol);
+    if (await this.catchUpVol(token)) return;
+    throw new Error(`The vol of ${symbol} is still behind its feed after ${MAX_VOL_SYNC_STEPS} syncs: sync again in a moment.`);
   }
 
   private async allow(token: Address, spender: Address, amount: bigint): Promise<void> {
@@ -1497,6 +1520,8 @@ export class ChainClient implements NovationClient {
   /**
    * Fills exactly the quote the ticket showed (by its digest), at the size it was shown for. Nothing
    * is fetched here: an expired or unknown quote throws, and the ticket shows a fresh one first.
+   * Refused VolNotCurrent, it syncs that vol and throws VolSyncedError without signing: the new vol
+   * moves the mark, so the ticket re-quotes and runs the off-market check again before any fill.
    */
   async fillRfq(id: number, hash: Hex): Promise<Hash> {
     const { account } = this.signer();
@@ -1508,7 +1533,17 @@ export class ChainClient implements NovationClient {
       this.rfqCache.delete(shown.key);
       throw new Error('The quote expired. The ticket is asking the relay for a new one: check the price and sign again.');
     }
-    const hashOut = await this.syncingVol(undefined, () => this.send(simulateRfqFill(this.ctx, account, shown.quote, shown.signature, id, shown.size)));
+    let hashOut: Hash;
+    try {
+      hashOut = await this.send(simulateRfqFill(this.ctx, account, shown.quote, shown.signature, id, shown.size));
+    } catch (e) {
+      const behind = volRefusalOf(e);
+      if (!behind) throw e;
+      // the quote passed the off-market check at the old mark: sync, then never sign it unchecked
+      await this.catchUpVol(behind.t);
+      this.dropQuote(hash);
+      throw new VolSyncedError(this.sym(behind.t));
+    }
     this.shown.delete(hash);
     this.rfqCache.delete(shown.key);
     return hashOut;

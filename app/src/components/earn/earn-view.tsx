@@ -18,7 +18,7 @@ import type { Vault, VaultDetail, VaultEpoch, VaultHolding } from '@/lib/client/
 import { cn } from '@/lib/cn';
 import { fmtAddress, fmtDuration, fmtExpiry, fmtNumber, fmtPct, fmtQty, fmtSigned } from '@/lib/format';
 import { fmtCloseEt, fmtEt } from '@/lib/nyse';
-import { closedFor, closedSession, vaultClosedText } from '@/lib/market-state';
+import { VOL_SYNC_TXS, closedFor, closedSession, vaultClosedText, vaultNeedsVolSync, vaultVolText } from '@/lib/market-state';
 import { DepositDialog, WithdrawDialog, fmtExit, settlementWaitText } from './vault-dialogs';
 
 const STRATEGY = { coveredCall: 'Covered call', putWrite: 'Put write' } as const;
@@ -84,6 +84,13 @@ function VaultRow({ v, history, selected, onSelect }: { v: Vault; history?: Vaul
             <Chip size="sm" lamp="cyan">
               Live
             </Chip>
+          ) : vaultNeedsVolSync(v) ? (
+            <span data-state="vol-behind" className="grid justify-items-start gap-0.5">
+              <Chip size="sm" lamp="loss-3">
+                Not live
+              </Chip>
+              <span className="text-t12 text-navy-200">vol behind its feed</span>
+            </span>
           ) : (
             <Chip size="sm" lamp="loss-3">
               Not live
@@ -217,6 +224,7 @@ function VaultDetailView({ address }: { address: string }) {
   const { data: asOf } = useAsOf();
   const [deposit, setDeposit] = useState(false);
   const [withdraw, setWithdraw] = useState(false);
+  const live = useLiveTx();
   const marks: NavMark[] = useMemo(
     () =>
       (v?.epochs ?? [])
@@ -273,6 +281,26 @@ function VaultDetailView({ address }: { address: string }) {
                 <span className="font-semibold text-navy-50">Closed for {closedFor(closed)}.</span> {vaultClosedText(asOf)}
               </span>
             </p>
+          )}
+          {!demo && vaultNeedsVolSync(v) && (
+            <div role="status" data-state="vol-behind" className="flex max-w-[72ch] flex-wrap items-start gap-x-s4 gap-y-s2 text-t13 text-pretty text-navy-200">
+              <p className="flex min-w-0 flex-1 items-start gap-s2">
+                <Lamp tone="loss-3" size={6} className="mt-[6px]" />
+                <span>
+                  <span className="font-semibold text-navy-50">Not live until its vol catches up.</span> {vaultVolText(v.underlying, v.volBehind)} Anyone
+                  may sync it, {VOL_SYNC_TXS}; the vault quotes again once it is current.
+                </span>
+              </p>
+              <Button
+                size="sm"
+                variant="secondary"
+                loading={live.busy}
+                loadingLabel="Syncing"
+                onClick={() => void live.run(`Sync the vol of ${v.underlying}`, (c) => c.syncVol(v.underlying))}
+              >
+                Sync {v.underlying} vol
+              </Button>
+            </div>
           )}
           {wait && (
             <p role="status" data-state="settlement-wait" className="flex max-w-[72ch] items-start gap-s2 text-t13 text-pretty text-navy-200">

@@ -5,12 +5,14 @@ import { useCallback, useState } from 'react';
 import { useAccount, useConfig, useSwitchChain } from 'wagmi';
 import { getWalletClient } from 'wagmi/actions';
 import { useToast } from '@/components/ui/toast';
-import { LIVE_CHAIN, refusalOf, type ChainClient } from '@/lib/client/chain';
+import { LIVE_CHAIN, VolSyncedError, refusalOf, type ChainClient } from '@/lib/client/chain';
 import { useChainClient } from '@/lib/client/context';
 import type { Refusal } from '@/lib/client/types';
+import { VOL_SYNC_TXS } from '@/lib/market-state';
 import { explorerTx } from '@/lib/wallet/chains';
 
-export type TxResult<T> = { ok: true; value: T } | { ok: false; refusal?: Refusal; error: string };
+/** `volSynced`: an RFQ fill waited for a vol sync and was not signed; the ticket checks a fresh quote. */
+export type TxResult<T> = { ok: true; value: T } | { ok: false; refusal?: Refusal; error: string; volSynced?: boolean };
 
 /** A wallet or node error in one line: viem's short message, without the request dump. */
 export function shortError(e: unknown): string {
@@ -54,13 +56,13 @@ export function useLiveTx() {
         // a wallet client for the live chain now, not the one React handed over before the switch
         chain.setWallet(await getWalletClient(config, { chainId: LIVE_CHAIN.id }));
         pending = toast({ tone: 'pending', title: label, description: 'Confirm in your wallet; then it waits for the block.' });
-        // a vol behind its feed is synced first: one more transaction to confirm
+        // a vol behind its feed is synced first: more transactions to confirm
         chain.onVolSync((symbol) => {
           if (pending !== undefined) dismiss(pending);
           pending = toast({
             tone: 'pending',
             title: `Syncing the vol of ${symbol}`,
-            description: `Its vol estimate is behind the feed, so the chain refuses "${label}" until it is synced. Anyone may send the sync: confirm it in your wallet, then the transaction follows.`,
+            description: `Its vol estimate is behind the feed. Anyone may send the sync, ${VOL_SYNC_TXS}: confirm each in your wallet.`,
           });
         });
         const value = await f(chain);
@@ -79,6 +81,15 @@ export function useLiveTx() {
         return { ok: true, value };
       } catch (e) {
         if (pending !== undefined) dismiss(pending);
+        if (e instanceof VolSyncedError) {
+          toast({
+            tone: 'neutral',
+            title: e.message,
+            description: 'The new vol moves the kernel mark the quote was checked against, so the fill was not signed. The ticket checks a fresh quote against the new mark.',
+          });
+          await qc.invalidateQueries();
+          return { ok: false, error: e.message, volSynced: true };
+        }
         const refusal = refusalOf(e);
         const error = refusal ? `${refusal.code}: ${refusal.message}` : shortError(e);
         toast({ tone: 'refused', title: refusal ? `Refused on chain: ${refusal.code}` : `${label} failed`, description: refusal?.message ?? error });

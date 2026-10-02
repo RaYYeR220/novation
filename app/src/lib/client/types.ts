@@ -44,6 +44,8 @@ export interface Vault {
    * quotes, sales, buy-backs, deposits, exits or roll payouts; queuing an exit still works.
    */
   session: Session;
+  /** Feed rounds the underlying's vol has not folded in; null after a feed migration. Read from the chain; absent in the demo. */
+  volBehind?: number | null;
 }
 export interface AgentGrant { agent: string; label: string; maxWorstLoss: number; maxPremiumPerTrade: number; allowed: string[]; expiresAt: number; used: number; lastRefusal?: Refusal & { txHash?: string }; }
 export interface ProtocolStats { openInterestUsd: number; vaultTvlUsd: number; insuranceFundUsd: number; premium7dUsd: number; liquidations7d: number; socializedUsd: number; }

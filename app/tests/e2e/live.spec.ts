@@ -245,3 +245,55 @@ test.describe('live mode over a weekend', () => {
     await expect(page.getByText('The NVDA covered-call vault is closed for the weekend', { exact: false })).toBeVisible();
   });
 });
+
+test.describe('live mode with a vol behind its feed', () => {
+  test('an RFQ fill refused VolNotCurrent syncs the vol, signs nothing, and checks the quote again at the new mark', async ({ page }) => {
+    const chain = await mockChain(page, { volBehind: 70 });
+    await mockRelay(page, 1.75);
+    await injectWallet(page, MOCK_OWNER);
+    await open(page, `/app/trade?data=live&account=${MOCK_ACCOUNT}`);
+    await connect(page);
+    await page.getByRole('button', { name: 'Buy NVDA 220 put: no ask quoted' }).click();
+    await expect(page.locator('[data-code="VolNotCurrent"]')).toContainText('Syncing the vol of NVDA: retry in a moment.');
+    await expect(
+      page.getByText('Signing syncs the vol of NVDA first (up to 4 transactions, which anyone may send), then checks the quote again at the new mark', { exact: false }).first(),
+    ).toBeVisible();
+    const buy = page.getByRole('button', { name: /^Buy 1 NVDA/ });
+    await expect(buy).toBeEnabled();
+
+    await buy.click();
+    await expect(page.locator('[data-state="vol-synced"]')).toHaveText('Vol of NVDA synced: check the updated quote and sign again.');
+    // at the synced 10% vol the kernel mark is 0.40: the same 1.75 quote is off market now
+    const off = page.locator('[data-code="QuoteOffMarket"]');
+    await expect(off).toContainText('kernel mark of 0.40');
+    await expect(buy).toBeDisabled();
+    // the wallet sent the sync, never the fill
+    expect(chain.sent).toEqual(['hub.syncVol']);
+  });
+
+  test('a vault whose vol is more than one sync behind offers a sync, and is live again after it', async ({ page }) => {
+    const chain = await mockChain(page, { volBehind: 70 });
+    await injectWallet(page, MOCK_OWNER);
+    await open(page, '/app/earn?data=live');
+    await connect(page);
+    await expect(page.getByRole('heading', { level: 2, name: 'Novation Covered Call NVDA' })).toBeVisible();
+    const nvda = page.getByRole('list', { name: 'Vaults' }).getByRole('button').filter({ hasText: 'Covered call on NVDA' });
+    await expect(nvda).toContainText('vol behind its feed');
+    const note = page.locator('#vault-detail [data-state="vol-behind"]');
+    await expect(note).toContainText('The NVDA vol is 70 rounds behind its feed, more than one sync folds.');
+    await expect(page.getByRole('button', { name: 'Deposit NVDA' })).toBeDisabled();
+
+    await note.getByRole('button', { name: 'Sync NVDA vol' }).click();
+    await expect(note).toHaveCount(0);
+    await expect(nvda).toContainText('Live');
+    await expect(page.getByRole('button', { name: 'Deposit NVDA' })).toBeEnabled();
+    expect(chain.sent).toEqual(['hub.syncVol']);
+  });
+
+  test('no sync is offered for a vault closed for the weekend', async ({ page }) => {
+    await mockChain(page, { closed: 'WEEKEND', volBehind: 70 });
+    await open(page, '/app/earn?data=live');
+    await expect(page.locator('#vault-detail p[data-state="vault-closed"]')).toContainText('Closed for the weekend.');
+    await expect(page.getByRole('button', { name: 'Sync NVDA vol' })).toHaveCount(0);
+  });
+});

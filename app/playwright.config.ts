@@ -6,6 +6,7 @@ const url = `http://localhost:${port}`;
 
 export default defineConfig({
   testDir: './tests/e2e',
-  webServer: { command: `pnpm build && pnpm start -p ${port}`, url, reuseExistingServer: true },
+  // the build runs a full type check first: on a busy machine it takes longer than the 60 s default
+  webServer: { command: `pnpm build && pnpm start -p ${port}`, url, reuseExistingServer: true, timeout: 180_000 },
   use: { baseURL: url },
 });
