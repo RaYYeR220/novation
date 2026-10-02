@@ -87,6 +87,7 @@ library CHErrors {
     error TooManyPositions();
     error TooManyUnderlyings();
     error TooManyClaimExpiries(uint256 id);
+    error VolNotCurrent(address underlying);
     // accounts and funds
     error UnknownAccount(uint256 id);
     error NotOwner(uint256 id, address caller);
@@ -294,6 +295,18 @@ library CHS {
 
         $.longOI[seriesId] = $.longOI[seriesId] + _pos(newQty) - _pos(oldQty);
         $.unsettledShortQty[series.expiry] = $.unsettledShortQty[series.expiry] + _pos(-newQty) - _pos(-oldQty);
+    }
+
+    // ---------------------------------------------------------------- vol
+
+    /// @notice Folds the feeds' new rounds into the vol estimate of every underlying of the account
+    /// (MarketDataHub.syncVol, permissionless, up to 64 rounds each). A sync that fails leaves that
+    /// estimate behind, which MarginLogic.accountStateChecked then reports.
+    function syncVols(IMarketDataHub hub, uint256 id) internal {
+        address[] storage us = s().unionOf[id];
+        for (uint256 i = 0; i < us.length; ++i) {
+            try hub.syncVol(us[i]) {} catch {}
+        }
     }
 
     // ---------------------------------------------------------------- claims

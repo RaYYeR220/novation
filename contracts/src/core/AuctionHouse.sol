@@ -28,11 +28,11 @@ import {Session, WAD} from "../types/Types.sol";
 /// Gas: the most expensive bid the caps allow (test_gas_liquidation256_worst, measured cold) is a
 /// 50% bid on an insolvent account at the 256-position cap over 4 underlyings, collateral in all
 /// 4, unpaid claims on 16 expiries that all move and 8 unfolded rounds on every feed, into an
-/// empty bidder. It costs 19.08M gas outside the kernel: transferFraction 11.75M, the three margin
-/// procedures 6.61M without the kernel (the first one cold, 3.30M), the price checks and vol
+/// empty bidder. It costs 19.02M gas outside the kernel: transferFraction 11.75M, the three margin
+/// procedures 6.55M without the kernel (the first one cold, 3.27M), the price checks and vol
 /// catch-up 0.58M, the rest 0.14M. With the Stylus kernel (three margin calls at 256 positions,
 /// about 1.40M each on the Robinhood Chain testnet, and four small ewmaUpdate calls) the
-/// transaction is about 23.5M gas, and about 0.2M more on mainnet's feeds: under Arbitrum's 32M
+/// transaction is about 23.4M gas, and about 0.2M more on mainnet's feeds: under Arbitrum's 32M
 /// per-transaction limit with room to spare.
 ///
 /// Deficit sale. The clearinghouse starts one when settlement leaves an account owing an expiry
@@ -47,7 +47,8 @@ import {Session, WAD} from "../types/Types.sol";
 /// underlying's vol must have folded the feed's latest round: a liquidation folds up to 8 new
 /// rounds itself (a longer backlog takes a syncVol first), so every liquidation is priced at the
 /// one current estimate, never at one that missed the latest prints (the first of the week's
-/// included) and never with a choice between the two.
+/// included) and never with a choice between the two. The same holds for the underlyings of the
+/// bidder's own account, which its health check after the bid prices.
 /// Nor on a book the registry hasn't priced yet: a liquidation needs a live (unexpired) position
 /// and waits while any expired series of the account awaits its settlement price.
 ///
@@ -147,6 +148,7 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
         }
 
         int256 value = _transferableEquity(st);
+        _requireVolsCurrent(bidderId);
         ch.transferFraction(id, bidderId, fractionWad);
         (AccountState memory moved, uint256 liveLeft,) = ch.liquidationState(id);
         // a bid must not leave the account riskier (e.g. take its hedges whole and few liabilities)
@@ -250,6 +252,7 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
 
         ch.transferCash(bidderId, id, paidWad);
         ch.transferCollateral(id, bidderId, token, tokenWad);
+        _requireVolsCurrent(bidderId);
         ch.applyDeficitProceeds(id, expiry);
         if (social != 0) ch.repayDeficit(id);
         if (!ch.accountState(bidderId).healthy) revert BidderUnhealthy();
@@ -325,6 +328,18 @@ contract AuctionHouse is IAuctionHouse, ReentrancyGuardTransient {
             address u = us[i];
             _requireTradable(u);
             if (!_syncVol(u)) revert VolNotCurrent(u);
+        }
+    }
+
+    /// @dev Every underlying of the bidder's own account has folded its feed's latest round (each
+    /// folds up to LIQUIDATION_VOL_ROUNDS itself), so its health check after the bid isn't priced
+    /// at an estimate that missed a print. Called on the bidder's account before a liquidation
+    /// moves the book in (whose underlyings _requireAccountTradable has already synced), and after
+    /// a deficit sale moves the token in.
+    function _requireVolsCurrent(uint256 bidderId) private {
+        address[] memory us = ch.underlyingsOf(bidderId);
+        for (uint256 i = 0; i < us.length; ++i) {
+            if (!_syncVol(us[i])) revert VolNotCurrent(us[i]);
         }
     }
 
