@@ -16,6 +16,7 @@ import {
   getRfqDomain,
   getSeries,
   getVolCurrent,
+  MAX_VOL_SYNC_STEPS,
   RefusalError,
   simulateCatchUpVol,
   getSpot,
@@ -72,7 +73,7 @@ async function main() {
     // a vol more than one sync behind its feed: catch it up (permissionless), then fill
     if (!(e instanceof RefusalError) || e.refusal.code !== 'VolNotCurrent') throw e;
     const token = (e.refusal.args.underlying as `0x${string}` | undefined) ?? (await getSeries(ctx, seriesId)).underlying;
-    for (let i = 0; i < 4 && !(await getVolCurrent(ctx, token)); i++) {
+    for (let i = 0; i < MAX_VOL_SYNC_STEPS && !(await getVolCurrent(ctx, token)); i++) {
       const c = await simulateCatchUpVol(ctx, taker.account, token);
       const { hash } = await sendWithHeadroom(n, taker, c.request);
       log({ msg: 'vol caught up', token, tx: hash });

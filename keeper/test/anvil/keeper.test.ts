@@ -39,6 +39,7 @@ import {
   simulateRequestRedeem,
   simulateRfqFill,
   simulateSettleExpiry,
+  simulateStartLiquidation,
   simulateVaultBuy,
   simulateVaultSellBack,
   simulateVaultDeposit,
@@ -475,11 +476,14 @@ d('keeper on a local chain', () => {
     expect(await tick(k, ['liquidations'])).toEqual([]);
     expect(lines('liquidation', 'skip').at(-1)?.reason).toMatch(/exposure cap/);
     k.state.committed = 0n;
+    // the ticks above that didn't bid synced nothing; NVDA now prints nine more rounds: the bid's
+    // simulation is refused VolNotCurrent, and only then does the keeper sync, then bid
+    for (let i = 0; i < 9; i++) await pushRound(L, admin, 'NVDA', answerOf(spot) * 120n / 100n, await now(L));
 
     const sent = await tick(k, ['liquidations']);
-    expect(labels(sent)).toEqual([`bidLiquidation ${makerId}`]);
+    expect(labels(sent)).toEqual(['syncVol NVDA', `bidLiquidation ${makerId}`]);
     expect(sent.every((x) => x.status === 'success')).toBe(true);
-    const rc = await L.client.getTransactionReceipt({ hash: sent[0]!.hash });
+    const rc = await L.client.getTransactionReceipt({ hash: sent[1]!.hash });
     const [bid] = parseEventLogs({ abi: auctionHouseAbi, eventName: 'LiquidationBid', logs: rc.logs });
     expect(bid!.args.bidderId).toBe(bidder);
     expect(bid!.args.fractionWad).toBe(g.maxFractionPerBid);
@@ -491,7 +495,7 @@ d('keeper on a local chain', () => {
     expect((await getAccountState(L.ctx, bidder!)).healthy).toBe(true);
   });
 
-  it('ends a liquidation left running on an account that recovered', async () => {
+  it('ends a liquidation left running on an account that recovered, whoever started it', async () => {
     const t0 = await now(L);
     const t = nextTradable(t0);
     if (t > t0) await warpTo(L, t);
@@ -515,19 +519,29 @@ d('keeper on a local chain', () => {
     await send(L, maker, simulateWithdraw(L.ctx, maker.account.address, makerId, tok('USDG'), (excess < BigInt(st.cash) ? excess : st.cash) / 10n ** 12n, maker.account.address));
 
     await pushRound(L, admin, 'NVDA', (answerOf(spot) * 120n) / 100n, await now(L));
-    k.opts.bid = false;
-    expect(labels(await tick(k, ['liquidations']))).toContain(`startLiquidation ${makerId}`);
-    expect(k.state.liquidating.has(makerId)).toBe(true);
+    // someone else starts the auction, not this keeper
+    await send(L, admin, simulateStartLiquidation(L.ctx, admin.account.address, makerId));
     // NVDA comes back before anyone bids: the account is healthy again, its auction still runs
     await pushRound(L, admin, 'NVDA', answerOf(spot), await now(L));
     expect((await getAccountState(L.ctx, makerId)).liquidatable).toBe(false);
-    const ended = await tick(k, ['liquidations']);
+    // a keeper process started just now (nothing in memory) finds the running auction on chain
+    // (LiquidationStarted, scanned from the deployment block) and ends it
+    const fresh = createKeeper({
+      chain: L.chain,
+      deployment: L.deployment,
+      key: deriveKeeperKey(DEPLOYER_KEY),
+      rpcUrl: L.rpcUrl,
+      client: L.client,
+      pollingInterval: 50,
+      log: createLogger({ sink: (x) => logs.push(JSON.parse(x)) }),
+      opts: { settleDelaySec: 0, confirmations: 0, bid: false, listPerTick: 1000 },
+    });
+    const ended = await tick(fresh, ['liquidations']);
     expect(labels(ended)).toContain(`endLiquidation ${makerId}`);
     const rc = await L.client.getTransactionReceipt({ hash: ended.find((x) => x.label === `endLiquidation ${makerId}`)!.hash });
     expect(parseEventLogs({ abi: auctionHouseAbi, eventName: 'LiquidationEnded', logs: rc.logs })).toHaveLength(1);
-    expect(k.state.liquidating.has(makerId)).toBe(false);
-    expect(await tick(k, ['liquidations'])).toEqual([]);
-    k.opts.bid = true;
+    expect(fresh.state.liquidating.has(makerId)).toBe(false);
+    expect(await tick(fresh, ['liquidations'])).toEqual([]);
   });
 
   it('applies cash that already covers a deficit (repayDeficit) before dropping the sale', async () => {

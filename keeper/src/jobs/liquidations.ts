@@ -8,14 +8,16 @@ import {
   getPool,
   getUnderlyingParams,
   getUnderlyingsOf,
+  getVolCurrent,
   getVolState,
+  MAX_VOL_SYNC_STEPS,
   simulateClaim,
   simulateEndDeficitSale,
   simulateEndLiquidation,
   simulateSyncAndRebaseVol,
   simulateSyncVol,
   simulateVaultRoll,
-    getCollateral,
+  getCollateral,
   getDeficit,
   getDeficitSale,
   getGlobals,
@@ -31,6 +33,7 @@ import {
 } from '@novation/sdk';
 import { phaseOf } from '../hint';
 import { chainNow, execute, feedReader, why, type Keeper } from '../keeper';
+import type { Address } from 'viem';
 import { depositUsdg } from '../setup';
 import { repayIfCovered } from './deficit';
 
@@ -81,22 +84,43 @@ async function trimClaims(k: Keeper, id: bigint): Promise<boolean> {
 }
 
 /**
- * Brings the vol of every underlying of the account within LIQUIDATION_VOL_ROUNDS of its feed, so
- * starting or bidding in its liquidation doesn't revert VolNotCurrent: syncVol for a longer
- * backlog, syncAndRebaseVol after an aggregator migration. Not rate-limited: a liquidation needs it.
+ * Brings the vol of `only` (else of every underlying of the account) within LIQUIDATION_VOL_ROUNDS
+ * of its feed, so a start or a bid doesn't revert VolNotCurrent: syncVol for a longer backlog,
+ * syncAndRebaseVol after an aggregator migration, up to MAX_VOL_SYNC_STEPS steps each. Not
+ * rate-limited; only ever called on a VolNotCurrent refusal (simulateCaughtUp).
  */
-async function catchUpVol(k: Keeper, id: bigint): Promise<void> {
-  for (const u of await getUnderlyingsOf(k.ctx, id)) {
-    const [vol, p] = await Promise.all([getVolState(k.ctx, u), getUnderlyingParams(k.ctx, u)]);
-    const latest = await feedReader(k, p.feed).latest();
+async function catchUpVol(k: Keeper, id: bigint, only?: Address): Promise<void> {
+  for (const u of only ? [only] : await getUnderlyingsOf(k.ctx, id)) {
     const sym = symbolOf(k.ctx.deployment, u) ?? u;
-    if (phaseOf(latest.id) > phaseOf(vol.lastRoundId)) {
-      await execute(k, JOB, `syncAndRebaseVol ${sym}`, () => simulateSyncAndRebaseVol(k.ctx, k.account, u), { id, underlying: sym });
-    } else if (latest.id - vol.lastRoundId > LIQUIDATION_VOL_ROUNDS) {
-      await execute(k, JOB, `syncVol ${sym}`, () => simulateSyncVol(k.ctx, k.account, u), { id, underlying: sym, behind: latest.id - vol.lastRoundId });
+    for (let step = 0; step < MAX_VOL_SYNC_STEPS && !(await getVolCurrent(k.ctx, u)); step++) {
+      const [vol, p] = await Promise.all([getVolState(k.ctx, u), getUnderlyingParams(k.ctx, u)]);
+      const latest = await feedReader(k, p.feed).latest();
+      let rec;
+      if (phaseOf(latest.id) > phaseOf(vol.lastRoundId)) {
+        rec = await execute(k, JOB, `syncAndRebaseVol ${sym}`, () => simulateSyncAndRebaseVol(k.ctx, k.account, u), { id, underlying: sym });
+      } else if (latest.id - vol.lastRoundId > LIQUIDATION_VOL_ROUNDS) {
+        rec = await execute(k, JOB, `syncVol ${sym}`, () => simulateSyncVol(k.ctx, k.account, u), { id, underlying: sym, behind: latest.id - vol.lastRoundId });
+      } else break; // within what the auction house folds itself
+      if (rec?.status !== 'success') break;
     }
   }
 }
+
+/**
+ * Simulates a start or a bid. Only when it is refused VolNotCurrent (an underlying, the account's
+ * or the bidder's, is further behind than the auction house folds itself) the keeper catches that
+ * vol up and simulates once more: an auction it isn't about to act on costs it no syncs.
+ */
+async function simulateCaughtUp<T>(k: Keeper, id: bigint, sim: () => Promise<T>): Promise<T> {
+  try {
+    return await sim();
+  } catch (e) {
+    if (!(e instanceof RefusalError) || e.refusal.code !== 'VolNotCurrent') throw e;
+    await catchUpVol(k, id, e.refusal.args.underlying as Address | undefined);
+    return sim();
+  }
+}
+
 
 const min = (a: bigint, b: bigint) => (a < b ? a : b);
 
@@ -161,8 +185,10 @@ async function stillOwed(k: Keeper, id: bigint, expiry: number): Promise<bigint>
  * EXTENDED session). A restart without a successful keeper bid since the last start waits
  * restartBackoffSec per account (shouldStart), so an account nobody takes over doesn't cost a start
  * every 30 min. A start or bid reverts VolNotCurrent when an underlying's vol is more than 8 feed
- * rounds behind, so the keeper syncs those first (catchUpVol). An auction left running on an
- * account that recovered is ended (endLiquidation).
+ * rounds behind; on that refusal, and only then, the keeper syncs the vol and simulates once more.
+ * An auction left running on an account that recovered is ended (endLiquidation), whoever started
+ * it: running auctions are tracked from LiquidationStarted / LiquidationEnded, scanned from the
+ * deployment block at startup.
  *
  * Bidding is opt-in (`bid`) and capped: at most bidBudget per bid and bidExposureCap over the life
  * of the process, from the keeper's own funded subaccount. A bid goes in as soon as the auction
@@ -208,8 +234,14 @@ export async function liquidations(k: Keeper): Promise<void> {
         k.log('debug', JOB, 'backoff', { ...base, reason: 'no keeper bid went through since the last start', lastStart: last });
         continue;
       }
-      await catchUpVol(k, id);
-      const rec = await execute(k, JOB, `startLiquidation ${id}`, () => simulateStartLiquidation(ctx, k.account, id), base);
+      let start: Awaited<ReturnType<typeof simulateStartLiquidation>>;
+      try {
+        start = await simulateCaughtUp(k, id, () => simulateStartLiquidation(ctx, k.account, id));
+      } catch (e) {
+        k.log(e instanceof RefusalError ? 'info' : 'warn', JOB, 'skip', { ...base, label: `startLiquidation ${id}`, reason: why(e) });
+        continue;
+      }
+      const rec = await execute(k, JOB, `startLiquidation ${id}`, async () => start, base);
       if (rec?.status !== 'success') continue;
       k.state.lastStart.set(id, now);
       k.state.liquidating.add(id);
@@ -223,14 +255,12 @@ export async function liquidations(k: Keeper): Promise<void> {
     // a bid moves the account's unpaid claims to the bidder: neither may end up holding claims on
     // more than MAX_CLAIM_EXPIRIES expiries, so the ready ones are claimed first
     if (!(await trimClaims(k, id)) || !(await trimClaims(k, can.id))) continue;
-    // a bid needs the account's and the bidder's own underlyings current (it folds up to 8 rounds each)
-    await catchUpVol(k, id);
-    await catchUpVol(k, can.id);
     let fraction = st.equity <= g.dustEquity ? WAD : g.maxFractionPerBid;
     for (let attempt = 0; attempt < 4; attempt++) {
       let sim: Awaited<ReturnType<typeof simulateBidLiquidation>>;
       try {
-        sim = await simulateBidLiquidation(ctx, k.account, id, fraction, can.id, can.budget);
+        // a bid needs the account's and the bidder's own underlyings current (it folds up to 8 rounds each)
+        sim = await simulateCaughtUp(k, id, () => simulateBidLiquidation(ctx, k.account, id, fraction, can.id, can.budget));
       } catch (e) {
         const code = e instanceof RefusalError ? e.refusal.code : undefined;
         if ((code === 'BidderUnhealthy' || code === 'PayAboveMax') && attempt < 3) {

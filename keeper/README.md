@@ -106,7 +106,7 @@ Every job can run again safely: it reads the chain and sends only what is still 
 
    A roll that would do nothing is never sent. After a roll it sent, the job waits `--roll-every` before rolling the same vault again. A vault whose cash already covers a deficit has it applied first with `repayDeficit`.
 5. **syncVol.**
-   - It runs before liquidations. The auction house folds at most 8 new rounds per underlying itself and refuses a liquidation over a longer backlog (`VolNotCurrent`), so the keeper catches up first. The liquidation job does the same for the underlyings of an account it is about to start or bid on, regardless of `--sync-vol-every` and the gas reserve.
+   - It runs before liquidations. The auction house folds at most 8 new rounds per underlying itself and refuses a liquidation over a longer backlog (`VolNotCurrent`), so the keeper catches up first. When a start or a bid of the liquidation job is refused `VolNotCurrent` anyway (only then), the job syncs that vol, up to 4 steps of 64 rounds and regardless of `--sync-vol-every` and the gas reserve, and simulates once more.
    - For each underlying where the feed has a round the hub hasn't folded in, the job calls `MarketDataHub.syncVol`, which folds up to 64 rounds per call.
    - It does nothing while an underlying is up to date, was poked within `--sync-vol-every`, or the balance is below the gas reserve.
    - When the feed has moved to a new aggregator phase, it calls `syncAndRebaseVol`, which folds what is left of the old phase (up to 64 rounds per call) and re-anchors on the new phase in one transaction, so the old aggregator can't print in between.
@@ -115,7 +115,7 @@ Every job can run again safely: it reads the chain and sends only what is still 
    - Bidding is opt-in. It comes from the keeper's own subaccount (`setup`), and it is capped at 2000 USDG per bid and `--bid-cap` in total.
    - A bid goes in as soon as an auction starts, so at the start discount. It takes `maxFractionPerBid` of the book, or all of it once equity is dust. The fraction is halved while the bidder would end up below initial margin.
    - A bid moves the account's unpaid claims to the bidder, and neither side may end up holding claims on more than 16 expiries (`TooManyClaimExpiries`). Before bidding, the job claims the ready claims of both. If blocked claims alone keep either side over the cap, it logs that and skips the bid.
-   - An auction left running on an account that has recovered is ended with `endLiquidation`, so a later fall starts a fresh ramp.
+   - An auction left running on an account that has recovered is ended with `endLiquidation`, so a later fall starts a fresh ramp. That covers auctions anyone started: running auctions are tracked from `LiquidationStarted` and `LiquidationEnded`, scanned from the deployment block when the keeper starts.
    - The keeper never unwinds or hedges what it takes over. On mainnet, size `--bid-cap` with that in mind.
    - Deficit sales started by settlement get bids for the defaulter's stock collateral, sized to what the deficit still needs.
    - The discount ramps every second, so a bid can land a block later at a slightly lower price and leave a sliver of the deficit unpaid. The job pays a sliver of up to 0.01 USDG into the account and applies it with `repayDeficit`.
@@ -165,11 +165,11 @@ The anvil suite uses the SDK's fixture: anvil, the Solidity `KernelReference` as
    - a third tick with nothing to do.
 9. A vault queue that is fully locked gets no roll. Once assets are free it still gets none over the weekend, and then exactly one roll when the market opens.
 10. A liquidation:
-   - with a feed nine rounds ahead of the vol, the keeper syncs the vol before it starts the auction;
+   - with a feed nine rounds ahead of the vol, the start is refused `VolNotCurrent`, and the keeper syncs the vol, then starts the auction; a bid later does the same;
    - with bidding off, it is only started;
    - with the exposure cap used up, there is no bid;
    - otherwise, the bid goes in at the start discount from the keeper's subaccount.
-11. A liquidation left running on an account that recovered is ended.
+11. A liquidation someone else started, left running on an account that recovered, is ended by a keeper process started afterwards.
 12. Cash deposited to cover a deficit is applied with `repayDeficit`, then the still-open sale is ended and dropped.
 
 `tsx scripts/fork-rehearsal.ts` rehearses the next settlement against a local anvil fork of the live chain, with the deployed contracts and the real open positions. It re-prints each feed just before the close, moves the fork's clock past it, and runs the settlement jobs on the fork. Nothing reaches the real network.
