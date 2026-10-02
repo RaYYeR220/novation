@@ -65,6 +65,9 @@ import {
   simulateRfqFill,
   verifyQuote,
   getRfqDomain,
+  isAuthorized,
+  quoteHash,
+  rfqPremium,
   simulateVaultBuy,
   simulateVaultDeposit,
   simulateVaultSellBack,
@@ -89,7 +92,8 @@ import {
   type VaultState,
   type RfqQuote,
 } from '@novation/sdk';
-import { maxUint256, zeroAddress, type Address, type Hash, type Hex, type PublicClient, type WalletClient } from 'viem';
+import { formatUnits, zeroAddress, type Address, type Hash, type Hex, type PublicClient, type WalletClient } from 'viem';
+import { sessionEventCache } from './event-cache';
 import gasJson from '../../fixtures/gas.json';
 import type {
   AccountExpiry,
@@ -126,32 +130,48 @@ export const LIVE_RPC = process.env.NEXT_PUBLIC_RH_TESTNET_RPC || robinhoodChain
 /** The RFQ maker relay (the mm-bot handler): GET {url}/quotes?series=&side=&qty= returns signed quotes. */
 export const RFQ_URL = process.env.NEXT_PUBLIC_RFQ_URL || '/api/rfq';
 
-type SignedQuote = { quote: RfqQuote; signature: Hex; premium: bigint; expiresAt: number };
-type RelayAnswer = SignedQuote | { refusal: { code: string; message: string } } | undefined;
+/**
+ * How far an RFQ price may sit on the adverse side of the kernel mark before the app refuses to sign
+ * it: max(band x mark, RFQ_MIN_OFF_MARK) per contract, where band = max(NEXT_PUBLIC_RFQ_BAND (default
+ * 0.2), 2 x the vault spread). The venue has no max-premium of its own, so this is the only guard.
+ */
+export const RFQ_BAND = Number(process.env.NEXT_PUBLIC_RFQ_BAND) > 0 ? Number(process.env.NEXT_PUBLIC_RFQ_BAND) : 0.2;
+const RFQ_MIN_OFF_MARK = 5n * 10n ** 16n; // 0.05 USDG per contract
+/** A quote must outlive the click by this much, and expire within RFQ_MAX_LIFETIME. */
+const RFQ_MIN_LIFETIME = 15;
+const RFQ_MAX_LIFETIME = 600;
+/** Relay silences and refusals are retried after this long. */
+const RFQ_RETRY_MS = 8_000;
 
-/** One side of the relay's JSON answer, back into the RfqVenue.Quote struct. */
-function parseRelayQuote(x: {
-  quote: { signer: string; makerId: string; seriesId: number | string; makerSells: boolean; maxQty: string; price: string; deadline: string; nonce: string };
-  signature: string;
-  premium: string;
-  expiresAt: number;
-}): SignedQuote {
-  const q = x.quote;
-  return {
-    quote: {
-      signer: q.signer as Address,
-      makerId: BigInt(q.makerId),
-      seriesId: Number(q.seriesId),
-      makerSells: q.makerSells,
-      maxQty: BigInt(q.maxQty),
-      price: BigInt(q.price),
-      deadline: BigInt(q.deadline),
-      nonce: BigInt(q.nonce),
-    },
-    signature: x.signature as Hex,
-    premium: BigInt(x.premium),
-    expiresAt: Number(x.expiresAt),
-  };
+/** A maker's signed quote, as the relay sent it: only the signed fields count, never its extra numbers. */
+type RelayQuote = { quote: RfqQuote; signature: Hex };
+type RelayAnswer = { ok: RelayQuote } | { refusal: Refusal } | undefined;
+/** A quote the ticket showed, by its digest: the only quotes fillRfq will sign. */
+type ShownQuote = RelayQuote & { size: bigint; seriesId: number; side: 'buy' | 'sell'; key: string };
+
+/** One side of the relay's JSON answer back into the RfqVenue.Quote struct, or undefined if malformed. */
+function parseRelayQuote(x: unknown): RelayQuote | undefined {
+  try {
+    const { quote: q, signature } = x as {
+      quote: { signer: string; makerId: string; seriesId: number | string; makerSells: boolean; maxQty: string; price: string; deadline: string; nonce: string };
+      signature: string;
+    };
+    return {
+      quote: {
+        signer: q.signer as Address,
+        makerId: BigInt(q.makerId),
+        seriesId: Number(q.seriesId),
+        makerSells: q.makerSells === true,
+        maxQty: BigInt(q.maxQty),
+        price: BigInt(q.price),
+        deadline: BigInt(q.deadline),
+        nonce: BigInt(q.nonce),
+      },
+      signature: signature as Hex,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 type ChainSeries = Series & { bid: number; ask: number; delta: number; iv: number; mark?: number };
@@ -195,7 +215,7 @@ function payoff(s: Pick<SeriesInfo, 'isCall' | 'strike'>, price: bigint): bigint
 /** An SDK refusal turned into the numbers the refusal cards read. */
 function appRefusal(
   r: ChainRefusal,
-  c: { premium?: bigint; fee?: bigint; before?: ChainState; policy?: AgentPolicy } = {},
+  c: { premium?: bigint; fee?: bigint; before?: ChainState; policy?: AgentPolicy; sell?: boolean } = {},
 ): Refusal {
   const numbers: Record<string, number> = { ...r.numbers };
   if (r.code === 'AgentRiskBudgetExceeded' && c.before) numbers.used = fromWad(c.before.im);
@@ -204,9 +224,15 @@ function appRefusal(
     if (c.policy) numbers.cap = fromWad(c.policy.maxPremiumPerTrade);
   }
   if (r.code === 'InsufficientCash' && r.numbers.cash !== undefined && r.numbers.wad !== undefined) {
+    // cash after: what was there less what the debit asked for
+    const cash = r.numbers.cash - r.numbers.wad;
+    if (c.sell) {
+      // a sale is credited the premium first, then debited the fee (TradeLogic step 6)
+      return { code: r.code, message: r.message, numbers: { cash, premium: c.premium !== undefined ? fromWad(c.premium) : 0, fee: r.numbers.wad, sell: 1 } };
+    }
     const premium = c.premium !== undefined ? fromWad(c.premium) : r.numbers.wad;
     const fee = c.fee !== undefined ? fromWad(c.fee) : 0;
-    return { code: r.code, message: r.message, numbers: { cash: r.numbers.cash - r.numbers.wad, premium, fee } };
+    return { code: r.code, message: r.message, numbers: { cash, premium, fee } };
   }
   return { code: r.code, message: r.message, numbers };
 }
@@ -231,10 +257,13 @@ export class ChainClient implements NovationClient {
   private signerWallet: WalletClient | undefined;
   private readonly seriesCache = new Map<number, SeriesInfo>();
   private readonly memos = new Map<string, { at: number; p: Promise<unknown> }>();
+  private readonly rfqCache = new Map<string, { until: number; p: Promise<RelayAnswer> }>();
+  private readonly shown = new Map<Hex, ShownQuote>();
 
   constructor(opts: { rpcUrl?: string; client?: PublicClient } = {}) {
     const client = opts.client ?? createNovationClient({ chain: LIVE_CHAIN, rpcUrl: opts.rpcUrl ?? LIVE_RPC });
-    this.n = createNovation({ client, chainId: LIVE_CHAIN.id });
+    // scanned event ranges survive reloads in this tab, so a page fetches only new blocks
+    this.n = createNovation({ client, chainId: LIVE_CHAIN.id, eventCache: sessionEventCache(`novation:logs:${LIVE_CHAIN.id}`) });
     this.ctx = this.n.ctx;
   }
 
@@ -462,7 +491,10 @@ export class ChainClient implements NovationClient {
     const spot = m.spot ?? m.feedPrice ?? 0n;
     const qty = toWad(Number(qtyDelta.toFixed(6)));
     const size = abs(qty);
-    const agent = opts.agent as Address | undefined;
+    // who would sign: the agent picked on the ticket, else the connected wallet, else (just
+    // looking) the owner. Anyone but the owner needs a live grant, which the checks below read.
+    const actor = (opts.agent as Address | undefined) ?? this.walletAddress ?? owner;
+    const agent = actor.toLowerCase() === owner.toLowerCase() ? undefined : actor;
     const policy = agent ? await getAgentPolicy(this.ctx, id, agent) : undefined;
 
     let premiumW = toWad(Math.max(0, Number(premium.toFixed(6))));
@@ -476,11 +508,24 @@ export class ChainClient implements NovationClient {
       if (p !== undefined) premiumW = p;
       else refusal = why ? appRefusal(why, { before }) : { code: 'VaultNotLive', message: refusalMessage('VaultNotLive') };
     }
-    // an RFQ ticket takes the relay's signed quote for this size, when a relay answers
-    const relay = opts.venue === 'rfq' ? await this.rfqQuote(s.id, qty > 0n ? 'buy' : 'sell', Math.abs(qtyDelta)) : undefined;
-    const signed = relay && 'quote' in relay ? relay : undefined;
-    if (signed) premiumW = signed.premium;
-    else if (relay && 'refusal' in relay) refusal = { code: relay.refusal.code, message: `The maker relay quotes no ${qty > 0n ? 'ask' : 'bid'}: ${relay.refusal.message}` };
+    // an RFQ ticket takes the relay's signed quote for this size, when a relay answers; the
+    // premium is what the venue will charge for the signed price, never the relay's own figure
+    let signed: (RelayQuote & { hash: Hex }) | undefined;
+    if (opts.venue === 'rfq') {
+      const side = qty > 0n ? 'buy' : 'sell';
+      const relay = await this.rfqQuote(s.id, side, size, now);
+      if (relay && 'refusal' in relay) refusal = relay.refusal;
+      else if (relay) {
+        const off = await this.offMarket(s, m, relay.ok.quote, side, now, g);
+        if (off) refusal = off;
+        else {
+          premiumW = rfqPremium(relay.ok.quote, size);
+          const hash = quoteHash(this.ctx, relay.ok.quote);
+          signed = { ...relay.ok, hash };
+          this.shown.set(hash, { ...relay.ok, size, seriesId: s.id, side, key: this.rfqKey(s.id, side, size) });
+        }
+      }
+    }
     const fee = tradeFee(g, size, spot, premiumW);
     const cashDelta = takerCashDelta(qty, premiumW, fee);
 
@@ -495,13 +540,17 @@ export class ChainClient implements NovationClient {
         const equity = pos.equity + cashDelta;
         return {
           after: { ...pos, cash: pos.cash + cashDelta, equity, healthy: equity >= pos.im, liquidatable: equity < pos.mm },
-          cashShort: { code: 'InsufficientCash', message: r.message, numbers: { cash: fromWad(before.cash + cashDelta), premium: fromWad(premiumW), fee: fromWad(fee) } },
+          cashShort: {
+            code: 'InsufficientCash',
+            message: r.message,
+            numbers: { cash: fromWad(before.cash + cashDelta), premium: fromWad(premiumW), fee: fromWad(fee), ...(qty < 0n ? { sell: 1 } : {}) },
+          },
         };
       }
     };
     const simulate = async (): Promise<Refusal | undefined> => {
       if (refusal || (!vault && !signed)) return undefined;
-      const signer = agent ?? owner;
+      const signer = actor;
       try {
         if (signed) await simulateRfqFill(this.ctx, signer, signed.quote, signed.signature, id, size);
         else if (qty > 0n) await simulateVaultBuy(this.ctx, signer, vault!.address, s.id, size, premiumW, id);
@@ -509,7 +558,7 @@ export class ChainClient implements NovationClient {
         return undefined;
       } catch (e) {
         if (!(e instanceof RefusalError)) throw e;
-        return appRefusal(e.refusal, { premium: premiumW, fee, before, policy });
+        return appRefusal(e.refusal, { premium: premiumW, fee, before, policy, sell: qty < 0n });
       }
     };
     const [{ after, cashShort }, grid, simulated] = await Promise.all([
@@ -531,43 +580,76 @@ export class ChainClient implements NovationClient {
       ...(refusal ? { refusal } : {}),
       afterGrid: grid.cells.map(fromWad),
       approx: false,
-      ...(signed ? { rfq: { maker: signed.quote.signer, makerId: Number(signed.quote.makerId), expiresAt: signed.expiresAt } } : {}),
+      ...(signed
+        ? { rfq: { maker: signed.quote.signer, makerId: Number(signed.quote.makerId), expiresAt: Number(signed.quote.deadline), hash: signed.hash, price: fromWad(signed.quote.price) } }
+        : {}),
     };
   }
 
+  private rfqKey(seriesId: number, side: 'buy' | 'sell', size: bigint) {
+    return `${seriesId}:${side}:${size}`;
+  }
+
   /**
-   * A signed maker quote for `qty` contracts of the series from the RFQ relay, checked against this
-   * deployment's venue domain; the relay's refusal when it won't quote; undefined when no relay
-   * answers. Quotes are kept until shortly before they expire, so the ticket fills the one it showed.
+   * A signed maker quote for `size` (WAD) contracts from the RFQ relay, kept only if it is for this
+   * series and side, covers the size, lives between RFQ_MIN_LIFETIME and RFQ_MAX_LIFETIME seconds
+   * and verifies against this deployment's venue; the relay's refusal; or undefined when no relay
+   * answers. A quote is reused until shortly before its deadline, anything else for RFQ_RETRY_MS.
    */
-  async rfqQuote(seriesId: number, side: 'buy' | 'sell', qty: number): Promise<RelayAnswer> {
-    const key = `rfq:${seriesId}:${side}:${qty}`;
-    const hit = this.memos.get(key) as { at: number; p: Promise<RelayAnswer> } | undefined;
-    if (hit) {
-      const v = await hit.p;
-      if (!v || !('quote' in v) || v.expiresAt - 10 > Date.now() / 1000) return v;
-    }
+  async rfqQuote(seriesId: number, side: 'buy' | 'sell', size: bigint, now: number): Promise<RelayAnswer> {
+    const key = this.rfqKey(seriesId, side, size);
+    const hit = this.rfqCache.get(key);
+    if (hit && Date.now() < hit.until) return hit.p;
+    const refuse = (code: string, message: string): RelayAnswer => ({ refusal: { code, message } });
     const p = (async (): Promise<RelayAnswer> => {
       try {
-        const base = RFQ_URL.replace(/\/$/, '');
+        const base = RFQ_URL.replace(/[/]$/, '');
+        const qty = formatUnits(size, 18);
         const r = await fetch(`${base}/quotes?series=${seriesId}&side=${side}&qty=${qty}`, { headers: { accept: 'application/json' } });
         if (r.status !== 200 && r.status !== 422) return undefined;
-        const j = (await r.json()) as { quotes?: Parameters<typeof parseRelayQuote>[0][]; refusals?: { side: string; code: string; message: string }[] };
+        const j = (await r.json()) as { quotes?: unknown[]; refusals?: { side: string; code: string; message: string }[] };
         const raw = j.quotes?.find((x) => (x as { side?: string }).side === side);
-        if (raw) {
-          const q = parseRelayQuote(raw);
-          if (q.quote.seriesId !== seriesId || q.quote.makerSells !== (side === 'buy')) return undefined;
-          if (!(await verifyQuote(q.quote, q.signature, getRfqDomain(this.ctx)))) return undefined;
-          return q;
+        if (!raw) {
+          const no = j.refusals?.find((x) => x.side === side);
+          return no ? refuse(no.code, `The maker relay quotes no ${side === 'buy' ? 'ask' : 'bid'}: ${no.message}`) : undefined;
         }
-        const no = j.refusals?.find((x) => x.side === side);
-        return no ? { refusal: { code: no.code, message: no.message } } : undefined;
+        const q = parseRelayQuote(raw);
+        if (!q || q.quote.seriesId !== seriesId || q.quote.makerSells !== (side === 'buy')) return refuse('QuoteMismatch', 'The relay sent a quote for another series or side.');
+        if (q.quote.maxQty < size) return refuse('QuoteTooSmall', `The maker quotes at most ${fromWad(q.quote.maxQty)} contracts.`);
+        const life = Number(q.quote.deadline) - now;
+        if (life < RFQ_MIN_LIFETIME) return refuse('QuoteExpired', 'The quote expires before it could be signed.');
+        if (life > RFQ_MAX_LIFETIME) return refuse('QuoteTooLong', `The quote stays open ${life} s; this app signs only quotes that expire within ${RFQ_MAX_LIFETIME} s.`);
+        if (!(await verifyQuote(q.quote, q.signature, getRfqDomain(this.ctx)))) return refuse('BadSignature', "The quote's signature does not verify against the RFQ venue.");
+        return { ok: q };
       } catch {
         return undefined;
       }
     })();
-    this.memos.set(key, { at: Date.now(), p });
+    this.rfqCache.set(key, { until: Date.now() + RFQ_RETRY_MS, p });
+    p.then((v) => {
+      if (v && 'ok' in v) this.rfqCache.set(key, { until: Date.now() + (Number(v.ok.quote.deadline) - now - RFQ_MIN_LIFETIME) * 1000, p });
+    });
     return p;
+  }
+
+  /** A refusal when the quote's price sits beyond the band on the adverse side of the kernel mark. */
+  private async offMarket(s: SeriesInfo, m: MarketStatus, q: RfqQuote, side: 'buy' | 'sell', now: number, g: GlobalParams): Promise<Refusal | undefined> {
+    const mk = await this.mark(s, m, now, g);
+    if (!mk) return { code: 'NoMark', message: 'The kernel cannot mark this series right now, so an RFQ price cannot be checked.' };
+    const spread = (await this.vaultStates()).find((v) => v.underlying.toLowerCase() === s.underlying.toLowerCase())?.config.spread ?? 0n;
+    const bandWad = toWad(RFQ_BAND) > 2n * spread ? toWad(RFQ_BAND) : 2n * spread;
+    const byBand = mulWad(mk.price, bandWad);
+    const limit = byBand > RFQ_MIN_OFF_MARK ? byBand : RFQ_MIN_OFF_MARK;
+    const bad = side === 'buy' ? q.price > mk.price + limit : q.price + limit < mk.price;
+    if (!bad) return undefined;
+    const price = fromWad(q.price);
+    const mark = fromWad(mk.price);
+    const bound = side === 'buy' ? mark + fromWad(limit) : Math.max(0, mark - fromWad(limit));
+    return {
+      code: 'QuoteOffMarket',
+      message: `The maker ${side === 'buy' ? 'asks' : 'bids'} ${price.toFixed(2)} per contract against a kernel mark of ${mark.toFixed(2)}. This app signs RFQ prices at most ${(fromWad(bandWad) * 100).toFixed(0)}% (or 0.05) ${side === 'buy' ? 'above' : 'below'} the mark, so up to ${bound.toFixed(2)}.`,
+      numbers: { price, mark, limit: bound },
+    };
   }
 
   /** TradeLogic's checks on the taker side, in its order, on chain figures. */
@@ -590,18 +672,30 @@ export class ChainClient implements NovationClient {
   }): Promise<Refusal | undefined> {
     const { s, m, qty, size, premiumW, fee, before, after, g, policy } = a;
     const msg = refusalMessage;
-    if (a.agent && policy) {
-      if (policy.expiresAt <= a.now) return { code: 'NotAuthorized', message: msg('NotAuthorized'), numbers: { id: a.id } };
+    // 1. series and size
+    if (s.expiry <= a.now) return { code: 'SeriesExpired', message: msg('SeriesExpired') };
+    if (size < g.minTradeQty) return { code: 'QtyTooSmall', message: msg('QtyTooSmall') };
+    // 2. who acts, and the position left
+    if (a.agent) {
+      if (!policy || policy.expiresAt <= a.now) return { code: 'NotAuthorized', message: msg('NotAuthorized'), numbers: { id: a.id } };
       if (((policy.allowedMask >> BigInt(m.index)) & 1n) === 0n) return { code: 'AgentUnderlyingNotAllowed', message: msg('AgentUnderlyingNotAllowed') };
     }
     const held = a.raw.find((p) => p.seriesId === s.id)?.qty ?? 0n;
     const next = held + qty;
-    if (size < g.minTradeQty) return { code: 'QtyTooSmall', message: msg('QtyTooSmall') };
     if (next !== 0n && abs(next) < g.minTradeQty) return { code: 'DustPosition', message: msg('DustPosition'), numbers: { id: a.id, qty: fromWad(next) } };
     const opening = next !== 0n && (abs(next) > abs(held) || held > 0n !== next > 0n);
+    // 3. opening gates
     const paused = await getOpeningPaused(this.ctx);
     const blocked = !m.params.enabled || paused || m.session === 'HALTED' || before.deficit > 0n;
+    if (opening && !m.params.enabled) return { code: 'UnderlyingDisabled', message: msg('UnderlyingDisabled') };
     if (opening && blocked) return { code: 'OpeningNotAllowed', message: msg('OpeningNotAllowed'), numbers: { id: a.id } };
+    // 5. long open interest (the taker's side of it; the maker's position isn't known here)
+    const longUp = (next > 0n ? next : 0n) - (held > 0n ? held : 0n);
+    if (longUp > 0n) {
+      const oi = await getOpenInterest(this.ctx, s.id);
+      if (oi + longUp > m.params.maxOpenInterest) return { code: 'OpenInterestCap', message: msg('OpenInterestCap') };
+    }
+    // 6. premium and fee
     if (a.cashShort) return a.cashShort;
     if (!opening && blocked && after.im > before.im)
       return { code: 'RiskIncreaseNotAllowed', message: msg('RiskIncreaseNotAllowed'), numbers: { id: a.id, im: fromWad(after.im), preIm: fromWad(before.im) } };
@@ -1089,7 +1183,10 @@ export class ChainClient implements NovationClient {
     const { wallet } = this.signer();
     const { request } = await sim;
     // the wallet signs; gas carries the SDK's headroom over the estimate
-    const req = await withGasHeadroom(this.ctx.client, request as Parameters<WalletClient['writeContract']>[0]);
+    // pinned to the live chain and the wallet's account: viem refuses to send if the wallet sits on
+    // another network, rather than spending gas at the same addresses somewhere else
+    const pinned = { ...(request as object), chain: LIVE_CHAIN, account: wallet.account } as unknown as Parameters<WalletClient['writeContract']>[0];
+    const req = await withGasHeadroom(this.ctx.client, pinned);
     const hash = await wallet.writeContract(req);
     const rc = await this.ctx.client.waitForTransactionReceipt({ hash });
     this.invalidate();
@@ -1105,7 +1202,8 @@ export class ChainClient implements NovationClient {
     const { account } = this.signer();
     const cur = await this.ctx.client.readContract({ address: token, abi: erc20Abi, functionName: 'allowance', args: [account, spender] });
     if (cur >= amount) return;
-    await this.send(simulateApprove(this.ctx, account, token, spender, maxUint256));
+    // exactly what this transaction pulls, never an open-ended allowance
+    await this.send(simulateApprove(this.ctx, account, token, spender, amount));
   }
 
   async grantAgent(id: number, grant: NewGrant): Promise<string> {
@@ -1125,6 +1223,16 @@ export class ChainClient implements NovationClient {
   async revokeAgent(id: number, agent: string): Promise<string> {
     const { account } = this.signer();
     return this.send(simulateRevokeAgent(this.ctx, account, id, agent as Address));
+  }
+
+  /** True when the connected wallet owns `id` or holds a live agent grant on it. */
+  async canAct(id: number): Promise<boolean> {
+    const w = this.walletAddress;
+    return Boolean(w && id > 0 && (await isAuthorized(this.ctx, id, w)));
+  }
+
+  private async mustAct(id: number): Promise<void> {
+    if (!(await this.canAct(id))) throw new Error(`Account ${id} is view only: this wallet neither owns it nor holds a live agent grant on it.`);
   }
 
   /** The subaccounts a wallet owns, oldest first. */
@@ -1153,6 +1261,8 @@ export class ChainClient implements NovationClient {
 
   /** Testnet only: the mock tokens have a public mint. 10,000 USDG and 10 of each stock token. */
   async mintTestTokens(): Promise<Hash[]> {
+    // the mocks' public mint exists only on the testnet deployment
+    if (!LIVE_CHAIN.testnet || LIVE_CHAIN.id !== 46630) throw new Error('Test tokens exist only on RH Chain testnet.');
     const { account } = this.signer();
     const out: Hash[] = [];
     for (const [sym, token] of Object.entries(this.ctx.deployment.tokens)) {
@@ -1166,6 +1276,7 @@ export class ChainClient implements NovationClient {
   /** USDG into cash, or a stock token into collateral. `amount` in token units. */
   async deposit(id: number, symbol: string, amount: number): Promise<Hash> {
     const { account } = this.signer();
+    await this.mustAct(id);
     const token = tokenOf(this.ctx.deployment, symbol);
     const raw = toUnits(amount, await this.decimals(token));
     await this.allow(token, this.ctx.deployment.clearinghouse, raw);
@@ -1174,6 +1285,7 @@ export class ChainClient implements NovationClient {
 
   async withdraw(id: number, symbol: string, amount: number): Promise<Hash> {
     const { account } = this.signer();
+    await this.mustAct(id);
     const token = tokenOf(this.ctx.deployment, symbol);
     const raw = toUnits(amount, await this.decimals(token));
     return this.send(simulateWithdraw(this.ctx, account, id, token, raw, account));
@@ -1182,6 +1294,7 @@ export class ChainClient implements NovationClient {
   /** Buys from the vault that sells the series, paying at most `maxPremium` USDG. */
   async buyFromVault(id: number, seriesId: number, qty: number, maxPremium: number): Promise<Hash> {
     const { account } = this.signer();
+    await this.mustAct(id);
     const s = await this.seriesInfo(seriesId);
     const v = await this.vaultFor(s);
     if (!v) throw new Error('No live vault sells this series.');
@@ -1191,19 +1304,38 @@ export class ChainClient implements NovationClient {
   /** Sells back to the vault at its bid, receiving at least `minPremium` USDG. */
   async sellToVault(id: number, seriesId: number, qty: number, minPremium: number): Promise<Hash> {
     const { account } = this.signer();
+    await this.mustAct(id);
     const s = await this.seriesInfo(seriesId);
     const v = await this.vaultFor(s);
     if (!v) throw new Error('No live vault buys this series back.');
     return this.send(simulateVaultSellBack(this.ctx, account, v.address, seriesId, toWad(qty), toWad(Number(minPremium.toFixed(6))), id));
   }
 
-  /** Fills the relay's signed quote the ticket showed (same series, side and size). */
-  async fillRfq(id: number, seriesId: number, side: 'buy' | 'sell', qty: number): Promise<Hash> {
+  /**
+   * Fills exactly the quote the ticket showed (by its digest), at the size it was shown for. Nothing
+   * is fetched here: an expired or unknown quote throws, and the ticket shows a fresh one first.
+   */
+  async fillRfq(id: number, hash: Hex): Promise<Hash> {
     const { account } = this.signer();
-    const q = await this.rfqQuote(seriesId, side, qty);
-    if (!q || !('quote' in q)) throw new Error('No signed RFQ quote for this ticket: the relay is not answering.');
-    if (q.expiresAt <= Date.now() / 1000) throw new Error('The RFQ quote expired; the ticket asks for a new one.');
-    return this.send(simulateRfqFill(this.ctx, account, q.quote, q.signature, id, toWad(qty)));
+    await this.mustAct(id);
+    const shown = this.shown.get(hash);
+    if (!shown) throw new Error('This quote is no longer on the ticket. Check the new price and sign again.');
+    if (Number(shown.quote.deadline) <= (await this.now()) + 5) {
+      this.shown.delete(hash);
+      this.rfqCache.delete(shown.key);
+      throw new Error('The quote expired. The ticket is asking the relay for a new one: check the price and sign again.');
+    }
+    const hashOut = await this.send(simulateRfqFill(this.ctx, account, shown.quote, shown.signature, id, shown.size));
+    this.shown.delete(hash);
+    this.rfqCache.delete(shown.key);
+    return hashOut;
+  }
+
+  /** Forget a shown quote (the ticket is asking for a new one). */
+  dropQuote(hash: Hex) {
+    const shown = this.shown.get(hash);
+    if (shown) this.rfqCache.delete(shown.key);
+    this.shown.delete(hash);
   }
 
   /** ERC-4626 deposit of `amount` of the vault's asset, to the connected wallet. */
@@ -1229,7 +1361,12 @@ export class ChainClient implements NovationClient {
     const { account } = this.signer();
     const v = (await this.vaultStates()).find((x) => x.address.toLowerCase() === vault.toLowerCase());
     if (!v) throw new Error(`unknown vault ${vault}`);
-    const shares = await previewWithdraw(this.ctx, v.address, toUnits(amount, v.assetDecimals));
+    // previewWithdraw rounds shares up: queuing "all" must not ask for more than the balance
+    const [wanted, held] = await Promise.all([
+      previewWithdraw(this.ctx, v.address, toUnits(amount, v.assetDecimals)),
+      getVaultHolding(this.ctx, v.address, account).then((h) => h.shares),
+    ]);
+    const shares = wanted > held ? held : wanted;
     return this.send(simulateRequestRedeem(this.ctx, account, v.address, shares, account));
   }
 }

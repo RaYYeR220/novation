@@ -19,6 +19,8 @@ import {
   type AbiParameter,
   type Address,
   type Hex,
+  keccak256,
+  toHex,
 } from 'viem';
 import {
   aggregatorAbi,
@@ -222,11 +224,12 @@ const HANDLERS: Record<string, Handler> = {
   'ch.collateralOf': () => 0n,
   'ch.claimableTotalOf': () => 0n,
   'ch.deficitExpiriesOf': () => [],
-  'ch.subaccountsOf': () => [],
+  'ch.subaccountsOf': ([owner]) => ((owner as string).toLowerCase() === MOCK_OWNER ? [BigInt(MOCK_ACCOUNT)] : []),
   'ch.pool': () => [0n, 0n, W],
   'ch.openInterest': ([sid]) => (Number(sid) === 1 ? W : 0n),
   'ch.cashIndex': () => W,
   'ch.underlyingsOf': () => [d.tokens.NVDA!],
+  'ch.isAuthorized': ([id, actor]) => Number(id) === MOCK_ACCOUNT && (actor as string).toLowerCase() === MOCK_OWNER,
   // InsuranceFund
   'insurance.balanceWad': () => 100_000n * W,
   'insurance.outstandingWad': () => 0n,
@@ -440,12 +443,12 @@ export async function mockChain(page: Page) {
   );
 }
 
-/** anvil's well-known third account: a throwaway maker key that holds nothing anywhere. */
-const MAKER_KEY = '0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a';
+/** A throwaway maker key derived for these tests; it holds nothing anywhere. */
+const MAKER_KEY = keccak256(toHex('novation-e2e-maker'));
 export const MOCK_MAKER_ID = 7;
 
 /** Serves the RFQ relay's GET /quotes with a quote that maker signs for whatever is asked. */
-export async function mockRelay(page: Page, price = 1.75) {
+export async function mockRelay(page: Page, price = 1.75, opts: { claimedPremium?: string } = {}) {
   const maker = privateKeyToAccount(MAKER_KEY);
   await page.route('**/api/rfq/quotes?*', async (route) => {
     const url = new URL(route.request().url());
@@ -463,12 +466,33 @@ export async function mockRelay(page: Page, price = 1.75) {
       nonce: 12345n,
     };
     const signature = await signQuote(maker, q, rfqDomain(46630, d.rfq));
-    const premium = (qty * q.price) / W;
+    // a relay's extra fields are not signed; the app must ignore them (claimedPremium tests that)
+    const premium = opts.claimedPremium ?? ((qty * q.price) / W).toString();
     const quote = Object.fromEntries(Object.entries(q).map(([k, v]) => [k, typeof v === 'bigint' ? v.toString() : v]));
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ series, quotes: [{ side, quote, signature, premium: premium.toString(), expiresAt: Math.floor(Date.now() / 1000) + 60 }], refusals: [] }),
+      body: JSON.stringify({ series, quotes: [{ side, quote, signature, premium, expiresAt: Math.floor(Date.now() / 1000) + 3600 }], refusals: [] }),
     });
   });
+}
+
+/** An injected EIP-1193 wallet for `address` on RH testnet. It connects and reports its chain; it never signs. */
+export async function injectWallet(page: Page, address: Address) {
+  await page.addInitScript((account) => {
+    const w = window as unknown as { ethereum: unknown };
+    w.ethereum = {
+      isMetaMask: true,
+      request: async ({ method }: { method: string }) => {
+        if (method === 'eth_requestAccounts' || method === 'eth_accounts') return [account];
+        if (method === 'eth_chainId') return '0xb626';
+        if (method === 'net_version') return '46630';
+        if (method === 'wallet_requestPermissions' || method === 'wallet_getPermissions') return [{ parentCapability: 'eth_accounts' }];
+        if (method === 'wallet_switchEthereumChain') return null;
+        throw Object.assign(new Error(`test wallet: ${method} not supported`), { code: 4200 });
+      },
+      on: () => {},
+      removeListener: () => {},
+    };
+  }, address);
 }

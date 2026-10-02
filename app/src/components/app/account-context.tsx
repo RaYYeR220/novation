@@ -61,7 +61,7 @@ export function LiveAccountProvider({ children }: { children: ReactNode }) {
       if (mine.includes(x)) return 'Your account';
       const v = vaults.data?.get(x);
       if (v) return `${v} vault`;
-      return 'Testnet account';
+      return 'View only';
     },
     [mine, vaults.data],
   );

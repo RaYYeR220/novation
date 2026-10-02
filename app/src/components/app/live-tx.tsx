@@ -1,8 +1,9 @@
 'use client';
 
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useState } from 'react';
-import { useAccount, useSwitchChain } from 'wagmi';
+import { useAccount, useConfig, useSwitchChain } from 'wagmi';
+import { getWalletClient } from 'wagmi/actions';
 import { useToast } from '@/components/ui/toast';
 import { LIVE_CHAIN, refusalOf, type ChainClient } from '@/lib/client/chain';
 import { useChainClient } from '@/lib/client/context';
@@ -36,6 +37,7 @@ export function useLiveTx() {
   const { toast, dismiss } = useToast();
   const { isConnected, chainId } = useAccount();
   const { switchChainAsync } = useSwitchChain();
+  const config = useConfig();
   const [busy, setBusy] = useState(false);
 
   const run = useCallback(
@@ -49,6 +51,8 @@ export function useLiveTx() {
       let pending: number | undefined;
       try {
         if (chainId !== LIVE_CHAIN.id) await switchChainAsync({ chainId: LIVE_CHAIN.id });
+        // a wallet client for the live chain now, not the one React handed over before the switch
+        chain.setWallet(await getWalletClient(config, { chainId: LIVE_CHAIN.id }));
         pending = toast({ tone: 'pending', title: label, description: 'Confirm in your wallet; then it waits for the block.' });
         const value = await f(chain);
         dismiss(pending);
@@ -74,8 +78,20 @@ export function useLiveTx() {
         setBusy(false);
       }
     },
-    [chain, isConnected, chainId, switchChainAsync, toast, dismiss, qc],
+    [chain, isConnected, chainId, switchChainAsync, config, toast, dismiss, qc],
   );
 
   return { run, busy, live: Boolean(chain), connected: isConnected };
+}
+
+/**
+ * Live mode: whether the connected wallet may act for account `id` (owner or live agent grant).
+ * Other accounts, a featured one or one opened by number, are view only.
+ */
+export function useCanAct(id: number) {
+  const chain = useChainClient();
+  const { address } = useAccount();
+  const enabled = Boolean(chain && address && id > 0);
+  const q = useQuery({ queryKey: ['live', 'can-act', id, address], queryFn: () => chain!.canAct(id), enabled });
+  return { live: Boolean(chain), connected: Boolean(address), canAct: q.data === true, checking: enabled && q.isPending };
 }

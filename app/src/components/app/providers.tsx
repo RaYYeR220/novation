@@ -1,6 +1,6 @@
 'use client';
 
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState, type ReactNode } from 'react';
 import { WagmiProvider, useWalletClient } from 'wagmi';
 import { ToastProvider } from '@/components/ui/toast';
@@ -14,10 +14,15 @@ const makeQueryClient = () => new QueryClient({ defaultOptions: { queries: { sta
 /** Hands the connected wallet to the chain client, which signs live-mode transactions with it. */
 function WalletBridge() {
   const chain = useChainClient();
+  const qc = useQueryClient();
   const { data: wallet } = useWalletClient();
   useEffect(() => {
-    chain?.setWallet(wallet ?? undefined);
-  }, [chain, wallet]);
+    if (!chain) return;
+    chain.setWallet(wallet ?? undefined);
+    // the what-if simulates as the connected wallet, and what it may sign for changes with it
+    void qc.invalidateQueries({ queryKey: ['whatIf'] });
+    void qc.invalidateQueries({ queryKey: ['live', 'can-act'] });
+  }, [chain, wallet, qc]);
   return null;
 }
 

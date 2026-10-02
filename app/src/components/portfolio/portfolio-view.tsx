@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import { useAccountId } from '@/components/app/account-context';
 import { LiveEmpty } from '@/components/app/live-empty';
+import { useCanAct } from '@/components/app/live-tx';
 import { Button } from '@/components/ui/button';
 import { Page, SectionHead } from '@/components/app/section-head';
 import { discountAt } from '@/components/charts/discount-ramp';
@@ -108,8 +109,9 @@ const positionColumns = (asOf?: number): Column<Held>[] => [
 ];
 
 export function PortfolioView() {
-  const { id, label } = useAccountId();
+  const { id, label, owned } = useAccountId();
   const demo = useIsDemo();
+  const act = useCanAct(id);
   const [funds, setFunds] = useState<'deposit' | 'withdraw' | null>(null);
   const account = useSubaccount(id);
   const { data: asOf } = useAsOf();
@@ -298,16 +300,21 @@ export function PortfolioView() {
           <Panel
             title="Collateral and equity"
             meta={
-              !demo && (
+              !demo &&
+              (act.canAct ? (
                 <span className="flex gap-s2">
-                  <Button size="sm" variant="secondary" onClick={() => setFunds('withdraw')}>
-                    Withdraw
-                  </Button>
+                  {owned.includes(id) && (
+                    <Button size="sm" variant="secondary" onClick={() => setFunds('withdraw')}>
+                      Withdraw
+                    </Button>
+                  )}
                   <Button size="sm" variant="primary" lamp onClick={() => setFunds('deposit')}>
                     Deposit
                   </Button>
                 </span>
-              )
+              ) : (
+                <span className="text-t12 text-navy-200">{act.connected ? 'View only: not your account' : 'View only: connect the owner wallet'}</span>
+              ))
             }
           >
             {s ? (

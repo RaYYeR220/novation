@@ -1,12 +1,13 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ReactNode, Ref } from 'react';
 import { MarginMeter } from '@/components/charts/margin-meter';
 import { ScenarioStrip } from '@/components/charts/scenario-strip';
 import { RefusalNotice } from '@/components/app/refusal-card';
 import { useNetworkStatus } from '@/components/app/network-guard';
-import { useLiveTx } from '@/components/app/live-tx';
+import { useCanAct, useLiveTx } from '@/components/app/live-tx';
+import { useChainClient } from '@/lib/client/context';
 import { Button } from '@/components/ui/button';
 import { Chip } from '@/components/ui/chip';
 import { NumberField } from '@/components/ui/number-field';
@@ -99,6 +100,11 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
   const { toast } = useToast();
   const net = useNetworkStatus();
   const live = useLiveTx();
+  const act = useCanAct(p.accountId);
+  const chain = useChainClient();
+  const qc = useQueryClient();
+  // live mode: a connected wallet signs only for accounts it owns or holds a grant on
+  const viewOnly = !p.demo && act.connected && !act.checking && !act.canAct;
   const { series, quote, now } = p;
   const refusal = quote?.refusal;
   const fit = useFit(p.args, Boolean(refusal));
@@ -146,7 +152,7 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
       : p.demo
         ? `Best RFQ quote: the demo maker at mid, ${fmtNumber(p.price ?? 0)}.`
         : quote?.rfq
-          ? `Signed quote from maker account ${quote.rfq.makerId}, valid until ${fmtEt(quote.rfq.expiresAt, { seconds: true })}.`
+          ? `Signed quote from maker account ${quote.rfq.makerId}: ${fmtNumber(quote.rfq.price)} per contract, checked against the kernel mark, valid until ${fmtEt(quote.rfq.expiresAt, { seconds: true })}.`
           : `No RFQ maker relay is answering: the what-if prices at the kernel mark, ${fmtNumber(p.price ?? 0)}, and the ticket can't be sent.`;
   const noVault = !p.vault;
   const signerNote = grant
@@ -177,8 +183,14 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
       return;
     }
     if (p.venue === 'rfq' && quote?.rfq && !grant) {
-      const qty = Number(p.qty);
-      void live.run(label, (c) => c.fillRfq(p.accountId, series.id, p.side, qty));
+      // exactly the quote shown above; if it lapsed, the ticket shows a new one before any signing
+      const hash = quote.rfq.hash;
+      void live.run(label, (c) => c.fillRfq(p.accountId, hash)).then((r) => {
+        if (!r.ok && !r.refusal) {
+          chain?.dropQuote(hash);
+          void qc.invalidateQueries({ queryKey: ['whatIf'] });
+        }
+      });
       return;
     }
     if (p.venue === 'rfq') {
@@ -377,7 +389,7 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
             variant="primary"
             size="lg"
             lamp
-            disabled={!qtyOk || !quote || Boolean(refusal) || p.pending}
+            disabled={!qtyOk || !quote || Boolean(refusal) || p.pending || viewOnly}
             loading={live.busy}
             loadingLabel="Signing"
             onClick={sign}
@@ -392,7 +404,9 @@ export function Ticket({ headingRef, ...p }: TicketProps) {
                 ? 'Refused before signing. Change the ticket and the check runs again.'
                 : p.demo
                 ? 'Demo mode: the ticket is checked, nothing is sent.'
-                : p.venue === 'rfq' && !quote?.rfq
+                : viewOnly
+                  ? `View only: this wallet neither owns account ${p.accountId} nor holds an agent grant on it.`
+                  : p.venue === 'rfq' && !quote?.rfq
                   ? 'Checked on chain. An RFQ fill needs a signed maker quote, and no relay is answering.'
                   : 'Your wallet signs; the Clearinghouse re-runs the same margin check on chain.'}
           </p>

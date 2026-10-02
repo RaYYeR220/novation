@@ -9,6 +9,7 @@ import { fmtAddress, fmtNumber } from '@/lib/format';
 import { useChainClient } from '@/lib/client/context';
 import { useWallet } from '@/lib/client/hooks';
 import { useLiveTx } from './live-tx';
+import { LIVE_CHAIN } from '@/lib/client/chain';
 import { CHAINS } from '@/lib/wallet/chains';
 import { cn } from '@/lib/cn';
 import { Popover } from './popover';
@@ -46,7 +47,7 @@ function ExperimentalToggle() {
 const connectorName = (name: string) => (name === 'Injected' ? 'Browser wallet' : name);
 
 /** Live mode: the wallet's testnet balances and a mint of the mock tokens (their mint is public). */
-function TestTokens({ address }: { address: string }) {
+function TestTokens({ address, onTestnet }: { address: string; onTestnet: boolean }) {
   const { run, busy } = useLiveTx();
   const { data } = useWallet(address);
   const shown = ['USDG', 'NVDA', 'TSLA'];
@@ -62,7 +63,7 @@ function TestTokens({ address }: { address: string }) {
       </p>
       <div>
         <Button size="sm" variant="secondary" loading={busy} loadingLabel="Minting" onClick={() => void run('Mint test tokens', (c) => c.mintTestTokens())}>
-          Get test tokens
+          {onTestnet ? 'Get test tokens' : 'Get test tokens (switches to RH testnet)'}
         </Button>
       </div>
     </div>
@@ -117,7 +118,7 @@ export function WalletButton() {
                 Disconnect
               </Button>
             </div>
-            {live && <TestTokens address={address} />}
+            {live && <TestTokens address={address} onTestnet={chainId === LIVE_CHAIN.id} />}
             <ExperimentalToggle />
           </div>
         )}
