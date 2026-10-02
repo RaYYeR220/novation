@@ -12,7 +12,7 @@ import {IRiskParams} from "../../src/interfaces/IRiskParams.sol";
 import {IMarketDataHub} from "../../src/interfaces/IMarketDataHub.sol";
 import {FixedPointMath as F} from "../../src/libraries/FixedPointMath.sol";
 import {NyseCalendar} from "../../src/libraries/NyseCalendar.sol";
-import {Position, Session} from "../../src/types/Types.sol";
+import {Position, Session, MAX_CLAIM_EXPIRIES} from "../../src/types/Types.sol";
 import {console2} from "forge-std/console2.sol";
 
 /// @notice Test-only. Etched over the clearinghouse for one call to give an account an unpaid
@@ -24,6 +24,14 @@ contract SettlementSeeder {
         $.claimable[id][expiry] += wad;
         $.claimableTotal[id] += wad;
         $.totalClaimable[expiry] += wad;
+    }
+
+    function dropClaim(uint256 id, uint64 expiry, uint256 wad) external {
+        CHStorage storage $ = CHS.s();
+        $.claimable[id][expiry] -= wad;
+        if ($.claimable[id][expiry] == 0) CHS.dropExpiry($.claimExpiries[id], expiry);
+        $.claimableTotal[id] -= wad;
+        $.totalClaimable[expiry] -= wad;
     }
 }
 
@@ -689,7 +697,7 @@ contract AuctionHouseTest is Fixture {
 
         // past the close, before the registry has the settlement price
         vm.warp(e1 + 60);
-        (uint256 live, uint256 awaiting) = ch.positionStatus(a);
+        (uint256 live, uint256 awaiting) = _status(a);
         assertEq(live, 1);
         assertEq(awaiting, 1);
         vm.prank(carol);
@@ -701,12 +709,12 @@ contract AuctionHouseTest is Fixture {
         // settled: the live book can be bid on, the expired-only one goes through settleAccount
         uint80 rid = feedOf[address(nvda)].pushRound(int256(100e8), e1);
         registry.settleExpiry(address(nvda), e1, rid);
-        (live, awaiting) = ch.positionStatus(a);
+        (live, awaiting) = _status(a);
         assertEq(awaiting, 0);
         vm.prank(carol);
         ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
         assertTrue(ch.accountState(dead).liquidatable);
-        (live, awaiting) = ch.positionStatus(dead);
+        (live, awaiting) = _status(dead);
         assertEq(live + awaiting, 0);
         vm.expectRevert(AuctionHouse.NotLiquidatable.selector);
         ah.startLiquidation(dead);
@@ -734,6 +742,56 @@ contract AuctionHouseTest is Fixture {
         assertEq(ch.claimExpiriesOf(a).length, 1);
     }
 
+    /// A liquidation folds up to eight new feed rounds per underlying into the vol itself; a longer
+    /// backlog must be folded first (syncVol, permissionless), which bounds a bid's gas.
+    function test_liquidationVolBacklogBounded() public {
+        (uint256 a,) = _shortPuts(520 * USDG);
+        hub.syncVol(address(nvda));
+        for (uint256 i; i < 9; ++i) {
+            _setPrice(address(nvda), 150e18);
+        }
+        assertTrue(ch.accountState(a).liquidatable);
+        vm.expectRevert(abi.encodeWithSelector(AuctionHouse.VolNotCurrent.selector, address(nvda)));
+        ah.startLiquidation(a);
+        hub.syncVol(address(nvda));
+        for (uint256 i; i < 8; ++i) {
+            _setPrice(address(nvda), 150e18);
+        }
+        ah.startLiquidation(a);
+        assertTrue(hub.volCurrent(address(nvda)));
+    }
+
+    /// A bid takes over claims on at most MAX_CLAIM_EXPIRIES expiries, on both sides: a longer
+    /// list must first be cut by claiming the ready ones (permissionless), which bounds the bid's
+    /// gas; a bidder already holding that many takes no claim on a further expiry.
+    function test_bidClaimExpiriesCapped() public {
+        uint256 a = _liquidatable();
+        uint256 c = _fund(carol, 10_000 * USDG, 0);
+        uint64 e = e1;
+        for (uint256 i; i < MAX_CLAIM_EXPIRIES + 1; ++i) {
+            _cheatClaim(a, e, 1e18); // no pool behind it: blocked, it moves
+            e -= 7 days;
+        }
+        ah.startLiquidation(a);
+        uint256 snap = vm.snapshotState();
+        vm.prank(carol);
+        vm.expectRevert(abi.encodeWithSelector(CHErrors.TooManyClaimExpiries.selector, a));
+        ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
+
+        // sixteen move, but not into a bidder that would then hold claims on more than sixteen
+        vm.revertToState(snap);
+        _cheatClaimPaid(a, e1, 1e18);
+        assertEq(ch.claimExpiriesOf(a).length, MAX_CLAIM_EXPIRIES);
+        _cheatClaim(c, e - 7 days, 1e18);
+        vm.prank(carol);
+        vm.expectRevert(abi.encodeWithSelector(CHErrors.TooManyClaimExpiries.selector, c));
+        ah.bidLiquidation(a, 0.5e18, c, type(int256).max);
+        uint256 c2 = _fund(carol, 10_000 * USDG, 0);
+        vm.prank(carol);
+        ah.bidLiquidation(a, 0.5e18, c2, type(int256).max);
+        assertEq(ch.claimExpiriesOf(c2).length, MAX_CLAIM_EXPIRIES);
+    }
+
     /// A book worth less than nothing even with its claim: the fund covers the rest of the loss of
     /// the bidder's fraction plus the discount on maintenance, and the claim's share moves.
     function test_claimsCountInTheBook() public {
@@ -758,8 +816,9 @@ contract AuctionHouseTest is Fixture {
 
     /// Review PoC: an owner holds an unpaid claim, writes puts against it, takes its cash out and
     /// lets the account be liquidated by its own bidder. With the claim left behind, the fund paid
-    /// the bidder a discount on a book the claim covered. Now the claim moves with the fraction:
-    /// the book is solvent, the bidder pays for it and the fund pays nothing.
+    /// the bidder a discount on a book the claim covered. Now the claim counts in the book and goes
+    /// with the fraction (this one is ready: the bid pays it into the account's cash, half of which
+    /// moves): the book is solvent, the bidder pays for it and the fund pays nothing.
     function test_claimBackedBookCantDrainFund() public {
         address att = _user("att");
         uint256 a = _fund(att, 100 * USDG, 0);
@@ -789,18 +848,20 @@ contract AuctionHouseTest is Fixture {
         ah.startLiquidation(a);
         vm.warp(vm.getBlockTimestamp() + 1800); // the full discount
         _setPrice(address(nvda), 130e18);
+        uint256 cashA = ch.cashOf(a);
+        uint256 cashB = ch.cashOf(b);
         vm.prank(att);
         int256 paid = ah.bidLiquidation(a, 0.5e18, b, type(int256).max);
 
         assertGt(paid, 0); // the bidder pays for a solvent book
         assertGe(usdg.balanceOf(address(insurance)), fund0); // the fund pays nothing (a penalty in)
-        assertEq(ch.claimable(b, e1), 400e18);
-        assertLe(_attackerTotal(att, a, l, b), before);
-        ch.claim(a, e1);
-        ch.claim(b, e1);
-        assertGe(usdg.balanceOf(address(insurance)), fund0);
+        // the claim was paid into A's cash, and half of that cash moved
+        assertEq(ch.claimable(a, e1), 0);
+        assertEq(ch.claimable(b, e1), 0);
         assertEq(ch.claimExpiriesOf(a).length, 0);
         assertEq(ch.claimExpiriesOf(b).length, 0);
+        assertEq(int256(ch.cashOf(b)), int256(cashB + (cashA + 800e18) / 2) - paid);
+        assertLe(_attackerTotal(att, a, l, b), before);
     }
 
     /// The one-transaction variant at a Friday close: settle the expiry, turn the account's
@@ -1733,6 +1794,23 @@ contract AuctionHouseTest is Fixture {
     }
 
     /// @dev Gives `id` an unpaid claim of `wad` on `expiry` (claim books only, no pool behind it).
+    /// @dev positionStatus, checked against the counts liquidationState takes from its margin pass.
+    function _status(uint256 id) internal view returns (uint256 live, uint256 awaiting) {
+        (live, awaiting) = ch.positionStatus(id);
+        (AccountState memory st, uint256 l, uint256 w) = ch.liquidationState(id);
+        assertEq(l, live, "live");
+        assertEq(w, awaiting, "awaiting");
+        assertEq(abi.encode(st), abi.encode(ch.accountState(id)));
+    }
+
+    /// @dev Removes the account's claim on `expiry` (as if it had been paid out).
+    function _cheatClaimPaid(uint256 id, uint64 expiry, uint256 wad) internal {
+        bytes memory code = address(ch).code;
+        vm.etch(address(ch), address(seeder).code);
+        SettlementSeeder(address(ch)).dropClaim(id, expiry, wad);
+        vm.etch(address(ch), code);
+    }
+
     function _cheatClaim(uint256 id, uint64 expiry, uint256 wad) internal {
         bytes memory code = address(ch).code;
         vm.etch(address(ch), address(seeder).code);

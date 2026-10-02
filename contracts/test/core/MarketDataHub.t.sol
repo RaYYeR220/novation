@@ -985,6 +985,29 @@ contract MarketDataHubTest is Test {
         assertEq(lastId, _roundId(2, 3));
     }
 
+    function test_syncVolUpToFoldsAtMostMaxRounds() public {
+        vm.warp(REGULAR_TS);
+        feed.pushRound(150e8, REGULAR_TS);
+        hub.initVol(address(token));
+        assertTrue(hub.syncVolUpTo(address(token), 4)); // nothing new: current
+        for (uint64 i = 1; i <= 6; i++) {
+            feed.pushRound(150e8, REGULAR_TS + 60 * i);
+        }
+        assertFalse(hub.syncVolUpTo(address(token), 4));
+        (,, uint80 lastId,,,) = hub.volState(address(token));
+        assertEq(lastId, _roundId(1, 5));
+        assertTrue(hub.syncVolUpTo(address(token), 4));
+        (,, lastId,,,) = hub.volState(address(token));
+        assertEq(lastId, _roundId(1, 7));
+        vm.expectRevert(MarketDataHub.BadRoundCount.selector);
+        hub.syncVolUpTo(address(token), 0);
+        vm.expectRevert(MarketDataHub.BadRoundCount.selector);
+        hub.syncVolUpTo(address(token), 65);
+        feed.setPhase(2);
+        feed.pushRound(150e8, REGULAR_TS + 600);
+        assertFalse(hub.syncVolUpTo(address(token), 4)); // a phase change waits for rebaseVol
+    }
+
     function test_syncVolRequiresInit() public {
         vm.expectRevert(MarketDataHub.NotInitialized.selector);
         hub.syncVol(address(token));

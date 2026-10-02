@@ -74,9 +74,22 @@ library MarginLogic {
         KPosition[] ps;
         int256 settledValue;
         uint256 mmRatio;
+        uint256 live; // positions whose series hasn't expired
+        uint256 awaiting; // expired positions whose (underlying, expiry) the registry hasn't settled
     }
 
-    function accountState(Deps memory d, uint256 id) external view returns (AccountState memory) {
+    function accountState(Deps memory d, uint256 id) external view returns (AccountState memory st) {
+        (st,,) = _state(d, id, 0, 0, 0);
+    }
+
+    /// @notice accountState plus, from the same pass over the book, the positions that are live
+    /// (series not expired) and the expired ones whose (underlying, expiry) the registry hasn't
+    /// settled yet (valued on spot until it does). What a liquidation checks.
+    function liquidationState(Deps memory d, uint256 id)
+        external
+        view
+        returns (AccountState memory st, uint256 live, uint256 awaiting)
+    {
         return _state(d, id, 0, 0, 0);
     }
 
@@ -86,9 +99,9 @@ library MarginLogic {
     function accountStateWith(Deps memory d, uint256 id, uint32 seriesId, int256 qtyDelta, int256 cashDelta)
         external
         view
-        returns (AccountState memory)
+        returns (AccountState memory st)
     {
-        return _state(d, id, seriesId, qtyDelta, cashDelta);
+        (st,,) = _state(d, id, seriesId, qtyDelta, cashDelta);
     }
 
     /// @notice The account's collateral at spot, for the socialization dust test. Unlike the margin
@@ -137,7 +150,7 @@ library MarginLogic {
     function _state(Deps memory d, uint256 id, uint32 seriesId, int256 qtyDelta, int256 cashDelta)
         private
         view
-        returns (AccountState memory st)
+        returns (AccountState memory st, uint256 live, uint256 awaiting)
     {
         uint256 cash = CHS.cashOf(id);
         if (cashDelta < 0) {
@@ -158,7 +171,7 @@ library MarginLogic {
             st.settledValue = claims;
             st.equity = cash.toInt256() + st.mtm + claims;
             st.healthy = true;
-            return st;
+            return (st, 0, 0);
         }
 
         Input memory inp = _input(d, id, book);
@@ -171,15 +184,17 @@ library MarginLogic {
         st.worstScenario = out.worstScenario;
         st.healthy = st.equity >= st.im.toInt256();
         st.liquidatable = st.equity < st.mm.toInt256();
+        live = inp.live;
+        awaiting = inp.awaiting;
     }
 
     /// @dev Stored positions with the what-if change applied; zero quantities are dropped.
     function _book(uint256 id, uint32 seriesId, int256 qtyDelta) private view returns (Book memory b) {
         CHStorage storage $ = CHS.s();
-        Position[] storage ps = $.positions[id];
-        uint256 n = ps.length;
-        uint256 slot1 = qtyDelta == 0 ? 0 : $.posIndex[id][seriesId];
-        bool virtualNew = qtyDelta != 0 && slot1 == 0;
+        uint32[] memory sids = $.positionSeries[id];
+        mapping(uint32 => uint256) storage pos = $.position[id];
+        uint256 n = sids.length;
+        bool virtualNew = qtyDelta != 0 && pos[seriesId] == 0;
         uint256 cap = virtualNew ? n + 1 : n;
         if (cap > MAX_POSITIONS) revert CHErrors.TooManyPositions();
 
@@ -187,11 +202,11 @@ library MarginLogic {
         b.qtys = new int256[](cap);
         uint256 m;
         for (uint256 i = 0; i < n; ++i) {
-            Position memory p = ps[i];
-            int256 q = p.qty;
-            if (i + 1 == slot1) q += qtyDelta;
+            uint32 sid = sids[i];
+            int256 q = CHS.qtyIn(pos[sid]);
+            if (sid == seriesId) q += qtyDelta;
             if (q == 0) continue;
-            b.seriesIds[m] = p.seriesId;
+            b.seriesIds[m] = sid;
             b.qtys[m] = q;
             ++m;
         }
@@ -200,10 +215,10 @@ library MarginLogic {
             b.qtys[m] = qtyDelta;
             ++m;
         }
-        uint32[] memory sids = b.seriesIds;
+        uint32[] memory ids = b.seriesIds;
         int256[] memory qtys = b.qtys;
         assembly ("memory-safe") {
-            mstore(sids, m)
+            mstore(ids, m)
             mstore(qtys, m)
         }
     }
@@ -247,6 +262,9 @@ library MarginLogic {
                     inp.settledValue += Payoff.settled(s, price, qty);
                     continue;
                 }
+                ++inp.awaiting;
+            } else {
+                ++inp.live;
             }
             uint256 ui;
             while (ui < nu && us[ui] != s.underlying) ++ui;

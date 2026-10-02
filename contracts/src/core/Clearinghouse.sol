@@ -178,7 +178,7 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
         if (isCash) CHS.debit(id, wad);
         else CHS.removeCollateral(id, token, wad);
 
-        if ($.positions[id].length != 0) {
+        if (CHS.positionCount(id) != 0) {
             AccountState memory st = MarginLogic.accountState(_deps(), id);
             if (!st.healthy) revert CHErrors.InsufficientMargin(id, st.equity, st.im);
         }
@@ -330,7 +330,7 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
     }
 
     function positionsOf(uint256 id) external view returns (Position[] memory) {
-        return CHS.s().positions[id];
+        return CHS.positionsOf(id);
     }
 
     function cashOf(uint256 id) external view returns (uint256) {
@@ -345,10 +345,21 @@ contract Clearinghouse is IClearinghouse, ReentrancyGuardTransient {
         return CHS.s().collateralTokens[id];
     }
 
-    /// @notice Every underlying the account holds as collateral or has a position on, in
-    /// RiskParams order.
+    /// @notice Every underlying the account holds as collateral or has a position on (expired
+    /// positions included until settleAccount closes them), at most MAX_UNDERLYINGS, in the order
+    /// they entered the account.
     function underlyingsOf(uint256 id) external view returns (address[] memory) {
-        return AuctionHookLogic.underlyingsOf(_deps(), id);
+        return CHS.s().unionOf[id];
+    }
+
+    /// @notice accountState plus, from the same pass over the book, the live positions (series not
+    /// expired) and the expired ones awaiting the registry's settlement price (see positionStatus).
+    function liquidationState(uint256 id)
+        external
+        view
+        returns (AccountState memory st, uint256 live, uint256 awaiting)
+    {
+        return MarginLogic.liquidationState(_deps(), id);
     }
 
     /// @return live positions whose series hasn't expired

@@ -82,6 +82,7 @@ interface IClearinghouse {
     function claimableTotalOf(uint256 id) external view returns (uint256);
     function underlyingsOf(uint256 id) external view returns (address[] memory); // collateral tokens + option underlyings
     function positionStatus(uint256 id) external view returns (uint256 live, uint256 awaiting); // unexpired; expired awaiting settlement
+    function liquidationState(uint256 id) external view returns (AccountState memory st, uint256 live, uint256 awaiting); // accountState + positionStatus in one pass
     function deficitOf(uint256 id, uint64 expiry) external view returns (uint256 total, uint256 bridged, uint256 pendingForExpiry);
     function socializedDebtOf(uint256 id) external view returns (uint256);
     function cashIndex() external view returns (uint256);

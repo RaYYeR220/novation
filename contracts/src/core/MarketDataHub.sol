@@ -242,19 +242,31 @@ contract MarketDataHub is IMarketDataHub, ReentrancyGuardTransient {
     /// Venues call it before pricing, so the mark vol can't change between their trades in one
     /// transaction.
     function syncVol(address u) external nonReentrant {
+        _sync(u, 64);
+    }
+
+    /// @notice syncVol folding at most `maxRounds` (1 to 64) rounds, for callers that bound their
+    /// gas. Returns whether the estimate is then current (has folded the feed's latest round).
+    function syncVolUpTo(address u, uint256 maxRounds) external nonReentrant returns (bool current) {
+        if (maxRounds == 0 || maxRounds > 64) revert BadRoundCount();
+        return _sync(u, maxRounds);
+    }
+
+    function _sync(address u, uint256 maxRounds) private returns (bool current) {
         VolState storage v = _vol[u];
         if (!v.initialized) revert NotInitialized();
         UnderlyingParams memory p = params.underlying(u);
         (uint80 latest,,,,) = IAggregatorV3(p.feed).latestRoundData();
         uint80 last = v.lastRoundId;
-        if ((latest >> 64) != (last >> 64) || latest <= last) return;
+        if ((latest >> 64) != (last >> 64) || latest <= last) return latest == last;
         uint256 n = uint64(latest) - uint64(last);
-        if (n > 64) n = 64;
+        if (n > maxRounds) n = maxRounds;
         uint80[] memory ids = new uint80[](n);
         for (uint256 i = 0; i < n; ++i) {
             ids[i] = last + 1 + uint80(i);
         }
         _fold(u, v, p, ids);
+        return v.lastRoundId == latest;
     }
 
     function _fold(address u, VolState storage v, UnderlyingParams memory p, uint80[] memory ids) private {

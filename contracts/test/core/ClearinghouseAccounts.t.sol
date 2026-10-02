@@ -22,7 +22,8 @@ import {
     KUnderlying,
     KPosition,
     KMarginOut,
-    MAX_POSITIONS
+    MAX_POSITIONS,
+    MAX_UNDERLYINGS
 } from "../../src/types/Types.sol";
 
 /// @notice Test-only stock token that burns 1% of every transfer (fee-on-transfer).
@@ -828,36 +829,38 @@ contract ClearinghouseAccountsTest is Fixture {
 
     function test_tooManyUnderlyingsReverts() public {
         uint256 id = _newAccount(alice);
-        address[] memory toks = new address[](9);
+        uint256 cap = MAX_UNDERLYINGS;
+        address[] memory toks = new address[](cap + 1);
         toks[0] = address(nvda);
         toks[1] = address(spy);
-        for (uint256 i = 2; i < 9; ++i) {
+        for (uint256 i = 2; i <= cap; ++i) {
             toks[i] = address(_addUnderlying(string.concat("X", vm.toString(i)), 100e18, 0.2e18, 1e18, 10e18, 1000e18));
         }
-        for (uint256 i = 0; i < 8; ++i) {
+        for (uint256 i = 0; i < cap; ++i) {
             _deposit(alice, id, toks[i], 1e18);
         }
+        assertEq(ch.underlyingsOf(id), _slice(toks, 0, cap));
 
         nvda.mint(alice, 1e18); // for a top-up below
-        MockStockToken(toks[8]).mint(alice, 1e18);
+        MockStockToken(toks[cap]).mint(alice, 1e18);
         vm.startPrank(alice);
-        MockStockToken(toks[8]).approve(address(ch), 1e18);
+        MockStockToken(toks[cap]).approve(address(ch), 1e18);
         vm.expectRevert(CHErrors.TooManyUnderlyings.selector);
-        ch.deposit(id, toks[8], 1e18);
+        ch.deposit(id, toks[cap], 1e18);
         vm.stopPrank();
 
         // topping up a token already held is fine
         _deposit(alice, id, address(nvda), 1e18);
         // emptying a token frees its slot and drops it from the collateral list
         vm.prank(alice);
-        ch.withdraw(id, toks[7], 1e18, alice);
-        _assertTokens(id, _slice(toks, 0, 7));
-        _deposit(alice, id, toks[8], 1e18);
+        ch.withdraw(id, toks[cap - 1], 1e18, alice);
+        _assertTokens(id, _slice(toks, 0, cap - 1));
+        _deposit(alice, id, toks[cap], 1e18);
 
-        // option underlyings share the same cap: toks[7] would be a 9th underlying again
+        // option underlyings share the same cap: toks[cap - 1] would be one too many again
         uint64 e = _expiry();
         uint32 onHeld = _list(address(nvda), e, 180e18, true);
-        uint32 onNew = _list(toks[7], e, 100e18, true);
+        uint32 onNew = _list(toks[cap - 1], e, 100e18, true);
         _cheatMovePositionReverts(id, onNew, 1e18, abi.encodeWithSelector(CHErrors.TooManyUnderlyings.selector));
         _cheatMovePosition(id, onHeld, 1e18);
         vm.expectRevert(CHErrors.TooManyUnderlyings.selector);
@@ -867,20 +870,22 @@ contract ClearinghouseAccountsTest is Fixture {
         vm.prank(alice);
         ch.withdraw(id, address(nvda), 2e18, alice);
         assertEq(ch.collateralOf(id, address(nvda)), 0);
-        address[] memory left = _slice(toks, 0, 7); // swap-and-pop: the last token (toks[8]) takes slot 0
-        left[0] = toks[8];
+        address[] memory left = _slice(toks, 0, cap - 1); // swap-and-pop: the last token takes slot 0
+        left[0] = toks[cap];
         _assertTokens(id, left);
-        MockStockToken(toks[7]).mint(alice, 1e18);
+        assertEq(ch.underlyingsOf(id).length, cap);
+        MockStockToken(toks[cap - 1]).mint(alice, 1e18);
         vm.startPrank(alice);
-        MockStockToken(toks[7]).approve(address(ch), 1e18);
+        MockStockToken(toks[cap - 1]).approve(address(ch), 1e18);
         vm.expectRevert(CHErrors.TooManyUnderlyings.selector);
-        ch.deposit(id, toks[7], 1e18);
+        ch.deposit(id, toks[cap - 1], 1e18);
         vm.stopPrank();
 
         // closing the last NVDA option releases the slot
         _cheatMovePosition(id, onHeld, -1e18);
-        _deposit(alice, id, toks[7], 1e18);
-        assertEq(ch.collateralOf(id, toks[7]), 1e18);
+        assertEq(ch.underlyingsOf(id).length, cap - 1);
+        _deposit(alice, id, toks[cap - 1], 1e18);
+        assertEq(ch.collateralOf(id, toks[cap - 1]), 1e18);
     }
 
     function test_tooManyPositionsReverts() public {

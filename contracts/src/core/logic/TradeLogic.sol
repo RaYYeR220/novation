@@ -133,8 +133,7 @@ library TradeLogic {
             x.agent = true;
         }
 
-        uint256 slot1 = $.posIndex[id][seriesId];
-        int256 oldQty = slot1 == 0 ? int256(0) : int256($.positions[id][slot1 - 1].qty);
+        int256 oldQty = CHS.qtyOf(id, seriesId);
         int256 newQty = oldQty + delta;
         x.newQty = newQty;
         x.opening = newQty != 0 && (_abs(newQty) > _abs(oldQty) || (oldQty > 0) != (newQty > 0));
@@ -184,7 +183,7 @@ library TradeLogic {
         AccountState memory st = MarginLogic.accountState(d, x.id);
         x.equity = st.equity;
         x.im = st.im;
-        x.lastShortClosed = x.delta > 0 && CHS.s().positions[x.id].length == 0;
+        x.lastShortClosed = x.delta > 0 && CHS.positionCount(x.id) == 0;
         bool imOk = st.im <= x.preIm || x.lastShortClosed;
         if (x.restricted && !imOk) revert CHErrors.RiskIncreaseNotAllowed(x.id, st.im, x.preIm);
         if (st.equity >= st.im.toInt256()) return;

@@ -4,7 +4,11 @@ pragma solidity 0.8.30;
 uint256 constant WAD = 1e18;
 uint256 constant YEAR = 31_536_000;
 uint256 constant MAX_POSITIONS = 256;
-uint256 constant MAX_UNDERLYINGS = 8;
+uint256 constant MAX_UNDERLYINGS = 4;
+/// @dev Expiries with an unpaid claim that a liquidation bid takes over: the account bid on, and
+/// the bidder afterwards, hold at most this many (claim is permissionless, and a bid pays out the
+/// ready ones it meets). Bounds the bid's gas.
+uint256 constant MAX_CLAIM_EXPIRIES = 16;
 uint256 constant PRICE_POINTS = 13;
 uint256 constant VOL_POINTS = 3;
 uint256 constant SCENARIOS = 39;
