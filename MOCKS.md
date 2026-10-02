@@ -1,6 +1,6 @@
 # Mocks
 
-This page lists exactly what is mocked in Novation's testnet deployment, how the mocks differ from the real contracts, and what is real. Mocks exist only on Robinhood Chain testnet (chain id 46630); the mainnet deployment uses the real tokens and feeds and no mock code.
+This page lists exactly what is mocked in Novation's testnet deployment, how the mocks differ from the real contracts, and what is real. Mocks exist only on Robinhood Chain testnet (chain id 46630); the mainnet configuration uses the real tokens and feeds and no mock code, and the deploy scripts that create mocks refuse to run on mainnet.
 
 Robinhood Chain testnet has no Chainlink price feeds, and the official testnet stock tokens cover only five tickers (TSLA, AMZN, PLTR, NFLX, AMD), minted only by the chain's faucet. There is no official testnet NVDA, SPY or AAPL. Novation therefore deploys its own stand-ins, labelled MOCK in [docs/deployments.md](docs/deployments.md).
 
@@ -60,7 +60,7 @@ When the mirror was first tested, mainnet had published no new TSLA round since 
 ## What is real
 
 - **The Stylus risk kernel and `KernelReference`.** They are the production programs, built from the source in this repository and deployed to testnet as they would be to mainnet.
-- **Every Novation contract.** The testnet deployment runs the same code as mainnet; only the constructor arguments (token and feed addresses, timelock delay) differ.
+- **Every Novation contract.** The testnet deployment runs the same code a mainnet deployment would; only the deploy script's per-chain configuration differs (token and feed addresses, the timelock delay, vault sizes and which vaults are deployed, and separate role keys off testnet).
 - **The chain.** Robinhood Chain testnet runs the same ArbOS and Stylus versions as mainnet, and all gas numbers in [docs/gas.md](docs/gas.md) were measured there.
 - **The prices and their timing**, which come from the real mainnet Chainlink feeds through the mirror.
 - **The NYSE calendar**, which is the same library on every chain.
@@ -75,4 +75,4 @@ These contracts exist only inside the Foundry tests and must never be deployed:
 
 ## Mainnet
 
-The mainnet deployment (planned) uses real USDG (`0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168` on Robinhood Chain, 6 decimals), the real NVDA, TSLA, SPY and AAPL stock tokens, and the Chainlink proxies listed above.
+On Robinhood Chain mainnet the risk kernel is deployed but not activated (activation was refused during the network-wide pause of new Stylus activations), and no core contract is deployed ([docs/deployments.md](docs/deployments.md#robinhood-chain-mainnet-chain-id-4663)). The mainnet configuration in [`contracts/deployments/4663.json`](contracts/deployments/4663.json) uses real USDG (`0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168`, 6 decimals), the real NVDA, TSLA, SPY and AAPL stock tokens, and the Chainlink proxies listed above. The fork suite (`contracts/test/fork`) already deploys the core against them on a fork of mainnet.

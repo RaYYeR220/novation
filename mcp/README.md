@@ -135,7 +135,7 @@ The keccak256(deployerKey ‖ role) keys are a testnet demo convenience: whoever
 
 It reads `DEPLOYER_PRIVATE_KEY` and `RH_TESTNET_RPC` from the root `.env` and writes the transaction hashes and the transcript to [`out/46630.json`](out/46630.json).
 
-The run on Robinhood Chain testnet, abridged:
+The run on Robinhood Chain testnet, abridged. It ran on the testnet's second core stack (Clearinghouse `0x0b0F…1949`), which stays on-chain next to the current one ([why there are several stacks](../docs/deployments.md#why-there-are-several-stacks)):
 
 ```text
 > risk_budget {}
@@ -154,7 +154,7 @@ The run on Robinhood Chain testnet, abridged:
 
 - In-budget fill: [`0xf17910855569d9d6fed1b5ef3676ac48599e955b3dc889ee7bdc5d7d1f109542`](https://explorer.testnet.chain.robinhood.com/tx/0xf17910855569d9d6fed1b5ef3676ac48599e955b3dc889ee7bdc5d7d1f109542)
 - Over-budget buy, mined as a revert: [`0x43941aae0c18d7d004d052fd4baa72ccbb74fddd9ffe0d9e6d4dcb57407b42fe`](https://explorer.testnet.chain.robinhood.com/tx/0x43941aae0c18d7d004d052fd4baa72ccbb74fddd9ffe0d9e6d4dcb57407b42fe)
-- The same session on the previous core deployment (still on-chain): in-budget fill [`0x0307e2d5…`](https://explorer.testnet.chain.robinhood.com/tx/0x0307e2d54fd130e1858ce85cc1dfd72e37bedc0434f9429abbe213f8388b36fc), mined refusal [`0x2aa5a4ce…`](https://explorer.testnet.chain.robinhood.com/tx/0x2aa5a4ceaf099d14136d921b29b5bc2bce8b52f618b25e4935b04494210f1064)
+- The same session on the first stack (Clearinghouse `0xe799…ABB2`, still on-chain): in-budget fill [`0x0307e2d5…`](https://explorer.testnet.chain.robinhood.com/tx/0x0307e2d54fd130e1858ce85cc1dfd72e37bedc0434f9429abbe213f8388b36fc), mined refusal [`0x2aa5a4ce…`](https://explorer.testnet.chain.robinhood.com/tx/0x2aa5a4ceaf099d14136d921b29b5bc2bce8b52f618b25e4935b04494210f1064)
 
 ## Tests
 

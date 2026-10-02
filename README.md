@@ -2,9 +2,9 @@
 
 Portfolio-margined options on Robinhood Chain stock tokens. Every margin check re-prices the whole book across 39 scenarios in a Stylus risk kernel, for about 15x less gas than hand-optimized Solidity.
 
-Robinhood Chain testnet (chain id 46630): the Stylus kernel, its Solidity twin and the core contracts are live. Internally reviewed, not externally audited. Judges can start with [JUDGES.md](JUDGES.md).
+Robinhood Chain testnet (chain id 46630): the Stylus kernel, its Solidity twin and the final core contracts are live, and a keeper settled the first weekly expiry on its own. Robinhood Chain mainnet: the kernel program is deployed, but its activation was refused during the network-wide pause of new Stylus activations, so no core contract is on mainnet ([Mainnet](#mainnet)). Internally reviewed, not externally audited. Judges can start with [JUDGES.md](JUDGES.md).
 
-Live app: [novation-clearing.vercel.app](https://novation-clearing.vercel.app) (the app runs on a demo snapshot computed with the kernel reference; the contracts it describes are live on testnet).
+Live app: [novation-clearing.vercel.app](https://novation-clearing.vercel.app). It shows a demo snapshot computed with the kernel reference. The app in this repository also has a **Live testnet** mode that reads the deployed contracts and sends transactions through a browser wallet.
 
 ## What Novation is
 
@@ -49,6 +49,8 @@ Arbitrum caps a transaction at 32M gas. A trade evaluates margin once for a side
 
 The ratio above uses the conservative baseline: a separate Solidity implementation of the same 39-scenario revaluation, written for gas (unchecked arithmetic, inlined constants). For context, `KernelReference.sol`, the checked Solidity twin used for parity, costs 21.3M gas at 32 positions, about 100x the Stylus kernel; it isn't the headline because it was never tuned for gas. Methods, books, dates and the raw transaction-level numbers are in [docs/gas.md](docs/gas.md).
 
+The rest of a liquidation stays inside the limit too. The worst bid the caps allow (256 positions over 4 underlyings with collateral in all 4, unpaid claims on 16 expiries, 8 unfolded rounds per feed, an empty bidder) costs 23,403,163 gas in a local measurement on mocks, about 23.6M with the mainnet tokens and feeds, against the 32M cap ([docs/gas.md](docs/gas.md#worst-case-liquidation-bid)).
+
 Both kernels are live on testnet, and anyone can compare them on identical calldata:
 
 ```bash
@@ -71,41 +73,58 @@ The script checks that the two return byte-identical results and prints `eth_est
 
 | Component | Status |
 |---|---|
-| Risk kernel (Stylus) and `KernelReference.sol` | Implemented, deployed on RH testnet |
-| Clearinghouse with margin, trading, agent budgets and the settlement waterfall | Implemented and tested, deployed on RH testnet |
-| MarketDataHub, SeriesRegistry, RiskParams, InsuranceFund | Implemented and tested, deployed on RH testnet |
-| RfqVenue, CoveredCallVault, PutWriteVault | Implemented and tested, deployed on RH testnet |
-| AuctionHouse (liquidations, deficit sales) | Implemented and tested, deployed on RH testnet |
-| MCP server for agents (`mcp/`) | Implemented and tested, run live on RH testnet |
-| TypeScript SDK (`sdk/`) | Implemented and tested on a local chain and against RH testnet |
-| RFQ market maker and relay (`mm-bot/`) | Implemented and tested, quotes filled on RH testnet; the web app serves the relay at `/api/rfq` |
-| Keeper, indexer, web app | In development |
-| Robinhood Chain mainnet deployment | Planned |
+| Risk kernel (Stylus) and `KernelReference.sol` | Shipped, deployed and activated on RH testnet; the Stylus program is also deployed on RH mainnet, not activated |
+| Clearinghouse with margin, trading, agent budgets and the settlement waterfall | Shipped, deployed on RH testnet |
+| MarketDataHub, SeriesRegistry, RiskParams, InsuranceFund | Shipped, deployed on RH testnet |
+| RfqVenue, CoveredCallVault, PutWriteVault | Shipped, deployed on RH testnet |
+| AuctionHouse (liquidations, deficit sales) | Shipped, deployed on RH testnet |
+| Keeper (`keeper/`) | Shipped, settled the first testnet expiry on its own |
+| RFQ market maker and relay (`mm-bot/`) | Shipped, its quotes filled on RH testnet; the web app serves the relay at `/api/rfq` |
+| MCP server for agents (`mcp/`) | Shipped, run live on RH testnet |
+| TypeScript SDK (`sdk/`) | Shipped, tested on a local chain and against RH testnet |
+| Web app (`app/`) | Demo snapshot and live testnet mode |
+| Indexer | Not built: history views (NAV series, epochs, halt episodes) show empty states in live mode |
+| Robinhood Chain mainnet | Kernel deployed, activation refused during the pause of new Stylus activations; core not deployed ([Mainnet](#mainnet)) |
 
 ## Contracts and addresses
 
-Robinhood Chain testnet, chain id 46630. The machine-readable copy is [`contracts/deployments/46630.json`](contracts/deployments/46630.json), and [docs/deployments.md](docs/deployments.md) lists every mock token and feed.
+Robinhood Chain testnet, chain id 46630. The machine-readable copy is [`contracts/deployments/46630.json`](contracts/deployments/46630.json), and [docs/deployments.md](docs/deployments.md) lists every library, mock token and feed. The core contracts are immutable, so each fix after review shipped as a fresh deployment of the core: the stack below runs the final reviewed code, and the earlier stacks stay on-chain with their proofs ([why there are several stacks](docs/deployments.md#why-there-are-several-stacks)).
 
 | Contract | Address | State |
 |---|---|---|
 | Risk kernel (Stylus) | [`0xAeE1D4F45AF43a9C4d52ADa65d423b1c0e67f0fd`](https://explorer.testnet.chain.robinhood.com/address/0xAeE1D4F45AF43a9C4d52ADa65d423b1c0e67f0fd) | deployed, activated |
 | KernelReference (Solidity twin) | [`0xB7d9232c8ff46b4950d85ed639908c86C08750C6`](https://explorer.testnet.chain.robinhood.com/address/0xB7d9232c8ff46b4950d85ed639908c86C08750C6) | deployed |
 | Mock USDG, NVDA, TSLA, AAPL, SPY and their feeds | see [docs/deployments.md](docs/deployments.md) | deployed, testnet only ([MOCKS.md](MOCKS.md)) |
-| RiskParams | [`0x113AbDCd234d00FfEA37D29A31BD1Fb2B035dcf1`](https://explorer.testnet.chain.robinhood.com/address/0x113AbDCd234d00FfEA37D29A31BD1Fb2B035dcf1) | deployed, setup finalized |
-| MarketDataHub | [`0xEcD2baaE3C13b526ffdBB8a8388609442C84d993`](https://explorer.testnet.chain.robinhood.com/address/0xEcD2baaE3C13b526ffdBB8a8388609442C84d993) | deployed |
-| SeriesRegistry | [`0x9C99381dE80518350fEaA09db17a064eD2180b7b`](https://explorer.testnet.chain.robinhood.com/address/0x9C99381dE80518350fEaA09db17a064eD2180b7b) | deployed, 128 series listed |
-| InsuranceFund | [`0x531394f5a5D0c3D9e54d258c8825Fa70Fd645429`](https://explorer.testnet.chain.robinhood.com/address/0x531394f5a5D0c3D9e54d258c8825Fa70Fd645429) | deployed, funded with 100,000 mock USDG |
-| Clearinghouse (with MarginLogic, TradeLogic, SettlementLogic, AuctionHookLogic) | [`0x0b0F4e67DcA3B846859Af452576e8E09316D1949`](https://explorer.testnet.chain.robinhood.com/address/0x0b0F4e67DcA3B846859Af452576e8E09316D1949) | deployed, setup finalized |
-| AuctionHouse | [`0x4a132D6f83d9db88092A3D1F8B5985B30fd99Ad9`](https://explorer.testnet.chain.robinhood.com/address/0x4a132D6f83d9db88092A3D1F8B5985B30fd99Ad9) | deployed |
-| RfqVenue | [`0x1aFD874fdd3914fB6958F282769dAC546993ED82`](https://explorer.testnet.chain.robinhood.com/address/0x1aFD874fdd3914fB6958F282769dAC546993ED82) | deployed |
-| CoveredCallVault NVDA | [`0xCCF205358eF9bfd97335f0D7bD5240487bB64865`](https://explorer.testnet.chain.robinhood.com/address/0xCCF205358eF9bfd97335f0D7bD5240487bB64865) | deployed, seeded |
-| CoveredCallVault TSLA | [`0xF95EAbF20EE1D9034ABa1b240D0242B75e645BD5`](https://explorer.testnet.chain.robinhood.com/address/0xF95EAbF20EE1D9034ABa1b240D0242B75e645BD5) | deployed, seeded |
-| PutWriteVault NVDA | [`0x0FEee896be42E954c2881668da9035efc5dB0947`](https://explorer.testnet.chain.robinhood.com/address/0x0FEee896be42E954c2881668da9035efc5dB0947) | deployed, seeded |
-| TimelockController (60 s on testnet) | [`0xf60F96DF709B2dD958519329b4ab488C27e178b5`](https://explorer.testnet.chain.robinhood.com/address/0xf60F96DF709B2dD958519329b4ab488C27e178b5) | deployed |
+| RiskParams | [`0x569768651DbB577Dcda4547e9B177f702b6F1D00`](https://explorer.testnet.chain.robinhood.com/address/0x569768651DbB577Dcda4547e9B177f702b6F1D00) | deployed, setup finalized |
+| MarketDataHub | [`0x42894B89a9fC7aFe3bD12555CAc20b6695a5ed9C`](https://explorer.testnet.chain.robinhood.com/address/0x42894B89a9fC7aFe3bD12555CAc20b6695a5ed9C) | deployed |
+| SeriesRegistry | [`0x079f744c046F7C1fCc43b1Fe5124513637d19dA8`](https://explorer.testnet.chain.robinhood.com/address/0x079f744c046F7C1fCc43b1Fe5124513637d19dA8) | deployed, 128 series listed |
+| InsuranceFund | [`0x295FB7eB9dcE936190567032C72697FaCEAdb96C`](https://explorer.testnet.chain.robinhood.com/address/0x295FB7eB9dcE936190567032C72697FaCEAdb96C) | deployed, funded with 100,000 mock USDG |
+| Clearinghouse (with MarginLogic, TradeLogic, SettlementLogic, AuctionHookLogic) | [`0x397dc6b74003172C27297520E98472C5fd168238`](https://explorer.testnet.chain.robinhood.com/address/0x397dc6b74003172C27297520E98472C5fd168238) | deployed, setup finalized |
+| AuctionHouse | [`0x2775a3feECA95a29141A9d3903b1C8fABa2B4658`](https://explorer.testnet.chain.robinhood.com/address/0x2775a3feECA95a29141A9d3903b1C8fABa2B4658) | deployed |
+| RfqVenue | [`0xcD5d78984A2ebe76D7B09C8304E79a078B93D328`](https://explorer.testnet.chain.robinhood.com/address/0xcD5d78984A2ebe76D7B09C8304E79a078B93D328) | deployed |
+| CoveredCallVault NVDA | [`0xAC989aF37744FeB96Cad8d553e7321a8b5b1D5d9`](https://explorer.testnet.chain.robinhood.com/address/0xAC989aF37744FeB96Cad8d553e7321a8b5b1D5d9) | deployed, seeded |
+| CoveredCallVault TSLA | [`0x55E624783C129721Bd8735D1E4Ef1E5c06BE708A`](https://explorer.testnet.chain.robinhood.com/address/0x55E624783C129721Bd8735D1E4Ef1E5c06BE708A) | deployed, seeded |
+| PutWriteVault NVDA | [`0xa47A07846902bDB8cE5306C1F851278447f3e237`](https://explorer.testnet.chain.robinhood.com/address/0xa47A07846902bDB8cE5306C1F851278447f3e237) | deployed, seeded |
+| TimelockController (60 s on testnet) | [`0xe3a0D2Dd94607f86d9641571B5fe328a274C4030`](https://explorer.testnet.chain.robinhood.com/address/0xe3a0D2Dd94607f86d9641571B5fe328a274C4030) | deployed |
 
-The end-to-end run on this deployment (deposits, a vault buy and a vault deposit, an RFQ fill, an agent budget, a withdrawal blocked by margin and an opening blocked by a corporate action, with every transaction hash) is in [`tools/e2e/out/46630.json`](tools/e2e/out/46630.json).
+**Proofs on the current stack** (2026-10-02, every hash in [`tools/e2e/out/46630.json`](tools/e2e/out/46630.json)): a [vault buy](https://explorer.testnet.chain.robinhood.com/tx/0xe3b1dc0f7ab30332db2e96f82cd7b478ff3082485d0f993f9600c041f182a9ff), a [vault deposit](https://explorer.testnet.chain.robinhood.com/tx/0xbd883651fa209ddb90f21b1149737c5465d8e467f36e32f3702efec1767a0565), an [RFQ fill](https://explorer.testnet.chain.robinhood.com/tx/0x37e5459edea8d90290033d8747d5671e669f7614353af01ce62e24f9876a0192), an agent's [in-budget buy](https://explorer.testnet.chain.robinhood.com/tx/0xf4e14eeff6188e6259b78b3c426632912b858d6c6bd2d58c8cdedd3e0733353d) and its [over-budget buy reverted](https://explorer.testnet.chain.robinhood.com/tx/0x7b91ebf435f1c2e3f57d65dc06d0e01e88ed48d2b9fcfe1a862ed5c677826afb) with `AgentRiskBudgetExceeded`, a [withdrawal below initial margin reverted](https://explorer.testnet.chain.robinhood.com/tx/0x96b225d4cef0e2c30fb00da1b406e30799b16be5342edb2f6bb363459175edb5) with `InsufficientMargin`, and an [opening refused during a corporate action](https://explorer.testnet.chain.robinhood.com/tx/0xae5f3ea5f320c91d36334a53d56e90cb2e203f8933b454bba396bbc8f6fc32cf) with `OpeningNotAllowed`.
 
-Previous core deployment (2026-10-01, before the contract polish), still on-chain and settling its Oct 2 positions: Clearinghouse [`0xe799…ABB2`](https://explorer.testnet.chain.robinhood.com/address/0xe799DF9b96a4809c411D3F90f67C5261a245ABB2), listed under `superseded` in [`contracts/deployments/46630.json`](contracts/deployments/46630.json). Its proofs stay valid: [agent over budget](https://explorer.testnet.chain.robinhood.com/tx/0xa411c8e1173e78c41e6c2f12611d553f54583cb1203eaf651bc9bc725e2c1b9a), [withdrawal below IM](https://explorer.testnet.chain.robinhood.com/tx/0xc947dc28bb91b5499f88ac89911507758d7447db5666720a8eb7d86dd77c3094), [corporate-action halt](https://explorer.testnet.chain.robinhood.com/tx/0x7756c29f080df6458613f129e8aa9b9dc5adadc3c098bb31edd04ecacb447c46), [MCP agent refusal](https://explorer.testnet.chain.robinhood.com/tx/0x2aa5a4ceaf099d14136d921b29b5bc2bce8b52f618b25e4935b04494210f1064), [mm-bot RFQ fill](https://explorer.testnet.chain.robinhood.com/tx/0x883c803d27356c5d1a6d368090fc845b0d8a3848539cfbb85ab7c9d62e3988c5).
+**Proofs on the earlier stacks**, still on-chain:
+
+- **The first expiry settlement.** The Oct 2 expiry was settled by the keeper with no manual step, 16 minutes after the 16:00 ET close. On stack 2 (Clearinghouse [`0x0b0F…1949`](https://explorer.testnet.chain.robinhood.com/address/0x0b0F4e67DcA3B846859Af452576e8E09316D1949)): [`settleExpiry` for NVDA](https://explorer.testnet.chain.robinhood.com/tx/0xdc08998d8ddea08197e4b0efa2057b4ef23e59a80a95cfb88bc28fc976c79afa), the [paying account settled first](https://explorer.testnet.chain.robinhood.com/tx/0xf303523f00cbb362c3d3edf5f2351612fe13e5e4ab9ce16c5576e8fc337aef35), the [covered-call vault's roll](https://explorer.testnet.chain.robinhood.com/tx/0x37509f3958172e139017b726222a2ba79fa094d75c0881847b798af4c68b4411) and a [claim paid](https://explorer.testnet.chain.robinhood.com/tx/0x1561dcd3964a1f2be8508335cde79d98af2b46aeed6521043393c832f315f3b0). On stack 1 (Clearinghouse [`0xe799…ABB2`](https://explorer.testnet.chain.robinhood.com/address/0xe799DF9b96a4809c411D3F90f67C5261a245ABB2)): [`settleExpiry` for NVDA](https://explorer.testnet.chain.robinhood.com/tx/0xd78516aa7b120632b6af0f946d6126fcd9261d8c0d80c8cbff4821f6e86a4226) and a [claim paid](https://explorer.testnet.chain.robinhood.com/tx/0xeb761f6db520348bd03cfe4074d0251c92cd106768784c6d22cff2561952a1d6).
+- **Weekend margin.** On stack 2, one account sold 5 NVDA calls in the Friday regular session ([`0x39e7db43…`](https://explorer.testnet.chain.robinhood.com/tx/0x39e7db43cd5bdc5bd11c5ca349fff37bc4d692247438c695963a672e472e051f)) at an initial margin of 81% of its equity. Its twin's identical fill needs 147% of its equity under weekend shocks. **Pending:** the twin sends that fill on Saturday 2026-10-03, expected to revert with `InsufficientMargin`; its transaction will be added to [docs/deployments.md](docs/deployments.md#stack-2).
+- **Agents and the market maker.** The MCP server's in-budget fill and its mined refusal, and a fill of a quote served by the market maker, on stack 2 ([Agents](#agents), [mm-bot/README.md](mm-bot/README.md)).
+
+## Mainnet
+
+Nothing but the kernel program is on Robinhood Chain mainnet (chain id 4663), and the program isn't active.
+
+- **Kernel deployed.** The same WASM as the testnet kernel was deployed at [`0x6d07e246eb757A1F97E3cdB7d1881ee5De27ceaA`](https://robinhoodchain.blockscout.com/address/0x6d07e246eb757A1F97E3cdB7d1881ee5De27ceaA) in [`0x154dd531…`](https://robinhoodchain.blockscout.com/tx/0x154dd53142d61126f6f9ca7a2c0cbc0322470853bf259d5628c26ba934706d61) on 2026-10-02 (5,261,543 gas, the same code hash).
+- **Activation refused.** The activation transaction was rejected at submission ("Transaction rejected by chain policy") at about 20:00 UTC that day, during the Arbitrum Security Council's emergency pause of new Stylus activations, announced the same day. The core needs an active kernel, so nothing else was deployed: no clearinghouse, vault or user funds are on mainnet.
+- **Tested against mainnet anyway.** The fork suite forks the latest mainnet block and deploys the core against the real stock tokens and Chainlink feeds; it passes 5/5, including a covered-call vault cycle through settlement.
+- **Ready when activations resume.** `bash tools/deploy/deploy-mainnet.sh --broadcast` activates the program, deploys and seeds the core with the mainnet configuration (24-hour timelock, separate guardian and treasury keys), and `tools/e2e/mainnet_proofs.py` runs the proof transactions step by step. Without `--broadcast` it only simulates.
+
+Details, addresses of the real tokens and feeds, and the runbook: [docs/deployments.md](docs/deployments.md#robinhood-chain-mainnet-chain-id-4663).
 
 ## Agents
 
@@ -113,7 +132,7 @@ An owner can give an AI agent its own key with an on-chain risk budget. `grantAg
 
 [`mcp/`](mcp/README.md) is an MCP server that lets any AI agent trade through that key. It reads markets, option chains, vault quotes, what-if margin, the portfolio with its scenario grid, and the budget. It buys and sells through the vaults and fills RFQ quotes. Every trade is simulated first, so an over-budget ticket comes back as a structured refusal, for example `AgentRiskBudgetExceeded` with the worst-case loss and the budget, and nothing is sent. The server holds only the agent key and refuses to start unless the chain has a live policy for it.
 
-On testnet, an agent driving the server got a budget of 0.77 USDG (1.5x the initial margin of one NVDA call). It bought one call inside the budget ([`0xf1791085…`](https://explorer.testnet.chain.robinhood.com/tx/0xf17910855569d9d6fed1b5ef3676ac48599e955b3dc889ee7bdc5d7d1f109542)). A ticket for three more was refused in simulation and not sent. Sent anyway to leave proof, that ticket reverted on-chain with `AgentRiskBudgetExceeded` (worst-case loss 2.04 USDG, budget 0.77 USDG): [`0x43941aae…`](https://explorer.testnet.chain.robinhood.com/tx/0x43941aae0c18d7d004d052fd4baa72ccbb74fddd9ffe0d9e6d4dcb57407b42fe). The transcript and every hash are in [`mcp/out/46630.json`](mcp/out/46630.json).
+On testnet (stack 2), an agent driving the server got a budget of 0.77 USDG (1.5x the initial margin of one NVDA call). It bought one call inside the budget ([`0xf1791085…`](https://explorer.testnet.chain.robinhood.com/tx/0xf17910855569d9d6fed1b5ef3676ac48599e955b3dc889ee7bdc5d7d1f109542)). A ticket for three more was refused in simulation and not sent. Sent anyway to leave proof, that ticket reverted on-chain with `AgentRiskBudgetExceeded` (worst-case loss 2.04 USDG, budget 0.77 USDG): [`0x43941aae…`](https://explorer.testnet.chain.robinhood.com/tx/0x43941aae0c18d7d004d052fd4baa72ccbb74fddd9ffe0d9e6d4dcb57407b42fe). The transcript and every hash are in [`mcp/out/46630.json`](mcp/out/46630.json).
 
 ## Security model
 
@@ -131,6 +150,7 @@ The full trust model, invariants, threat table and review history are in [SECURI
 
 - Mark volatility is realized volatility from Chainlink rounds, not implied volatility. Vault premiums add model parameters (skew, spread) on top of it.
 - Options are weekly, European and cash-settled. Settlement uses the last feed print at or before the close, which can be hours old.
+- The vaults close over weekends and holidays: they quote, sell, buy back and take deposits only in the regular and extended sessions (a redemption can still be queued).
 - Liquidation and deficit auctions pause over weekends and while an underlying is halted, by design, and their discount clock stops over weekends and holidays. A gap larger than the weekend shock can still create bad debt; it goes through the waterfall and, as a last resort, the cash index.
 - While a feed returns no usable price (unreadable, zero or outside the plausibility band), stock tokens held only as collateral are valued at 0. An account with options on that underlying can't withdraw, trade or be liquidated until the feed recovers.
 - An agent's value-drain cap applies per trade. Many trades can add up to more than one cap; owners should size budgets and expiries with that in mind. Revoking an agent takes effect immediately.
@@ -147,21 +167,30 @@ Every public claim, with its evidence, is listed in [CLAIMS.md](CLAIMS.md).
 
 ```text
 contracts/                 Foundry project
-  src/core/                Clearinghouse, RiskParams, MarketDataHub, SeriesRegistry, InsuranceFund
-  src/core/logic/          MarginLogic, TradeLogic, SettlementLogic (linked libraries)
+  src/core/                Clearinghouse, RiskParams, MarketDataHub, SeriesRegistry, InsuranceFund, AuctionHouse
+  src/core/logic/          MarginLogic, TradeLogic, SettlementLogic, AuctionHookLogic (linked libraries)
   src/kernel/              KernelReference.sol, the Solidity twin of the kernel
   src/libraries/           FixedPointMath, BlackScholes, NyseCalendar
-  src/venues/              RfqVenue, CoveredCallVault, PutWriteVault
+  src/venues/              RfqVenue, CoveredCallVault, PutWriteVault, VaultPricing
+  src/lens/                VaultQuoteLens, a read helper run as a deployless call
   src/mocks/               testnet-only tokens and feeds
-  test/                    unit and fuzz tests; test/vectors holds the shared parity vectors
+  script/                  Deploy, Seed and SeedMainnet, DeployMocks
+  test/                    unit, fuzz, invariant (test/invariant) and mainnet fork (test/fork) suites; test/vectors holds the shared parity vectors
   deployments/             addresses per chain id
 kernel/                    Stylus risk kernel (Rust, stylus-sdk 0.10.9)
   src/                     fixed-point math, Black-Scholes, scenario grid, EWMA, ABI codec
   tests/                   parity, codec and exported-ABI tests
   bench/                   wasm instruction counts, on-chain gas probe, differential fuzz
+sdk/                       TypeScript SDK (@novation/sdk): reads, simulated writes, EIP-712 quotes, refusal decoding
+keeper/                    permissionless upkeep: vol sync, listing, settlement, claims, vault rolls, liquidations
+mm-bot/                    RFQ market maker and its HTTP relay
+mcp/                       MCP server for AI agents under an on-chain risk budget
+app/                       Next.js web app, demo snapshot and live testnet mode
 tools/
   ref/                     Python reference and vector generator
   stylus-deploy/           build checks, deploy and activation, on-chain parity
+  deploy/                  testnet core deploy, mainnet go-live, library and role-key helpers
+  e2e/                     end-to-end proofs (testnet scenario, weekend margin, mainnet proof steps)
   mirror-feeds.py          mirrors mainnet Chainlink rounds into the testnet mock feeds
 docs/                      risk model, gas, deployments, architecture diagram
 ```
@@ -177,6 +206,8 @@ cd ../kernel && cargo test --test parity
 ```
 
 `forge test` runs the Solidity suites, including the parity vectors, the 256-position cap and a short campaign of the stateful invariant suite. `cargo test --test parity` checks the Rust kernel against the same vectors, integer for integer. `cargo test --release` runs the full kernel suite.
+
+On the release tree, `forge test` runs 413 tests in 22 suites: 412 pass and 1 is skipped (the fork suite, without `RH_MAINNET_RPC`; with it, 5/5). The default campaign of the 18-invariant suite runs inside it. The TypeScript packages, with `pnpm --filter <package> test`: the SDK 194 (176 unit, 13 against a local anvil running the repo's deploy scripts, 5 read-only against testnet), the keeper 44 (32 unit, 12 on anvil), the market maker 75 (62 unit, 13 on anvil), the MCP server 29 (12 unit, 17 on anvil, 3 of them over stdio), and the app 216 unit and 48 end-to-end tests.
 
 The invariant suite drives the whole system (trades, vaults, agents, time across sessions and expiries, settlement, liquidations, deficit sales). The `invariant-deep` profile runs a long campaign. The fork suite deploys the core against the real tokens and Chainlink feeds on Robinhood Chain mainnet; it is skipped unless `RH_MAINNET_RPC` is set. Both commands run from `contracts/`:
 

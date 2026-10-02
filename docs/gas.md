@@ -105,7 +105,7 @@ The kernel redeployed from the current source, same script, 2026-10-01 (parity: 
 
 ### Under the 32M transaction cap
 
-[`tools/e2e/scenario.py`](../tools/e2e/scenario.py) repeats the 256-position estimate with the gas allowance set to the chain's 32,000,000 per-transaction limit. The Stylus kernel returns 1,672,511. `KernelReference` fails with "gas required exceeds allowance (32000000)": in checked Solidity, one margin evaluation of this book can't be sent as a transaction. The result is the `gasProof` entry in [`tools/e2e/out/46630.json`](../tools/e2e/out/46630.json).
+[`tools/e2e/scenario.py`](../tools/e2e/scenario.py) repeats the 256-position estimate with the gas allowance set to the chain's 32,000,000 per-transaction limit. On its last run, on 2026-10-02 against the current testnet stack, the Stylus kernel returned 1,676,266 (1,672,511 on the first run, 2026-10-01). `KernelReference` fails with "gas required exceeds allowance (32000000)": in checked Solidity, one margin evaluation of this book can't be sent as a transaction. The result is the `gasProof` entry in [`tools/e2e/out/46630.json`](../tools/e2e/out/46630.json).
 
 At the transaction level, fixed costs paid by both sides narrow the ratio for small books. The baseline's 32-position estimate was 3,037,754 gas including L1, 11.6x the Stylus kernel's 262,876 on the 32-position book above. At 256 positions it was 23,939,893, 14.4x the kernel's 1,664,367. The two books differ, but both hold one underlying and the same number of positions.
 
@@ -151,6 +151,8 @@ A single Black-Scholes evaluation is cheaper in plain Solidity, because the Styl
 | Previous testnet program | 23,997 bytes | 24,576 |
 
 The previous program was built before the decoder hardening described in [SECURITY.md](../SECURITY.md#issues-found-and-fixed-in-internal-review). On 2026-10-01 the kernel was redeployed from the current source at [`0xAeE1D4F45AF43a9C4d52ADa65d423b1c0e67f0fd`](https://explorer.testnet.chain.robinhood.com/address/0xAeE1D4F45AF43a9C4d52ADa65d423b1c0e67f0fd), and the clearinghouse uses that program. Code hash `0xa34c0177edcade5da15ac0fe4aeddb59161e76165303686f66a9eeaed27a5c8d`, WASM SHA-256 `ed1fdde1c826c81c39ef6e4e72336c24f098ef581346691e7b7d735bb2487096`; both programs are recorded in [`contracts/deployments/46630.json`](../contracts/deployments/46630.json) (`kernel`, `kernelPrevious`).
+
+The same program was deployed to Robinhood Chain mainnet at [`0x6d07e246eb757A1F97E3cdB7d1881ee5De27ceaA`](https://robinhoodchain.blockscout.com/address/0x6d07e246eb757A1F97E3cdB7d1881ee5De27ceaA): the [CREATE](https://robinhoodchain.blockscout.com/tx/0x154dd53142d61126f6f9ca7a2c0cbc0322470853bf259d5628c26ba934706d61) used 5,261,543 gas and the code hash is the same. Its activation was refused by the chain during the pause of new Stylus activations, so no mainnet gas is measured ([docs/deployments.md](deployments.md#robinhood-chain-mainnet-chain-id-4663)).
 
 A Stylus program expires 365 days after activation. The deployed program must be kept alive or re-activated before then; both are permissionless ArbWasm calls that pay a data fee.
 

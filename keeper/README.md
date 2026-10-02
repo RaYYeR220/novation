@@ -13,6 +13,10 @@ Every transaction goes through the same path:
 - After 10 minutes, an open transaction is given up on, with an error. If its nonce is still unused, the next send reuses that nonce with doubled fees, so it replaces the stuck transaction rather than queueing behind it.
 - The gas is estimated against the latest block, like the simulation, so a stuck transaction doing the same work can't make the new one look like a no-op.
 
+## On testnet
+
+The keeper settled the first weekly expiry of the testnet stacks, 2026-10-02 at 16:00 ET, with no manual step. On the second stack (Clearinghouse `0x0b0F…1949`) it settled all four underlyings 16 minutes after the close, then the accounts holding the expiry, the paying account first, rolled the covered-call vault and paid the claims: `settleExpiry` for NVDA [`0xdc08998d…`](https://explorer.testnet.chain.robinhood.com/tx/0xdc08998d8ddea08197e4b0efa2057b4ef23e59a80a95cfb88bc28fc976c79afa), account 9 (the payer) [`0xf303523f…`](https://explorer.testnet.chain.robinhood.com/tx/0xf303523f00cbb362c3d3edf5f2351612fe13e5e4ab9ce16c5576e8fc337aef35), the vault's roll [`0x37509f39…`](https://explorer.testnet.chain.robinhood.com/tx/0x37509f3958172e139017b726222a2ba79fa094d75c0881847b798af4c68b4411) and account 8's claim [`0x1561dcd3…`](https://explorer.testnet.chain.robinhood.com/tx/0x1561dcd3964a1f2be8508335cde79d98af2b46aeed6521043393c832f315f3b0). Another keeper process did the same on the first stack (Clearinghouse `0xe799…ABB2`): `settleExpiry` for NVDA [`0xd78516aa…`](https://explorer.testnet.chain.robinhood.com/tx/0xd78516aa7b120632b6af0f946d6126fcd9261d8c0d80c8cbff4821f6e86a4226), account 11's claim [`0xeb761f6d…`](https://explorer.testnet.chain.robinhood.com/tx/0xeb761f6db520348bd03cfe4074d0251c92cd106768784c6d22cff2561952a1d6). [docs/deployments.md](../docs/deployments.md#why-there-are-several-stacks) explains the stacks.
+
 ## Run it
 
 ```bash
