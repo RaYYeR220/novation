@@ -286,8 +286,13 @@ d('keeper on a local chain', () => {
     const shares = (await getVaultHolding(L.ctx, cc, dep.account.address)).shares;
     await send(L, dep, simulateRequestRedeem(L.ctx, dep.account.address, cc, shares / 2n, dep.account.address));
 
-    // last prints before the close: NVDA $10 above the vault call's strike
-    const settle = BigInt(demo.vaultCall!.strike) * WAD + 10n * WAD;
+    // last prints before the close: NVDA far enough above the vault call's strike that the three
+    // calls' payoff beats the premium cash the vault holds. The premiums depend on how far the
+    // expiry is when the suite runs (a day or a week of tenor), so a fixed distance would leave the
+    // vault's deficit, and the sale this test bids in, to the calendar.
+    const vaultId = (await getVault(L.ctx, cc)).vaultId;
+    const itm = ((await getCash(L.ctx, vaultId)) / 3n / WAD + 10n) * WAD;
+    const settle = BigInt(demo.vaultCall!.strike) * WAD + itm;
     await warpTo(L, E - 600);
     await refreshFeeds(L, admin, E - 600, { NVDA: answerOf(settle) });
     await warpTo(L, E + 60);
@@ -334,13 +339,12 @@ d('keeper on a local chain', () => {
     // 3. receivers claimed into cash
     expect(await getClaimable(L.ctx, demo.longId, E)).toBe(0n);
     expect(await getClaimable(L.ctx, t1Id, E)).toBe(0n);
-    expect((await getCash(L.ctx, t1Id)) - before.t1).toBe(20n * WAD);
+    expect((await getCash(L.ctx, t1Id)) - before.t1).toBe(2n * itm);
     expect(await getCash(L.ctx, demo.longId)).toBeGreaterThan(before.long);
     expect(fresh.filter((x) => x.job === 'claim' && x.msg === 'tx').length).toBe(2);
 
     // 4. the vault's calls finished in the money: its cash fell short, the fund bridged it and a
     // deficit sale of its NVDA started; the keeper bought what the deficit needed
-    const vaultId = (await getVault(L.ctx, cc)).vaultId;
     const bids = sent.filter((x) => x.label.startsWith(`bidDeficit ${vaultId}`));
     expect(bids).toHaveLength(1);
     expect((await L.client.readContract({ address: L.deployment.clearinghouse, abi: clearinghouseAbi, functionName: 'deficitOf', args: [vaultId, BigInt(E)] }))[0]).toBe(0n);
