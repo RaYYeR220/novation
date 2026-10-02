@@ -9,8 +9,12 @@ import { settleAccounts } from './settleAccounts';
 import { settleExpiry } from './settleExpiry';
 import { syncVol } from './syncVol';
 
-/** The jobs in tick order: settlement first, then the optional upkeep (vol, listing) that the gas reserve can hold back. */
-export const JOBS = { settleExpiry, settleAccounts, claim, roll, liquidations, syncVol, listSeries } as const;
+/**
+ * The jobs in tick order: settlement first, then the optional upkeep (vol, listing) that the gas
+ * reserve can hold back. The vol sync runs before liquidations, so the margin it reads (and an
+ * auction it starts) is at the current vol, not the volCap fallback of a round not yet folded in.
+ */
+export const JOBS = { settleExpiry, settleAccounts, claim, roll, syncVol, liquidations, listSeries } as const;
 export type JobName = keyof typeof JOBS;
 export const JOB_NAMES = Object.keys(JOBS) as JobName[];
 
