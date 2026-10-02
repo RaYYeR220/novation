@@ -50,8 +50,8 @@ const SELLER = 1;
 const SERIES_ID = 15;
 const QTY = 1;
 
+/** The landing always shows the demo snapshot, whatever NEXT_PUBLIC_CLIENT says (that only sets the app's default source). */
 function client(): NovationClient {
-  if (process.env.NEXT_PUBLIC_CLIENT === 'chain') throw new Error('NEXT_PUBLIC_CLIENT=chain: the chain client is not implemented yet');
   return new MockClient();
 }
 
