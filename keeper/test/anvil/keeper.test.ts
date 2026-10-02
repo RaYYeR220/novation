@@ -157,10 +157,41 @@ d('keeper on a local chain', () => {
     expect(await L.client.getTransactionCount({ address: k.account.address, blockTag: 'latest' })).toBe(nonce + 1);
   });
 
-  it('lists nothing below the gas reserve, and at most listPerTick a tick', async () => {
+  it('gives up on a transaction pending too long and replaces it at the same nonce', async () => {
+    await pushRound(L, admin, 'SPY', (answerOf(await spotOf(L, 'SPY')) * 101n) / 100n, await now(L));
+    const nonce = await L.client.getTransactionCount({ address: k.account.address, blockTag: 'latest' });
+    k.opts.receiptTimeoutMs = 1_000;
+    await L.rpc('evm_setAutomine', [false]);
+    let first: `0x${string}`;
+    let second: `0x${string}`;
+    try {
+      expect(await tick(k, ['syncVol'])).toEqual([]); // stuck in the pool
+      [first] = [...k.state.pending.keys()] as [`0x${string}`];
+      k.opts.pendingMaxAgeMs = 0;
+      expect(await tick(k, ['syncVol'])).toEqual([]); // given up on, then the same work goes out again
+      expect(lines('syncVol', 'dropped').at(-1)).toMatchObject({ level: 'error', hash: first, nonce });
+      [second] = [...k.state.pending.keys()] as [`0x${string}`];
+      expect(second).not.toBe(first);
+      // the replacement reuses the stuck nonce, outbidding it rather than queueing behind it
+      expect((await L.client.getTransaction({ hash: second })).nonce).toBe(nonce);
+    } finally {
+      await L.rpc('evm_setAutomine', [true]);
+      k.opts.receiptTimeoutMs = 180_000;
+      k.opts.pendingMaxAgeMs = 600_000;
+    }
+    await L.rpc('evm_mine');
+    const late = await tick(k, ['syncVol']);
+    expect(labels(late)).toEqual(['syncVol SPY']);
+    expect(late[0]).toMatchObject({ hash: second!, status: 'success' }); // estimated on the latest block, not on top of the stuck one
+    expect(await L.client.getTransactionCount({ address: k.account.address, blockTag: 'latest' })).toBe(nonce + 1);
+    expect(await L.client.getTransactionReceipt({ hash: first! }).catch(() => null)).toBeNull();
+  });
+
+  it('warns and lists nothing below the gas reserve, and lists at most listPerTick a tick', async () => {
     k.opts.gasReserve = parseEther('1000');
     expect(await tick(k, ['syncVol', 'listSeries'])).toEqual([]);
     expect(lines('listSeries', 'skip').at(-1)?.reason).toMatch(/gas reserve/);
+    expect(lines('tick', 'low balance').at(-1)).toMatchObject({ level: 'warn', reserve: '1000' }); // warned at the same threshold
     k.opts.gasReserve = DEFAULT_OPTIONS.gasReserve;
     k.opts.listPerTick = 3;
     const capped = await tick(k, ['listSeries']);

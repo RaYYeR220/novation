@@ -14,8 +14,6 @@ export const JOBS = { settleExpiry, settleAccounts, claim, roll, liquidations, s
 export type JobName = keyof typeof JOBS;
 export const JOB_NAMES = Object.keys(JOBS) as JobName[];
 
-/** Below this the keeper warns on every tick (wei). */
-export const LOW_BALANCE = 50_000_000_000_000n; // 0.00005 ETH
 
 /**
  * One pass of every enabled job, in order. The state is refreshed from the chain before each job
@@ -28,7 +26,10 @@ export async function tick(k: Keeper, jobs: readonly JobName[] = JOB_NAMES) {
   // a transaction left open by an earlier tick is logged as soon as it lands
   if (k.state.pending.size) await resolvePending(k).catch((e) => k.log('warn', 'tick', 'pending check failed', { reason: why(e) }));
   const balance = await k.client.getBalance({ address: k.account.address });
-  if (balance < LOW_BALANCE) k.log('warn', 'tick', 'low balance', { keeper: k.account.address, eth: formatEther(balance) });
+  // the same threshold that pauses the optional work: a warning the moment it stops
+  if (balance < k.opts.gasReserve) {
+    k.log('warn', 'tick', 'low balance', { keeper: k.account.address, eth: formatEther(balance), reserve: formatEther(k.opts.gasReserve), reason: 'below the gas reserve: vol sync, listing and queue rolls are paused' });
+  }
   for (const name of JOB_NAMES) {
     if (!jobs.includes(name)) continue;
     try {

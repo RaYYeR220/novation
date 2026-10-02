@@ -93,7 +93,7 @@ async function main() {
       minListTenorSec: num(flags['min-list-tenor'], 2 * 86400),
       listPerTick: num(flags['list-per-tick'], 16),
       settleDelaySec: num(flags['settle-delay'], 900),
-      rollEverySec: num(flags['roll-every'], 86400),
+      rollEverySec: num(flags['roll-every'], 3600),
       gasReserve: parseEther(typeof flags['gas-reserve'] === 'string' ? flags['gas-reserve'] : '0.0001'),
       // bidding is opt-in: on by default on the testnet (mock USDG), off elsewhere unless --bid
       bid: flags['no-bid'] === true ? false : flags.bid === true || testnet,

@@ -47,7 +47,7 @@ export interface KeeperOptions {
   listPerTick: number;
   /** Seconds after an expiry before settling it (lets a feed mirror catch up with late rounds). */
   settleDelaySec: number;
-  /** Minimum seconds between two queue rolls of one vault by the roll job (a payable queue is rolled at once). */
+  /** Minimum seconds between two queue rolls the roll job sends to one vault (it only sends payable ones). */
   rollEverySec: number;
   /** Below this balance (wei) the optional work (vol sync, listing, queue-only rolls) is skipped, keeping gas for settlement. */
   gasReserve: bigint;
@@ -59,7 +59,7 @@ export interface KeeperOptions {
   bidExposureCap: bigint;
   /** The bidder subaccount needs at least this much cash to bid, WAD USDG. */
   minBidderCash: bigint;
-  /** A liquidation the keeper can't bid in is (re)started at most this often per account, seconds. */
+  /** A liquidation (re)start without a successful keeper bid since the last one waits this long per account, and so does a repayDeficit after one that changed nothing (seconds). */
   restartBackoffSec: number;
   /** A deficit-sale remainder at or below this (WAD USDG) is paid in rather than bid for. */
   dustSweep: bigint;
@@ -69,6 +69,8 @@ export interface KeeperOptions {
   scanOverlap: number;
   /** How long to wait for a receipt before leaving the transaction open (ms). */
   receiptTimeoutMs: number;
+  /** An open transaction older than this (ms) is given up on; the next send reuses its nonce with higher fees. */
+  pendingMaxAgeMs: number;
   /** Simulate only: log what would be sent. */
   dryRun: boolean;
 }
@@ -80,7 +82,7 @@ export const DEFAULT_OPTIONS: KeeperOptions = {
   minListTenorSec: 0,
   listPerTick: 16,
   settleDelaySec: 900,
-  rollEverySec: 86400,
+  rollEverySec: 3600,
   gasReserve: 100_000_000_000_000n, // 0.0001 ETH
   bid: false,
   bidBudget: 2_000n * WAD,
@@ -91,6 +93,7 @@ export const DEFAULT_OPTIONS: KeeperOptions = {
   confirmations: 5,
   scanOverlap: 200,
   receiptTimeoutMs: 180_000,
+  pendingMaxAgeMs: 600_000,
   dryRun: false,
 };
 
@@ -139,11 +142,21 @@ export interface KeeperState {
   committed: bigint;
   /** Last time the keeper started a liquidation, per account (chain time). */
   lastStart: Map<bigint, number>;
+  /** Last successful keeper bid in a liquidation, per account (chain time). */
+  lastBidOk: Map<bigint, number>;
+  /** Accounts the keeper has sent repayDeficit for. */
+  repaid: Set<bigint>;
+  /** When a repayDeficit last left an account's debt unchanged (chain time). */
+  repayStall: Map<bigint, number>;
+  /** The nonce of a transaction given up on as too old while still unused: the next send replaces it. */
+  stuckNonce?: number;
 }
 
 export interface PendingTx {
   hash: Hash;
   nonce: number;
+  /** Host time of the broadcast (ms). */
+  sentAt: number;
   job: string;
   label: string;
   fields: Record<string, unknown>;
@@ -202,6 +215,9 @@ export function createKeeper(a: {
       pending: new Map(),
       committed: 0n,
       lastStart: new Map(),
+      lastBidOk: new Map(),
+      repaid: new Set(),
+      repayStall: new Map(),
     },
     log: a.log ?? createLogger(),
     txs: [],
@@ -247,7 +263,9 @@ function record(k: Keeper, p: PendingTx, rc: { status: 'success' | 'reverted'; g
 /**
  * Settles the open transactions: a mined one is logged; one the node no longer knows, or whose
  * nonce another transaction has used, is dropped (its work is re-checked from chain state on the
- * next pass, so nothing is sent twice). True when nothing is open any more.
+ * next pass, so nothing is sent twice). One still open after pendingMaxAgeMs is given up on with an
+ * error: if its nonce is still unused, the next send reuses that nonce with higher fees, so it
+ * replaces the stuck one instead of queueing behind it. True when nothing is open any more.
  */
 export async function resolvePending(k: Keeper): Promise<boolean> {
   for (const p of [...k.state.pending.values()]) {
@@ -261,6 +279,10 @@ export async function resolvePending(k: Keeper): Promise<boolean> {
     if (used > p.nonce || !known) {
       k.state.pending.delete(p.hash);
       k.log('warn', p.job, 'dropped', { label: p.label, hash: p.hash, nonce: p.nonce, reason: known ? 'nonce used by another transaction' : 'unknown to the node' });
+    } else if (Date.now() - p.sentAt > k.opts.pendingMaxAgeMs) {
+      k.state.pending.delete(p.hash);
+      k.state.stuckNonce = p.nonce;
+      k.log('error', p.job, 'dropped', { label: p.label, hash: p.hash, nonce: p.nonce, reason: `pending for more than ${k.opts.pendingMaxAgeMs / 1000} s: the next send replaces it` });
     }
   }
   return k.state.pending.size === 0;
@@ -289,7 +311,13 @@ export async function execute(
   let gas = 0n;
   try {
     sim = await simulate();
-    if (!k.opts.dryRun) gas = padGas(await k.client.estimateContractGas(sim.request as Parameters<PublicClient['estimateContractGas']>[0]));
+    // estimated against the latest block, like the simulation: a node's default (the pending block)
+    // would include a stuck transaction doing the same work and price this one as a no-op. From the
+    // bare address: with a local account viem prepares the request first and estimates on its own.
+    if (!k.opts.dryRun) {
+      const req = { ...(sim.request as object), account: k.account.address, blockTag: 'latest' } as Parameters<PublicClient['estimateContractGas']>[0];
+      gas = padGas(await k.client.estimateContractGas(req));
+    }
   } catch (e) {
     const code = (e as { refusal?: { code?: string } })?.refusal?.code;
     k.log(code ? 'info' : 'warn', job, 'skip', { label, reason: why(e), ...fields });
@@ -300,9 +328,18 @@ export async function execute(
     return null;
   }
   const req = sim.request as { address: Address; abi: Abi; functionName: string; args?: readonly unknown[]; value?: bigint };
-  const p: PendingTx = { hash: '0x', nonce: 0, job, label, fields };
+  const p: PendingTx = { hash: '0x', nonce: 0, sentAt: 0, job, label, fields };
   try {
-    const nonce = await k.client.getTransactionCount({ address: k.account.address, blockTag: 'pending' });
+    let nonce = await k.client.getTransactionCount({ address: k.account.address, blockTag: 'pending' });
+    let replace = false;
+    if (k.state.stuckNonce !== undefined) {
+      // re-check the nonce of a transaction given up on: still unused means it may sit in a pool
+      const used = await k.client.getTransactionCount({ address: k.account.address, blockTag: 'latest' });
+      if (used <= k.state.stuckNonce) {
+        nonce = k.state.stuckNonce;
+        replace = true;
+      } else k.state.stuckNonce = undefined;
+    }
     const prepared = await k.wallet.prepareTransactionRequest({
       account: k.account,
       chain: k.chain,
@@ -312,9 +349,18 @@ export async function execute(
       gas,
       nonce,
     });
+    if (replace) {
+      // a replacement must outbid the stuck transaction
+      const t = prepared as { maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint; gasPrice?: bigint };
+      if (t.maxFeePerGas !== undefined) t.maxFeePerGas *= 2n;
+      if (t.maxPriorityFeePerGas !== undefined) t.maxPriorityFeePerGas = t.maxPriorityFeePerGas * 2n + 1n;
+      if (t.gasPrice !== undefined) t.gasPrice *= 2n;
+    }
     const serialized = await k.wallet.signTransaction(prepared as Parameters<WalletClient['signTransaction']>[0]);
     p.hash = keccak256(serialized);
     p.nonce = nonce;
+    p.sentAt = Date.now();
+    if (replace) k.state.stuckNonce = undefined;
     k.state.pending.set(p.hash, p);
     await k.wallet.sendRawTransaction({ serializedTransaction: serialized });
   } catch (e) {

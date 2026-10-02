@@ -14,13 +14,13 @@ import {
   getSubaccountsOf,
   RefusalError,
   simulateBidLiquidation,
-  simulateRepayDeficit,
   simulateStartLiquidation,
   symbolOf,
   WAD,
 } from '@novation/sdk';
 import { chainNow, execute, why, type Keeper } from '../keeper';
 import { depositUsdg } from '../setup';
+import { repayIfCovered } from './deficit';
 
 const JOB = 'liquidation';
 
@@ -47,6 +47,17 @@ async function biddable(k: Keeper): Promise<{ id: bigint; budget: bigint } | { r
   return { id: b.id, budget: min(min(k.opts.bidBudget, b.cash), left) };
 }
 
+/**
+ * Whether to (re)start a liquidation now: never started, or the last start is restartBackoffSec
+ * old, or a keeper bid went through since it. An account nobody takes over, because the keeper
+ * can't bid or its bids keep failing in simulation, costs one start per backoff, not one every
+ * auctionDuration.
+ */
+export function shouldStart(a: { now: number; lastStart?: number; lastBidOk?: number; backoffSec: number }): boolean {
+  if (a.lastStart === undefined || a.now - a.lastStart >= a.backoffSec) return true;
+  return a.lastBidOk !== undefined && a.lastBidOk >= a.lastStart;
+}
+
 /** What `id` owes on `expiry`: its pool and fund parts, plus residual socialized debt. */
 async function owedOn(k: Keeper, id: bigint, expiry: number): Promise<bigint> {
   const [d, social] = await Promise.all([getDeficit(k.ctx, id, expiry), getSocializedDebt(k.ctx, id)]);
@@ -62,8 +73,9 @@ async function stillOwed(k: Keeper, id: bigint, expiry: number): Promise<bigint>
 /**
  * Liquidation scan: every account below maintenance margin with a live book gets its Dutch auction
  * started (startLiquidation is permissionless; the auction house refuses it outside a REGULAR or
- * EXTENDED session). An auction the keeper can't bid in is (re)started at most once per
- * restartBackoffSec per account, so an account nobody takes over doesn't cost a start every 30 min.
+ * EXTENDED session). A restart without a successful keeper bid since the last start waits
+ * restartBackoffSec per account (shouldStart), so an account nobody takes over doesn't cost a start
+ * every 30 min.
  *
  * Bidding is opt-in (`bid`) and capped: at most bidBudget per bid and bidExposureCap over the life
  * of the process, from the keeper's own funded subaccount. A bid goes in as soon as the auction
@@ -72,7 +84,8 @@ async function stillOwed(k: Keeper, id: bigint, expiry: number): Promise<bigint>
  * takes over. Deficit sales started by settlement get bids for the defaulter's stock collateral,
  * sized to what the deficit still needs; a sliver below dustSweep that the discount ramp leaves is
  * paid in and applied with repayDeficit, so dust doesn't keep the account blocked. Cash that already
- * covers a deficit (a deposit, a claim) is applied with repayDeficit before the sale is dropped.
+ * covers a deficit (a deposit, a claim) is applied with repayDeficit before the sale is dropped;
+ * repays are gated by shouldRepay (backoff after one that changed nothing, reserve on repeats).
  */
 export async function liquidations(k: Keeper): Promise<void> {
   const { ctx } = k;
@@ -87,8 +100,8 @@ export async function liquidations(k: Keeper): Promise<void> {
     let lq = await getLiquidation(ctx, id);
     if (!lq.active) {
       const last = k.state.lastStart.get(id);
-      if ('reason' in can && last !== undefined && now - last < k.opts.restartBackoffSec) {
-        k.log('debug', JOB, 'backoff', { ...base, reason: can.reason, lastStart: last });
+      if (!shouldStart({ now, lastStart: last, lastBidOk: k.state.lastBidOk.get(id), backoffSec: k.opts.restartBackoffSec })) {
+        k.log('debug', JOB, 'backoff', { ...base, reason: 'no keeper bid went through since the last start', lastStart: last });
         continue;
       }
       const rec = await execute(k, JOB, `startLiquidation ${id}`, () => simulateStartLiquidation(ctx, k.account, id), base);
@@ -122,7 +135,10 @@ export async function liquidations(k: Keeper): Promise<void> {
         discount: fromWad(lq.discount),
         paid: fromWad(sim.result),
       });
-      if (rec?.status === 'success' && sim.result > 0n) k.state.committed += sim.result;
+      if (rec?.status === 'success') {
+        k.state.lastBidOk.set(id, now);
+        if (sim.result > 0n) k.state.committed += sim.result;
+      }
       break;
     }
   }
@@ -138,8 +154,7 @@ export async function liquidations(k: Keeper): Promise<void> {
     }
     // cash that already covers the debt (a deposit, a claim) only counts once it is applied
     if ((await getCash(ctx, id)) >= owed) {
-      const rec = await execute(k, JOB, `repayDeficit ${id}`, () => simulateRepayDeficit(ctx, k.account, id), { id, expiry, owed: fromWad(owed) });
-      if (rec?.status === 'success' && (await owedOn(k, id, expiry)) === 0n) k.state.deficitSales.delete(key);
+      if ((await repayIfCovered(k, JOB, id)) || (await owedOn(k, id, expiry)) === 0n) k.state.deficitSales.delete(key);
       continue;
     }
     const sale = await getDeficitSale(ctx, id, expiry);
@@ -204,8 +219,7 @@ export async function liquidations(k: Keeper): Promise<void> {
       const dep = await depositUsdg(k, JOB, id, need);
       if (dep?.status === 'success') {
         k.state.committed += need;
-        const rec = await execute(k, JOB, `repayDeficit ${id}`, () => simulateRepayDeficit(ctx, k.account, id), { id, expiry, dust: fromWad(need) });
-        if (rec?.status === 'success' && (await owedOn(k, id, expiry)) === 0n) k.state.deficitSales.delete(key);
+        if ((await repayIfCovered(k, JOB, id)) || (await owedOn(k, id, expiry)) === 0n) k.state.deficitSales.delete(key);
       }
     }
   }

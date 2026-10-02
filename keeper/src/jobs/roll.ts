@@ -26,9 +26,9 @@ async function liveForRoll(k: Keeper, v: Address): Promise<boolean> {
  * settle and claim jobs already roll a vault whenever one of its expiries settles; this job rolls a
  * vault with shares queued only when the roll would pay them: no deficit, live (after the roll's
  * own vol sync) and enough unlocked assets (freeAssets, which is net of the queue, above zero). A
- * roll that would do nothing is never sent; a payable queue is rolled at once, a retry of the same
- * vault waits rollEverySec (a day by default), and nothing is sent while the balance is below the
- * gas reserve. A vault whose cash already covers a deficit gets it applied first (repayDeficit).
+ * roll that would do nothing is never sent; after a roll it sent, the job waits rollEverySec (an
+ * hour by default) before rolling the same vault again, and nothing is sent while the balance is
+ * below the gas reserve. A vault whose cash already covers a deficit gets it applied first (repayDeficit).
  */
 export async function roll(k: Keeper): Promise<void> {
   const now = await chainNow(k);
@@ -60,7 +60,7 @@ export async function roll(k: Keeper): Promise<void> {
       k.log('info', JOB, 'wait', { ...base, escrowed, assets, reason: 'queue not payable yet: its assets are locked behind open shorts' });
       continue;
     }
-    k.state.lastRoll.set(v, now);
-    await execute(k, JOB, `roll vault ${vaultId}`, () => simulateVaultRoll(k.ctx, k.account, v, []), { ...base, escrowed, assets, free });
+    const rec = await execute(k, JOB, `roll vault ${vaultId}`, () => simulateVaultRoll(k.ctx, k.account, v, []), { ...base, escrowed, assets, free });
+    if (rec) k.state.lastRoll.set(v, now);
   }
 }

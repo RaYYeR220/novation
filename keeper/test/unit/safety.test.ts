@@ -5,9 +5,13 @@ import { getDeployment, robinhoodChain, robinhoodChainTestnet } from '@novation/
 import { createKeeper, DEFAULT_OPTIONS, isTestChain, MAX_TX_GAS, padGas } from '../../src/keeper';
 import { deriveKeeperKey, keeperKeyFromEnv } from '../../src/keys';
 import { openDemoPosition } from '../../src/demo';
+import { shouldRepay } from '../../src/jobs/deficit';
+import { shouldStart } from '../../src/jobs/liquidations';
 import { findHint, packRound, type Round, type RoundReader } from '../../src/hint';
 
+/** anvil's account 9 (public test mnemonic): stands in for a deployer key. */
 const DEPLOYER = '0x2a871d0798f97d79848a013d4936a73bf4cc922c825d33c1cf7073dff6d409c6';
+/** anvil's account 5 (public test mnemonic): stands in for an independent keeper key. */
 const OTHER = '0x8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba';
 
 describe('keeper key by chain', () => {
@@ -44,6 +48,8 @@ describe('defaults', () => {
     expect(DEFAULT_OPTIONS.bid).toBe(false);
     expect(DEFAULT_OPTIONS.gasReserve).toBeGreaterThan(0n);
     expect(DEFAULT_OPTIONS.listPerTick).toBeGreaterThan(0);
+    expect(DEFAULT_OPTIONS.rollEverySec).toBe(3600);
+    expect(DEFAULT_OPTIONS.pendingMaxAgeMs).toBe(600_000);
   });
 });
 
@@ -94,5 +100,36 @@ describe('findHint bounds', () => {
     const h = await findHint(feed({ 1: rounds }, 1), E, E + 1_000_000, { ...opts, maxReads: 5 });
     expect(h).toMatchObject({ kind: 'stuck' });
     expect(h.reads).toBeLessThanOrEqual(5);
+  });
+});
+
+describe('repay and restart gates', () => {
+  const unit = 10n ** 12n;
+  const base = { unit, now: 100_000, backoffSec: 21_600, repeat: false, belowReserve: false };
+
+  it('repays when the cash covers what a repay can take, and not a sub-unit socialized remainder', () => {
+    expect(shouldRepay({ ...base, total: 5n * unit, social: 0n, cash: 5n * unit }).send).toBe(true);
+    expect(shouldRepay({ ...base, total: 5n * unit, social: 0n, cash: 4n * unit }).send).toBe(false);
+    // only 0.4 unit of socialized debt is left: whole-unit repays can never take it
+    expect(shouldRepay({ ...base, total: (4n * unit) / 10n, social: (4n * unit) / 10n, cash: 10n * unit })).toMatchObject({ send: false, reason: expect.stringMatching(/sub-unit/) });
+    // 3.4 units owed, 0.4 of them stuck: 3 units of cash is enough
+    expect(shouldRepay({ ...base, total: (34n * unit) / 10n, social: (34n * unit) / 10n, cash: 3n * unit }).send).toBe(true);
+  });
+
+  it('backs off after a repay that changed nothing, and holds repeats below the reserve', () => {
+    const owing = { ...base, total: 5n * unit, social: 0n, cash: 5n * unit };
+    expect(shouldRepay({ ...owing, lastStall: 100_000 - 60 }).send).toBe(false);
+    expect(shouldRepay({ ...owing, lastStall: 100_000 - 21_600 }).send).toBe(true);
+    expect(shouldRepay({ ...owing, repeat: true, belowReserve: true }).send).toBe(false);
+    expect(shouldRepay({ ...owing, repeat: false, belowReserve: true }).send).toBe(true);
+  });
+
+  it('restarts a liquidation only when the keeper took part in the last one or the backoff ran out', () => {
+    const b = { now: 50_000, backoffSec: 21_600 };
+    expect(shouldStart({ ...b })).toBe(true);
+    expect(shouldStart({ ...b, lastStart: 48_000 })).toBe(false); // no bid went through: bids failing or off
+    expect(shouldStart({ ...b, lastStart: 48_000, lastBidOk: 47_000 })).toBe(false);
+    expect(shouldStart({ ...b, lastStart: 48_000, lastBidOk: 48_000 })).toBe(true);
+    expect(shouldStart({ ...b, lastStart: 50_000 - 21_600 })).toBe(true);
   });
 });
