@@ -357,29 +357,41 @@ contract CoveredCallVaultTest is VaultFixture {
         assertEq(vault.quote(call190, 1e18, false), bid0);
     }
 
-    function test_weekendQuoteHigher() public {
+    function test_extendedQuoteHigherAndWeekendClosed() public {
         CoveredCallVault flat = _newCoveredCall(_flatConfig());
         _vaultDeposit(vault, alice, 10e18);
         _vaultDeposit(flat, alice, 10e18);
         // Wednesday, REGULAR session: no session add, identical quotes
         assertEq(vault.quote(call190w2, 1e18, true), flat.quote(call190w2, 1e18, true));
 
-        vm.warp(SATURDAY);
-        assertFalse(vault.isLive()); // the vol state is over two days old
+        // Wednesday evening, EXTENDED: the session add applies
+        uint256 wedEvening = T0 + 11 hours; // 21:00 EDT
+        vm.warp(wedEvening);
         _refresh(180e18);
-        assertEq(uint8(hub.session(address(nvda))), uint8(Session.WEEKEND));
-        assertTrue(vault.isLive());
+        assertEq(uint8(hub.session(address(nvda))), uint8(Session.EXTENDED));
         uint256 ask = vault.quote(call190w2, 1e18, true);
         uint256 askFlat = flat.quote(call190w2, 1e18, true);
         assertGt(ask, askFlat);
-
-        // exactly the WEEKEND vol add on top of the flat vault's vol (utilization after 1 of 10)
+        // exactly the EXTENDED vol add on top of the flat vault's vol (utilization after 1 of 10)
         uint256 volFlat = _volQ(0.1e18);
-        uint256 tau = e2 - SATURDAY; // not block.timestamp: via-ir may reuse a pre-warp read
+        uint256 tau = e2 - wedEvening; // not block.timestamp: via-ir may reuse a pre-warp read
         (uint256 pxFlat,,,,) = kernel.bsQuote(180e18, 190e18, tau, volFlat, 0, true);
-        (uint256 pxWk,,,,) = kernel.bsQuote(180e18, 190e18, tau, volFlat + WEEKEND_ADD, 0, true);
+        (uint256 pxEx,,,,) = kernel.bsQuote(180e18, 190e18, tau, volFlat + 0.05e18, 0, true);
         assertEq(askFlat, F.mulWadUp(pxFlat, 1.02e18));
-        assertEq(ask, F.mulWadUp(pxWk, 1.02e18));
+        assertEq(ask, F.mulWadUp(pxEx, 1.02e18));
+
+        // Saturday: the price is Friday's, so the vault neither quotes nor lets LPs in or out at
+        // it; queuing an exit still works
+        vm.warp(SATURDAY);
+        _refresh(180e18);
+        assertEq(uint8(hub.session(address(nvda))), uint8(Session.WEEKEND));
+        assertFalse(vault.isLive());
+        vm.expectRevert(OptionVaultBase.VaultNotLive.selector);
+        vault.quote(call190w2, 1e18, true);
+        assertEq(vault.maxDeposit(bob), 0);
+        assertEq(vault.maxWithdraw(alice), 0);
+        vm.prank(alice);
+        vault.requestRedeem(1e24, alice);
     }
 
     // ================================================================ live gate
@@ -690,7 +702,7 @@ contract CoveredCallVaultTest is VaultFixture {
         hub.syncVol(address(nvda)); // anyone can catch it up
         _buy(vault, call190w2, 1e18);
 
-        // no new round for over two days (a weekend): the vol is stale and nothing can refresh it
+        // over the weekend the vault is closed, the price being Friday's
         vm.warp(uint256(e) - 60); // Friday, a minute before the close
         _refresh(180e18);
         vm.warp(uint256(e) + 2 days + 1); // Sunday afternoon: the price is still usable (WEEKEND)
@@ -699,7 +711,8 @@ contract CoveredCallVaultTest is VaultFixture {
         vm.prank(taker);
         vm.expectRevert(OptionVaultBase.VaultNotLive.selector);
         vault.sellBack(call190w2, 1e18, 0, takerId);
-        _setPrice(address(nvda), 180e18); // the next print revives it on the next operation
+        vm.warp(uint256(e) + 2 days + 4 hours + 60); // Sunday 20:01 EDT, the window reopens
+        _setPrice(address(nvda), 180e18); // the first print revives it on the next operation
         vm.prank(taker);
         vault.sellBack(call190w2, 1e18, 0, takerId);
     }

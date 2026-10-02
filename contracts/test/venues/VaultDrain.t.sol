@@ -134,7 +134,8 @@ contract VaultDrainTest is VaultFixture {
         assertGe(v.totalAssets(), nav0, "depositors must not lose");
     }
 
-    /// @dev Buy one minute before Friday's close, sell back on Saturday with the weekend vol add.
+    /// @dev Buy one minute before Friday's close, sell back at Sunday's reopen with the extended
+    /// vol add; on Saturday the vault doesn't buy back at all.
     function test_sessionStepRoundTripLoses() public {
         PutWriteVault v = _newPutWrite(_config());
         uint32 a = _list(address(nvda), e2, 170e18, false);
@@ -144,6 +145,11 @@ contract VaultDrainTest is VaultFixture {
         uint256 cash0 = ch.cashOf(takerId);
         _buyAs(v, a, 10e18);
         vm.warp(uint256(e) + 4 hours + 1); // Saturday 00:00 UTC, WEEKEND
+        vm.prank(taker);
+        vm.expectRevert(OptionVaultBase.VaultNotLive.selector);
+        v.sellBack(a, 10e18, 0, takerId);
+        vm.warp(uint256(e) + 2 days + 4 hours + 60); // Sunday 20:01 EDT, EXTENDED
+        _refresh(180e18);
         _sellAs(v, a, 10e18);
         assertLt(ch.cashOf(takerId), cash0, "closed round trip must lose");
     }
@@ -223,7 +229,7 @@ contract VaultDrainTest is VaultFixture {
         _refresh(180e18);
         vm.warp(_now() + 23 hours);
         _setPrice(address(nvda), 180.2e18);
-        vm.warp(_now() + 20 hours);
+        vm.warp(_now() + 2 hours); // still Friday: the vault is closed over the weekend
         _setPrice(address(nvda), 179.9e18);
 
         uint256 dep = 30_000 * USDG;
