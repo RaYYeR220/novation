@@ -186,7 +186,9 @@ contract RobinhoodForkTest is Test, Deploy {
     /// Deposit real NVDA into the covered-call vault, sell calls to a taker paying in real USDG,
     /// cross the weekly close with a mocked pre-close print and a mocked first post-close print,
     /// settle the expiry in the registry, settle both accounts through the pool, claim, and pay a
-    /// queued redemption out in kind: NVDA plus the USDG leg (the vault's premium cash).
+    /// queued redemption out in kind: NVDA plus the USDG leg (the vault's premium cash). The vaults
+    /// are closed over weekends and holidays, so from a fork block in one the cycle starts at the
+    /// next regular open.
     function test_coveredCallVaultCycle() public {
         address nvda = TOKENS[0];
         IAggregatorV3 feed = IAggregatorV3(FEEDS[0]);
@@ -194,6 +196,9 @@ contract RobinhoodForkTest is Test, Deploy {
             vm.skip(true, "NVDA reads HALTED at the fork block");
             return;
         }
+        // the vaults are closed over weekends and holidays: from such a fork block, run the cycle
+        // from the next regular open, at a fresh print of the last price
+        _toMarketOpen(feed);
         address alice = makeAddr("alice");
         address taker = makeAddr("taker");
         uint256 vid = vault.vaultId();
@@ -305,6 +310,31 @@ contract RobinhoodForkTest is Test, Deploy {
             ? p.maxStaleRegular
             : base == Session.EXTENDED ? p.maxStaleExtended : p.maxStaleClosed;
         return block.timestamp - updatedAt > limit;
+    }
+
+    /// @dev If the fork block falls in a WEEKEND or HOLIDAY session, warps to the next REGULAR open
+    /// (09:30 ET of the next trading day, NyseCalendar) and mocks the feed's next round there at
+    /// its latest price, folded into the vol, as the first print of the session would be. A fork
+    /// block in the 24/5 window is left as it is.
+    function _toMarketOpen(IAggregatorV3 feed) internal {
+        Session base = NyseCalendar.baseSession(block.timestamp);
+        if (base != Session.WEEKEND && base != Session.HOLIDAY) return;
+        (int256 d,,) = NyseCalendar.etParts(block.timestamp);
+        uint256 open;
+        for (int256 i = 0; i < 10 && open == 0; ++i) {
+            if (!NyseCalendar.isTradingDay(d + i)) continue;
+            uint256 t = uint256((d + i) * 1 days + 34200) + 4 hours; // 09:30 ET in daylight time
+            if (!NyseCalendar.isDst(t)) t += 1 hours;
+            if (t > block.timestamp) open = t;
+        }
+        assertGt(open, 0, "no trading day ahead");
+        vm.warp(open);
+        assertEq(uint256(NyseCalendar.baseSession(open)), uint256(Session.REGULAR), "not a regular open");
+        (uint80 last, int256 answer,,,) = feed.latestRoundData();
+        _mockRound(feed, last + 1, uint256(answer) * 1e10, open);
+        _mockLatest(feed, last + 1, uint256(answer) * 1e10, open);
+        hub.syncVol(TOKENS[0]);
+        console2.log("fork block in a closed session: the cycle runs from the open at", open);
     }
 
     function _mockRound(IAggregatorV3 feed, uint80 id, uint256 priceWad, uint256 at) internal {
