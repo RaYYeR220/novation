@@ -3,7 +3,7 @@
 This page is a five-minute path through Novation: what to read first, what to check on-chain, which code carries the risk, and which tests to run. Every number quoted here is sourced in [CLAIMS.md](CLAIMS.md).
 
 - **Live demo:** [novation-clearing.vercel.app](https://novation-clearing.vercel.app). The site runs on a demo snapshot computed with the kernel reference; the app in this repository adds a live testnet mode. The on-chain proofs below are on testnet.
-- **Video:** _link added before submission_ <!-- FILL: demo video URL -->
+- **Video:** [youtu.be/24Diq8aGN3s](https://youtu.be/24Diq8aGN3s) (3 minutes)
 
 ## The claim in one paragraph
 

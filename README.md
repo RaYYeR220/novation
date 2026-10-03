@@ -4,7 +4,7 @@ Portfolio-margined options on Robinhood Chain stock tokens. Every margin check r
 
 Robinhood Chain testnet (chain id 46630): the Stylus kernel, its Solidity twin and the final core contracts are live, and a keeper settled the first weekly expiry on its own. Robinhood Chain mainnet: the kernel program is deployed, but its activation was refused during the network-wide pause of new Stylus activations, so no core contract is on mainnet ([Mainnet](#mainnet)). Internally reviewed, not externally audited. Judges can start with [JUDGES.md](JUDGES.md).
 
-Live app: [novation-clearing.vercel.app](https://novation-clearing.vercel.app). It shows a demo snapshot computed with the kernel reference. The app in this repository also has a **Live testnet** mode that reads the deployed contracts and sends transactions through a browser wallet.
+Demo video: [youtu.be/24Diq8aGN3s](https://youtu.be/24Diq8aGN3s). Live app: [novation-clearing.vercel.app](https://novation-clearing.vercel.app). It shows a demo snapshot computed with the kernel reference. The app in this repository also has a **Live testnet** mode that reads the deployed contracts and sends transactions through a browser wallet.
 
 ## What Novation is
 
