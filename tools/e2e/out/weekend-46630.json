@@ -1,0 +1,490 @@
+{
+  "chainId": 46630,
+  "clearinghouse": "0x0b0F4e67DcA3B846859Af452576e8E09316D1949",
+  "rfq": "0x1aFD874fdd3914fB6958F282769dAC546993ED82",
+  "trade": {
+    "underlying": "0xc2DBC8d95f357C2746242a497BD3170B87F77999",
+    "symbol": "NVDA",
+    "seriesId": 17,
+    "strike": "245.0000",
+    "expiry": 1791576000,
+    "isCall": true,
+    "qty": "5.0000",
+    "depositUsdg": "400"
+  },
+  "actors": {
+    "w1": {
+      "address": "0xa7A57A124427bF157bf3b345fAe57df904cc0454",
+      "subaccount": "13",
+      "deposited": true
+    },
+    "w2": {
+      "address": "0x4F11c4a43775cabA6667945B1767ec248b7999Dc",
+      "subaccount": "14",
+      "deposited": true
+    },
+    "c": {
+      "address": "0x1A4c1c75320421ca04E4813F75B509296eC18584",
+      "subaccount": "15",
+      "deposited": true
+    }
+  },
+  "funded": "170000000000000",
+  "txs": [
+    {
+      "label": "fund W1 with 0.00006 ETH of gas",
+      "from": "0x4108064852c95135844be338fc8bcBdF91C41ACF",
+      "tx": "0xe322786327a2b7fc6ac85e5f8c49580d2a70d3f33b7196590326bc9c2544b020",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xe322786327a2b7fc6ac85e5f8c49580d2a70d3f33b7196590326bc9c2544b020",
+      "status": "success",
+      "block": "127682064",
+      "blockTime": "2026-10-02T16:11:23Z",
+      "session": "REGULAR",
+      "gasUsed": "25200",
+      "gasLimit": "85226"
+    },
+    {
+      "label": "fund W2 with 0.00008 ETH of gas",
+      "from": "0x4108064852c95135844be338fc8bcBdF91C41ACF",
+      "tx": "0x5d82486ca3c8b134cf576d485bd4e3bd9336b7f13a902bc4a62c9c4e80b49fde",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x5d82486ca3c8b134cf576d485bd4e3bd9336b7f13a902bc4a62c9c4e80b49fde",
+      "status": "success",
+      "block": "127682081",
+      "blockTime": "2026-10-02T16:11:25Z",
+      "session": "REGULAR",
+      "gasUsed": "25200",
+      "gasLimit": "85226"
+    },
+    {
+      "label": "fund C with 0.00003 ETH of gas",
+      "from": "0x4108064852c95135844be338fc8bcBdF91C41ACF",
+      "tx": "0x997ed5646be9d31fbec912f7394729a06b151dcc6201cf0e4cc3681728eb64d3",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x997ed5646be9d31fbec912f7394729a06b151dcc6201cf0e4cc3681728eb64d3",
+      "status": "success",
+      "block": "127682097",
+      "blockTime": "2026-10-02T16:11:27Z",
+      "session": "REGULAR",
+      "gasUsed": "25200",
+      "gasLimit": "85226"
+    },
+    {
+      "label": "W1 createSubaccount",
+      "from": "0xa7A57A124427bF157bf3b345fAe57df904cc0454",
+      "tx": "0x46c03491aa47316d6459a056cc2c55840f72e97a60cccee90d47cbbc294b2be1",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x46c03491aa47316d6459a056cc2c55840f72e97a60cccee90d47cbbc294b2be1",
+      "status": "success",
+      "block": "127682115",
+      "blockTime": "2026-10-02T16:11:29Z",
+      "session": "REGULAR",
+      "gasUsed": "99819",
+      "gasLimit": "183146"
+    },
+    {
+      "label": "W2 createSubaccount",
+      "from": "0x4F11c4a43775cabA6667945B1767ec248b7999Dc",
+      "tx": "0x4b871e942eefa7f673eec21ee07097119e2ff19964f14d1ab8396b511251a780",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x4b871e942eefa7f673eec21ee07097119e2ff19964f14d1ab8396b511251a780",
+      "status": "success",
+      "block": "127682129",
+      "blockTime": "2026-10-02T16:11:31Z",
+      "session": "REGULAR",
+      "gasUsed": "99819",
+      "gasLimit": "183146"
+    },
+    {
+      "label": "C createSubaccount",
+      "from": "0x1A4c1c75320421ca04E4813F75B509296eC18584",
+      "tx": "0xc372a72eae46b09b3ecf4ce212b5289ff1f1fe294f006f5a42e215117bc9e67f",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xc372a72eae46b09b3ecf4ce212b5289ff1f1fe294f006f5a42e215117bc9e67f",
+      "status": "success",
+      "block": "127682146",
+      "blockTime": "2026-10-02T16:11:34Z",
+      "session": "REGULAR",
+      "gasUsed": "99819",
+      "gasLimit": "183146"
+    },
+    {
+      "label": "C mints 2000 mock USDG",
+      "from": "0x1A4c1c75320421ca04E4813F75B509296eC18584",
+      "tx": "0x73f1a03a26286be7782f778bca838cfe7c77a6739662f711526b83c3ea4874f6",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x73f1a03a26286be7782f778bca838cfe7c77a6739662f711526b83c3ea4874f6",
+      "status": "success",
+      "block": "127682164",
+      "blockTime": "2026-10-02T16:11:36Z",
+      "session": "REGULAR",
+      "gasUsed": "57296",
+      "gasLimit": "127976"
+    },
+    {
+      "label": "C approves the clearinghouse",
+      "from": "0x1A4c1c75320421ca04E4813F75B509296eC18584",
+      "tx": "0x55236dd0cb33e05e0ec2243492f58d0f68115208bdabb8a2faca3628cf1cff4a",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x55236dd0cb33e05e0ec2243492f58d0f68115208bdabb8a2faca3628cf1cff4a",
+      "status": "success",
+      "block": "127682178",
+      "blockTime": "2026-10-02T16:11:38Z",
+      "session": "REGULAR",
+      "gasUsed": "52604",
+      "gasLimit": "121852"
+    },
+    {
+      "label": "C deposits 2000 USDG into subaccount 15",
+      "from": "0x1A4c1c75320421ca04E4813F75B509296eC18584",
+      "tx": "0xba6637bac1eb0583bd9443fedf5ccf55933e8b2e5f7b8f6615d3a2f161b8e371",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xba6637bac1eb0583bd9443fedf5ccf55933e8b2e5f7b8f6615d3a2f161b8e371",
+      "status": "success",
+      "block": "127682188",
+      "blockTime": "2026-10-02T16:11:40Z",
+      "session": "REGULAR",
+      "gasUsed": "79107",
+      "gasLimit": "162333"
+    },
+    {
+      "label": "W1 mints 400 mock USDG",
+      "from": "0xa7A57A124427bF157bf3b345fAe57df904cc0454",
+      "tx": "0xecbfd9556ed2ce76a8b85dfdfd01e6a5ccb680c3f7e3c3ded86d75a4ae9388e2",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xecbfd9556ed2ce76a8b85dfdfd01e6a5ccb680c3f7e3c3ded86d75a4ae9388e2",
+      "status": "success",
+      "block": "127682203",
+      "blockTime": "2026-10-02T16:11:43Z",
+      "session": "REGULAR",
+      "gasUsed": "57296",
+      "gasLimit": "127976"
+    },
+    {
+      "label": "W1 approves the clearinghouse",
+      "from": "0xa7A57A124427bF157bf3b345fAe57df904cc0454",
+      "tx": "0xf15bbc26833bb293fb25c1ed76fdb7152223cc38974e788ae1fc64c359ed3055",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xf15bbc26833bb293fb25c1ed76fdb7152223cc38974e788ae1fc64c359ed3055",
+      "status": "success",
+      "block": "127682213",
+      "blockTime": "2026-10-02T16:11:45Z",
+      "session": "REGULAR",
+      "gasUsed": "52604",
+      "gasLimit": "121852"
+    },
+    {
+      "label": "W1 deposits 400 USDG into subaccount 13",
+      "from": "0xa7A57A124427bF157bf3b345fAe57df904cc0454",
+      "tx": "0x5fd7ed22a763c37d0be9b19e414b9536eee55415c67c5524d9632514993f2599",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x5fd7ed22a763c37d0be9b19e414b9536eee55415c67c5524d9632514993f2599",
+      "status": "success",
+      "block": "127682224",
+      "blockTime": "2026-10-02T16:11:46Z",
+      "session": "REGULAR",
+      "gasUsed": "79107",
+      "gasLimit": "162333"
+    },
+    {
+      "label": "W2 mints 400 mock USDG",
+      "from": "0x4F11c4a43775cabA6667945B1767ec248b7999Dc",
+      "tx": "0x8cec8ce2f99ecc930e79b14fb67c5cdcabaf2695becaaeab4717f90649393912",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x8cec8ce2f99ecc930e79b14fb67c5cdcabaf2695becaaeab4717f90649393912",
+      "status": "success",
+      "block": "127682239",
+      "blockTime": "2026-10-02T16:11:49Z",
+      "session": "REGULAR",
+      "gasUsed": "57296",
+      "gasLimit": "127976"
+    },
+    {
+      "label": "W2 approves the clearinghouse",
+      "from": "0x4F11c4a43775cabA6667945B1767ec248b7999Dc",
+      "tx": "0x62d8a712373528a2546f30d04fd925e46222889cebb29e5ee4b63668197a4153",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x62d8a712373528a2546f30d04fd925e46222889cebb29e5ee4b63668197a4153",
+      "status": "success",
+      "block": "127682252",
+      "blockTime": "2026-10-02T16:11:50Z",
+      "session": "REGULAR",
+      "gasUsed": "52604",
+      "gasLimit": "121852"
+    },
+    {
+      "label": "W2 deposits 400 USDG into subaccount 14",
+      "from": "0x4F11c4a43775cabA6667945B1767ec248b7999Dc",
+      "tx": "0xcc6436a4ba37bb30d90974f548b1ffa8b46006e156087b01b0953b05cdd30ed9",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0xcc6436a4ba37bb30d90974f548b1ffa8b46006e156087b01b0953b05cdd30ed9",
+      "status": "success",
+      "block": "127682267",
+      "blockTime": "2026-10-02T16:11:52Z",
+      "session": "REGULAR",
+      "gasUsed": "79107",
+      "gasLimit": "162333"
+    },
+    {
+      "label": "W1 fills C's quote: sells 5.0000 NVDA 245.0000 calls exp Oct 9 (REGULAR session)",
+      "from": "0xa7A57A124427bF157bf3b345fAe57df904cc0454",
+      "tx": "0x39e7db43cd5bdc5bd11c5ca349fff37bc4d692247438c695963a672e472e051f",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x39e7db43cd5bdc5bd11c5ca349fff37bc4d692247438c695963a672e472e051f",
+      "status": "success",
+      "block": "127682292",
+      "blockTime": "2026-10-02T16:11:57Z",
+      "session": "REGULAR",
+      "gasUsed": "744063",
+      "gasLimit": "1051085"
+    },
+    {
+      "label": "W2 sends the same fill: sells 5.0000 NVDA 245.0000 calls exp Oct 9 (WEEKEND session)",
+      "from": "0x4F11c4a43775cabA6667945B1767ec248b7999Dc",
+      "tx": "0x6562a49e1176f72920201285be4672101ba417a2d0fc0a482c0b7294434637f3",
+      "url": "https://explorer.testnet.chain.robinhood.com/tx/0x6562a49e1176f72920201285be4672101ba417a2d0fc0a482c0b7294434637f3",
+      "status": "reverted",
+      "block": "128008602",
+      "blockTime": "2026-10-03T07:07:39Z",
+      "session": "WEEKEND",
+      "gasUsed": "474328",
+      "gasLimit": "1116095",
+      "expectedError": "InsufficientMargin"
+    }
+  ],
+  "quote": {
+    "fields": {
+      "signer": "0x1A4c1c75320421ca04E4813F75B509296eC18584",
+      "makerId": "15",
+      "seriesId": 17,
+      "makerSells": false,
+      "maxQty": "10000000000000000000",
+      "price": "15960000000000000000",
+      "deadline": "1791158399",
+      "nonce": "20649562470907432770516225674486151386846327802989626264642394902014894083990"
+    },
+    "signature": "0x1633c742cc2cdfccf731ccad8fae4ad48e80103dabeba8dedb16a430e775a7a8209c4ef8eb93906141dcf7b8c558a8ce5ca2895b274070710d00bb3c6589bdf01c",
+    "hash": "0x6146ad510cec8549732f4d89080fb73505ea293ec47d1999f8dbc8b830a9d239",
+    "signedAt": "2026-10-02T16:11:53Z",
+    "mark": {
+      "spot": "236.2480",
+      "vol": "1.4934",
+      "bsPrice": "15.9650",
+      "block": "127682270"
+    }
+  },
+  "friday": {
+    "w1WhatIf": {
+      "block": "127682277",
+      "blockTime": "2026-10-02T16:11:54Z",
+      "hubSession": "REGULAR",
+      "spot": "236.2480",
+      "markVol": "1.4934",
+      "premium": "79.8000",
+      "fee": "0.3544",
+      "chainMarginAfter": {
+        "equity": "399.6208",
+        "im": "324.0646",
+        "cash": "479.4456",
+        "mtm": "-79.8248",
+        "healthy": true
+      },
+      "kernel": {
+        "REGULAR": {
+          "im": "324.0646",
+          "imShareOfEquity": "81.1%",
+          "shockRange": "0.3316",
+          "worstScenario": 38
+        },
+        "EXTENDED": {
+          "im": "391.4873",
+          "imShareOfEquity": "98.0%",
+          "shockRange": "0.3980",
+          "worstScenario": 38
+        },
+        "WEEKEND": {
+          "im": "588.5606",
+          "imShareOfEquity": "147.3%",
+          "shockRange": "0.5804",
+          "worstScenario": 38
+        }
+      },
+      "raw": {
+        "equity": "399620802402653409020",
+        "imChain": "324064560416606276845",
+        "imRegular": "324064560416606276845",
+        "imExtended": "391487274155106162520",
+        "imWeekend": "588560601130309020770"
+      }
+    },
+    "tx": "0x39e7db43cd5bdc5bd11c5ca349fff37bc4d692247438c695963a672e472e051f",
+    "block": "127682292",
+    "gasUsed": "744063",
+    "w1After": {
+      "equity": "399.6211",
+      "im": "324.0645",
+      "healthy": true,
+      "imShareOfEquity": "81.1%"
+    }
+  },
+  "w2Snapshot": {
+    "block": "127682292",
+    "blockTime": "2026-10-02T16:11:57Z",
+    "hubSession": "REGULAR",
+    "spot": "236.2480",
+    "markVol": "1.4934",
+    "premium": "79.8000",
+    "fee": "0.3544",
+    "chainMarginAfter": {
+      "equity": "399.6210",
+      "im": "324.0645",
+      "cash": "479.4456",
+      "mtm": "-79.8246",
+      "healthy": true
+    },
+    "kernel": {
+      "REGULAR": {
+        "im": "324.0645",
+        "imShareOfEquity": "81.1%",
+        "shockRange": "0.3316",
+        "worstScenario": 38
+      },
+      "EXTENDED": {
+        "im": "391.4873",
+        "imShareOfEquity": "98.0%",
+        "shockRange": "0.3980",
+        "worstScenario": 38
+      },
+      "WEEKEND": {
+        "im": "588.5607",
+        "imShareOfEquity": "147.3%",
+        "shockRange": "0.5804",
+        "worstScenario": 38
+      }
+    },
+    "raw": {
+      "equity": "399621040854162713840",
+      "imChain": "324064528683467388660",
+      "imRegular": "324064528683467388660",
+      "imExtended": "391487275655595246100",
+      "imWeekend": "588560689042484008520"
+    },
+    "fillSimulation": "clears",
+    "spotSensitivity": [
+      {
+        "move": "-10%",
+        "spot": "212.6232",
+        "equity": "444.1477",
+        "imRegular": "242.5694",
+        "imWeekend": "460.2770",
+        "regular": "54.6%",
+        "weekend": "103.6%"
+      },
+      {
+        "move": "-5%",
+        "spot": "224.4356",
+        "equity": "424.6909",
+        "imRegular": "284.1141",
+        "imWeekend": "525.9789",
+        "regular": "66.9%",
+        "weekend": "123.8%"
+      },
+      {
+        "move": "0%",
+        "spot": "236.2480",
+        "equity": "399.6210",
+        "imRegular": "324.0645",
+        "imWeekend": "588.5607",
+        "regular": "81.1%",
+        "weekend": "147.3%"
+      },
+      {
+        "move": "+5%",
+        "spot": "248.0604",
+        "equity": "368.9564",
+        "imRegular": "361.6772",
+        "imWeekend": "647.3713",
+        "regular": "98.0%",
+        "weekend": "175.5%"
+      },
+      {
+        "move": "+10%",
+        "spot": "259.8728",
+        "equity": "333.0166",
+        "imRegular": "396.6066",
+        "imWeekend": "702.2231",
+        "regular": "119.1%",
+        "weekend": "210.9%"
+      }
+    ]
+  },
+  "saturday": {
+    "w2WhatIf": {
+      "block": "128008578",
+      "blockTime": "2026-10-03T07:07:36Z",
+      "hubSession": "WEEKEND",
+      "spot": "234.9971",
+      "markVol": "1.4914",
+      "premium": "79.8000",
+      "fee": "0.3525",
+      "chainMarginAfter": {
+        "equity": "407.0045",
+        "im": "582.9216",
+        "cash": "479.4475",
+        "mtm": "-72.4430",
+        "healthy": false
+      },
+      "kernel": {
+        "REGULAR": {
+          "im": "318.8745",
+          "imShareOfEquity": "78.3%",
+          "shockRange": "0.3312",
+          "worstScenario": 38
+        },
+        "EXTENDED": {
+          "im": "386.1544",
+          "imShareOfEquity": "94.9%",
+          "shockRange": "0.3974",
+          "worstScenario": 38
+        },
+        "WEEKEND": {
+          "im": "582.9216",
+          "imShareOfEquity": "143.2%",
+          "shockRange": "0.5796",
+          "worstScenario": 38
+        }
+      },
+      "raw": {
+        "equity": "407004525675334696600",
+        "imChain": "582921553534544200400",
+        "imRegular": "318874534781072092565",
+        "imExtended": "386154361754788377490",
+        "imWeekend": "582921553534544200400"
+      }
+    },
+    "simulation": {
+      "code": "InsufficientMargin",
+      "args": {
+        "id": "14",
+        "equity": "407004690345885143975",
+        "im": "582921620646187973745"
+      }
+    },
+    "tx": "0x6562a49e1176f72920201285be4672101ba417a2d0fc0a482c0b7294434637f3",
+    "block": "128008602",
+    "gasUsed": "474328",
+    "gasLimit": "1116095",
+    "replay": {
+      "block": "128008601",
+      "code": "InsufficientMargin",
+      "args": {
+        "id": "14",
+        "equity": "407004772681266030025",
+        "im": "582921654202192716650"
+      },
+      "numbers": {
+        "id": 14,
+        "equity": 407.00477268126605,
+        "im": 582.9216542021927
+      }
+    },
+    "explorer": {
+      "url": "https://explorer.testnet.chain.robinhood.com/api/v2/transactions/0x6562a49e1176f72920201285be4672101ba417a2d0fc0a482c0b7294434637f3",
+      "result": "execution reverted",
+      "raw": "0xca4012f1000000000000000000000000000000000000000000000000000000000000000e00000000000000000000000000000000000000000000001610536c599378e5c900000000000000000000000000000000000000000000001f99a9bc0bacc9636a",
+      "decoded": {
+        "code": "InsufficientMargin",
+        "numbers": {
+          "id": 14,
+          "equity": 407.00477268126605,
+          "im": 582.9216542021927
+        }
+      }
+    }
+  }
+}

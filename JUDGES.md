@@ -95,13 +95,13 @@ Robinhood Chain testnet, chain id 46630. The core contracts are immutable, so ea
 | The keeper settles the Oct 2 expiry 16 minutes after the close: `settleExpiry` NVDA, the payer first, the vault's roll, a claim | [`0xdc08998d…`](https://explorer.testnet.chain.robinhood.com/tx/0xdc08998d8ddea08197e4b0efa2057b4ef23e59a80a95cfb88bc28fc976c79afa), [`0xf303523f…`](https://explorer.testnet.chain.robinhood.com/tx/0xf303523f00cbb362c3d3edf5f2351612fe13e5e4ab9ce16c5576e8fc337aef35), [`0x37509f39…`](https://explorer.testnet.chain.robinhood.com/tx/0x37509f3958172e139017b726222a2ba79fa094d75c0881847b798af4c68b4411), [`0x1561dcd3…`](https://explorer.testnet.chain.robinhood.com/tx/0x1561dcd3964a1f2be8508335cde79d98af2b46aeed6521043393c832f315f3b0) | 2 |
 | An AI agent through the MCP server: the over-budget ticket, mined as a revert | [`0x43941aae…`](https://explorer.testnet.chain.robinhood.com/tx/0x43941aae0c18d7d004d052fd4baa72ccbb74fddd9ffe0d9e6d4dcb57407b42fe) | 2 |
 | A fill of a quote served by the market maker | [`0x594f2c80…`](https://explorer.testnet.chain.robinhood.com/tx/0x594f2c802ebcb359d230d3bca807f854550b6d1bee466827bd6e97f69dc2d3ae) | 2 |
-| Weekend margin, Friday leg: the trade clears in the regular session (the Saturday leg, the twin's identical fill refused under weekend shocks, is pending) | [`0x39e7db43…`](https://explorer.testnet.chain.robinhood.com/tx/0x39e7db43cd5bdc5bd11c5ca349fff37bc4d692247438c695963a672e472e051f) | 2 |
+| Weekend margin, Friday leg: the trade clears in the regular session | [`0x39e7db43…`](https://explorer.testnet.chain.robinhood.com/tx/0x39e7db43cd5bdc5bd11c5ca349fff37bc4d692247438c695963a672e472e051f) | 2 |
+| Weekend margin, Saturday leg: the twin's identical fill is refused under weekend shocks (`InsufficientMargin`, IM 582.92 vs equity 407.00) | [`0x6562a49e…`](https://explorer.testnet.chain.robinhood.com/tx/0x6562a49e1176f72920201285be4672101ba417a2d0fc0a482c0b7294434637f3) | 2 |
 | Mainnet: the kernel program's CREATE (activation refused, see below) | [`0x154dd531…`](https://robinhoodchain.blockscout.com/tx/0x154dd53142d61126f6f9ca7a2c0cbc0322470853bf259d5628c26ba934706d61) | mainnet |
 
 ## What is not done yet
 
 - **Mainnet.** The kernel program is deployed on Robinhood Chain mainnet, but its activation was rejected by chain policy on 2026-10-02 during the Arbitrum Security Council's emergency pause of new Stylus activations. No core contract is on mainnet; `tools/deploy/deploy-mainnet.sh` deploys it in one command once activations resume. The mainnet fork suite runs the core against the real tokens and feeds (5/5).
-- **The Saturday leg of the weekend proof** runs on 2026-10-03.
 - **An indexer.** The live app shows empty states for history the chain doesn't keep (NAV series, epochs, halt episodes).
 - **The deployed site** runs the demo snapshot; the live testnet mode is in this repository.
 - **An external audit.** The code is internally reviewed and not externally audited. Testnet uses mock tokens and mirrored feeds ([MOCKS.md](MOCKS.md)).
